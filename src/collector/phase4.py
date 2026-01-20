@@ -1,0 +1,752 @@
+"""
+Phase 4: AI Visibility & Technical Analysis
+
+This module collects AI-era visibility and technical data:
+- AI search volume (how keywords perform in AI context)
+- LLM visibility (ChatGPT, Google AI Overview mentions)
+- Brand mentions and sentiment
+- Google Trends data
+- Technical page audits
+
+Endpoints used:
+1. dataforseo_labs/google/keyword_overview (AI-relevant metrics)
+2. ai_optimization/llm_mentions (ChatGPT visibility)
+3. ai_optimization/llm_mentions (Google AI visibility)
+4. content_analysis/search (brand mentions)
+5. content_analysis/summary (sentiment analysis)
+6. keywords_data/google_trends/explore
+7. on_page/instant_pages (×3 top pages)
+
+Total: 9-11 API calls
+Expected time: 4-8 seconds (with parallelization)
+"""
+
+import asyncio
+from typing import Dict, Any, List, Optional
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# DATA MODELS
+# ============================================================================
+
+@dataclass
+class AIVisibility:
+    """AI visibility metrics for a keyword."""
+    keyword: str
+    ai_search_volume: int  # Volume in AI-context searches
+    traditional_volume: int
+    ai_share: float  # % of searches in AI context
+    mentioned_in_chatgpt: bool
+    mentioned_in_google_ai: bool
+
+
+@dataclass
+class BrandMention:
+    """A brand mention across the web."""
+    url: str
+    domain: str
+    title: str
+    snippet: str
+    sentiment: str  # positive, negative, neutral
+    date: str
+    domain_rank: int
+
+
+@dataclass
+class TechnicalAudit:
+    """Technical audit for a page."""
+    url: str
+    title: str
+    load_time: float  # seconds
+    page_size: int  # bytes
+    word_count: int
+    h1_count: int
+    h2_count: int
+    internal_links: int
+    external_links: int
+    images_count: int
+    images_without_alt: int
+    meta_title: str
+    meta_description: str
+    canonical_url: str
+    is_mobile_friendly: bool
+    core_web_vitals: Dict[str, Any]
+    issues: List[str]
+
+
+@dataclass
+class TrendData:
+    """Google Trends data for keywords."""
+    keyword: str
+    trend_values: List[Dict[str, Any]]  # {date, value}
+    trend_direction: str  # rising, falling, stable
+    avg_interest: float
+
+
+@dataclass
+class Phase4Data:
+    """Complete Phase 4 data container."""
+    ai_visibility: List[AIVisibility] = field(default_factory=list)
+    llm_mentions: Dict[str, Any] = field(default_factory=dict)
+    brand_mentions: List[BrandMention] = field(default_factory=list)
+    sentiment_summary: Dict[str, Any] = field(default_factory=dict)
+    trend_data: List[TrendData] = field(default_factory=list)
+    technical_audits: List[TechnicalAudit] = field(default_factory=list)
+    
+    # Aggregated metrics
+    ai_visibility_score: float = 0
+    brand_sentiment_score: float = 0
+    technical_health_score: float = 0
+
+
+# ============================================================================
+# MAIN COLLECTION FUNCTION
+# ============================================================================
+
+async def collect_ai_technical_data(
+    client,  # DataForSEOClient
+    domain: str,
+    brand_name: str,
+    market: str,
+    language: str,
+    top_keywords: Optional[List[str]] = None,
+    top_pages: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Collect Phase 4: AI Visibility & Technical Analysis data.
+    
+    Flow:
+    1. Fetch AI keyword metrics for top keywords
+    2. Check LLM visibility (ChatGPT + Google AI)
+    3. Analyze brand mentions and sentiment
+    4. Get Google Trends data
+    5. Run technical audits on top pages
+    
+    Args:
+        client: DataForSEO API client
+        domain: Target domain
+        brand_name: Brand name for mention tracking
+        market: Location name (e.g., "Sweden")
+        language: Language code (e.g., "sv")
+        top_keywords: Keywords to analyze (from Phase 2)
+        top_pages: URLs to audit (from Phase 1)
+    
+    Returns:
+        Dictionary with all Phase 4 data
+    """
+    
+    logger.info(f"Phase 4: Starting AI & technical analysis for {domain}")
+    
+    # Default values if not provided
+    if not top_keywords:
+        top_keywords = [domain.replace(".", " ")]  # Use domain as fallback
+    if not top_pages:
+        top_pages = [f"https://{domain}/"]  # Use homepage as fallback
+    
+    # -------------------------------------------------------------------------
+    # Step 1: AI keyword visibility (parallel)
+    # -------------------------------------------------------------------------
+    
+    logger.info("Phase 4.1: Analyzing AI keyword visibility...")
+    
+    ai_tasks = [
+        fetch_ai_keyword_data(client, top_keywords[:50], market, language),
+        fetch_llm_mentions(client, domain, top_keywords[:20], "chat_gpt"),
+        fetch_llm_mentions(client, domain, top_keywords[:20], "google"),
+    ]
+    
+    ai_results = await asyncio.gather(*ai_tasks, return_exceptions=True)
+    
+    ai_keyword_data = ai_results[0] if not isinstance(ai_results[0], Exception) else []
+    chatgpt_mentions = ai_results[1] if not isinstance(ai_results[1], Exception) else {}
+    google_ai_mentions = ai_results[2] if not isinstance(ai_results[2], Exception) else {}
+    
+    if isinstance(ai_results[0], Exception):
+        logger.warning(f"Failed to fetch AI keyword data: {ai_results[0]}")
+    if isinstance(ai_results[1], Exception):
+        logger.warning(f"Failed to fetch ChatGPT mentions: {ai_results[1]}")
+    if isinstance(ai_results[2], Exception):
+        logger.warning(f"Failed to fetch Google AI mentions: {ai_results[2]}")
+    
+    logger.info(f"Phase 4.1: Analyzed {len(ai_keyword_data)} keywords for AI visibility")
+    
+    # -------------------------------------------------------------------------
+    # Step 2: Brand mentions and sentiment (parallel)
+    # -------------------------------------------------------------------------
+    
+    logger.info("Phase 4.2: Analyzing brand mentions and sentiment...")
+    
+    brand_tasks = [
+        fetch_brand_mentions(client, brand_name, limit=50),
+        fetch_sentiment_summary(client, brand_name),
+    ]
+    
+    brand_results = await asyncio.gather(*brand_tasks, return_exceptions=True)
+    
+    brand_mentions = brand_results[0] if not isinstance(brand_results[0], Exception) else []
+    sentiment_summary = brand_results[1] if not isinstance(brand_results[1], Exception) else {}
+    
+    if isinstance(brand_results[0], Exception):
+        logger.warning(f"Failed to fetch brand mentions: {brand_results[0]}")
+    if isinstance(brand_results[1], Exception):
+        logger.warning(f"Failed to fetch sentiment: {brand_results[1]}")
+    
+    logger.info(f"Phase 4.2: Found {len(brand_mentions)} brand mentions")
+    
+    # -------------------------------------------------------------------------
+    # Step 3: Google Trends
+    # -------------------------------------------------------------------------
+    
+    logger.info("Phase 4.3: Fetching trend data...")
+    
+    # Analyze top 5 keywords for trends
+    trend_keywords = top_keywords[:5]
+    trend_data = await fetch_trends_data(client, trend_keywords, market)
+    
+    if isinstance(trend_data, Exception):
+        logger.warning(f"Failed to fetch trends: {trend_data}")
+        trend_data = []
+    
+    logger.info(f"Phase 4.3: Got trends for {len(trend_data)} keywords")
+    
+    # -------------------------------------------------------------------------
+    # Step 4: Technical audits (parallel for top 3 pages)
+    # -------------------------------------------------------------------------
+    
+    logger.info("Phase 4.4: Running technical audits...")
+    
+    pages_to_audit = top_pages[:3]
+    
+    audit_tasks = [
+        fetch_technical_audit(client, url, language)
+        for url in pages_to_audit
+    ]
+    
+    audit_results = await asyncio.gather(*audit_tasks, return_exceptions=True)
+    
+    technical_audits = []
+    for url, result in zip(pages_to_audit, audit_results):
+        if isinstance(result, Exception):
+            logger.warning(f"Failed to audit {url}: {result}")
+        else:
+            technical_audits.append(result)
+    
+    logger.info(f"Phase 4.4: Completed {len(technical_audits)} technical audits")
+    
+    # -------------------------------------------------------------------------
+    # Step 5: Calculate aggregated scores
+    # -------------------------------------------------------------------------
+    
+    # AI visibility score (0-100)
+    ai_visibility_score = calculate_ai_visibility_score(
+        ai_keyword_data, chatgpt_mentions, google_ai_mentions
+    )
+    
+    # Brand sentiment score (-100 to +100)
+    brand_sentiment_score = calculate_sentiment_score(sentiment_summary)
+    
+    # Technical health score (0-100)
+    technical_health_score = calculate_technical_score(technical_audits)
+    
+    # -------------------------------------------------------------------------
+    # Return complete Phase 4 data
+    # -------------------------------------------------------------------------
+    
+    return {
+        "ai_keyword_data": ai_keyword_data,
+        "llm_mentions": {
+            "chatgpt": chatgpt_mentions,
+            "google_ai": google_ai_mentions,
+        },
+        "brand_mentions": brand_mentions,
+        "sentiment_summary": sentiment_summary,
+        "trend_data": trend_data,
+        "technical_audits": [
+            {
+                "url": a.url,
+                "title": a.title,
+                "load_time": a.load_time,
+                "page_size": a.page_size,
+                "word_count": a.word_count,
+                "h1_count": a.h1_count,
+                "h2_count": a.h2_count,
+                "internal_links": a.internal_links,
+                "external_links": a.external_links,
+                "images_count": a.images_count,
+                "images_without_alt": a.images_without_alt,
+                "meta_title": a.meta_title,
+                "meta_description": a.meta_description,
+                "canonical_url": a.canonical_url,
+                "is_mobile_friendly": a.is_mobile_friendly,
+                "core_web_vitals": a.core_web_vitals,
+                "issues": a.issues,
+            }
+            for a in technical_audits
+        ],
+        "ai_visibility_score": ai_visibility_score,
+        "brand_sentiment_score": brand_sentiment_score,
+        "technical_health_score": technical_health_score,
+    }
+
+
+# ============================================================================
+# INDIVIDUAL ENDPOINT FUNCTIONS
+# ============================================================================
+
+async def fetch_ai_keyword_data(
+    client,
+    keywords: List[str],
+    market: str,
+    language: str
+) -> List[Dict[str, Any]]:
+    """
+    Fetch AI-era keyword metrics.
+    
+    Uses keyword overview to get search volume and AI-related metrics.
+    """
+    result = await client.post(
+        "dataforseo_labs/google/keyword_overview/live",
+        [{
+            "keywords": keywords,
+            "location_name": market,
+            "language_code": language,
+        }]
+    )
+    
+    items = result.get("tasks", [{}])[0].get("result", [])
+    
+    keyword_data = []
+    for item in items:
+        kw_info = item.get("keyword_info", {})
+        
+        keyword_data.append({
+            "keyword": item.get("keyword", ""),
+            "search_volume": kw_info.get("search_volume", 0),
+            "cpc": kw_info.get("cpc", 0),
+            "competition": kw_info.get("competition", 0),
+            "competition_level": kw_info.get("competition_level", ""),
+            # AI-specific metrics (when available)
+            "monthly_searches": kw_info.get("monthly_searches", []),
+        })
+    
+    return keyword_data
+
+
+async def fetch_llm_mentions(
+    client,
+    domain: str,
+    keywords: List[str],
+    platform: str  # "chat_gpt" or "google"
+) -> Dict[str, Any]:
+    """
+    Check if domain is mentioned in LLM responses.
+    
+    Uses AI Optimization LLM Mentions API.
+    """
+    try:
+        result = await client.post(
+            "ai_optimization/llm_mentions/search/live",
+            [{
+                "target": [{"domain": domain}],
+                "platform": platform,
+                "limit": 50,
+            }]
+        )
+        
+        task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+        
+        return {
+            "platform": platform,
+            "total_mentions": task_result.get("total_count", 0),
+            "items": task_result.get("items", [])[:20],  # Top 20
+            "metrics": task_result.get("metrics", {}),
+        }
+    except Exception as e:
+        logger.warning(f"LLM mentions not available for {platform}: {e}")
+        return {
+            "platform": platform,
+            "total_mentions": 0,
+            "items": [],
+            "metrics": {},
+            "error": str(e),
+        }
+
+
+async def fetch_brand_mentions(
+    client,
+    brand_name: str,
+    limit: int = 50
+) -> List[Dict[str, Any]]:
+    """
+    Find brand mentions across the web.
+    
+    Uses Content Analysis API.
+    """
+    result = await client.post(
+        "content_analysis/search/live",
+        [{
+            "keyword": f'"{brand_name}"',  # Exact match
+            "limit": limit,
+            "search_mode": "one_per_domain",
+        }]
+    )
+    
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    
+    mentions = []
+    for item in items:
+        content_info = item.get("content_info", {})
+        sentiment = content_info.get("sentiment_connotations", {})
+        
+        # Determine overall sentiment
+        positive = sentiment.get("positive", 0)
+        negative = sentiment.get("negative", 0)
+        
+        if positive > negative:
+            sentiment_label = "positive"
+        elif negative > positive:
+            sentiment_label = "negative"
+        else:
+            sentiment_label = "neutral"
+        
+        mentions.append({
+            "url": item.get("url", ""),
+            "domain": item.get("domain", ""),
+            "title": content_info.get("title", ""),
+            "snippet": content_info.get("snippet", "")[:200],
+            "sentiment": sentiment_label,
+            "date": item.get("date", ""),
+            "domain_rank": item.get("domain_rank", 0),
+        })
+    
+    return mentions
+
+
+async def fetch_sentiment_summary(
+    client,
+    keyword: str
+) -> Dict[str, Any]:
+    """
+    Get sentiment summary for a keyword/brand.
+    
+    Uses Content Analysis Summary API.
+    """
+    result = await client.post(
+        "content_analysis/summary/live",
+        [{
+            "keyword": keyword,
+        }]
+    )
+    
+    task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+    
+    sentiment_data = task_result.get("sentiment_connotations", {})
+    connotation_types = task_result.get("connotation_types", {})
+    
+    return {
+        "total_mentions": task_result.get("total_count", 0),
+        "sentiment_distribution": {
+            "positive": connotation_types.get("positive", 0),
+            "negative": connotation_types.get("negative", 0),
+            "neutral": connotation_types.get("neutral", 0),
+        },
+        "sentiment_scores": {
+            "joy": sentiment_data.get("joy", 0),
+            "sadness": sentiment_data.get("sadness", 0),
+            "anger": sentiment_data.get("anger", 0),
+            "fear": sentiment_data.get("fear", 0),
+            "surprise": sentiment_data.get("surprise", 0),
+            "trust": sentiment_data.get("trust", 0),
+        },
+        "top_domains": task_result.get("top_domains", [])[:10],
+    }
+
+
+async def fetch_trends_data(
+    client,
+    keywords: List[str],
+    market: str
+) -> List[Dict[str, Any]]:
+    """
+    Fetch Google Trends data for keywords.
+    
+    Returns trend data for past 12 months.
+    """
+    result = await client.post(
+        "keywords_data/google_trends/explore/live",
+        [{
+            "keywords": keywords[:5],  # Max 5 per request
+            "location_name": market,
+            "time_range": "past_12_months",
+            "item_types": ["google_trends_graph"],
+        }]
+    )
+    
+    items = result.get("tasks", [{}])[0].get("result", [])
+    
+    trend_data = []
+    
+    for item in items:
+        if item.get("type") == "google_trends_graph":
+            for line in item.get("lines", []):
+                keyword = line.get("keyword", "")
+                values = line.get("values", [])
+                
+                if values:
+                    # Calculate trend direction
+                    first_half = sum(v.get("value", 0) for v in values[:len(values)//2])
+                    second_half = sum(v.get("value", 0) for v in values[len(values)//2:])
+                    
+                    if second_half > first_half * 1.1:
+                        direction = "rising"
+                    elif second_half < first_half * 0.9:
+                        direction = "falling"
+                    else:
+                        direction = "stable"
+                    
+                    avg_interest = sum(v.get("value", 0) for v in values) / len(values)
+                    
+                    trend_data.append({
+                        "keyword": keyword,
+                        "values": values,
+                        "direction": direction,
+                        "avg_interest": round(avg_interest, 1),
+                    })
+    
+    return trend_data
+
+
+async def fetch_technical_audit(
+    client,
+    url: str,
+    language: str
+) -> TechnicalAudit:
+    """
+    Run technical SEO audit on a page.
+    
+    Uses On-Page Instant Pages API.
+    """
+    result = await client.post(
+        "on_page/instant_pages",
+        [{
+            "url": url,
+            "enable_javascript": True,
+            "accept_language": language,
+        }]
+    )
+    
+    items = result.get("tasks", [{}])[0].get("result", [])
+    
+    if not items:
+        return TechnicalAudit(
+            url=url,
+            title="",
+            load_time=0,
+            page_size=0,
+            word_count=0,
+            h1_count=0,
+            h2_count=0,
+            internal_links=0,
+            external_links=0,
+            images_count=0,
+            images_without_alt=0,
+            meta_title="",
+            meta_description="",
+            canonical_url="",
+            is_mobile_friendly=False,
+            core_web_vitals={},
+            issues=["Failed to analyze page"],
+        )
+    
+    page = items[0]
+    meta = page.get("meta", {})
+    on_page = page.get("page_timing", {})
+    checks = page.get("checks", {})
+    
+    # Collect issues
+    issues = []
+    
+    if not meta.get("title"):
+        issues.append("Missing title tag")
+    elif len(meta.get("title", "")) > 60:
+        issues.append("Title too long (>60 chars)")
+    
+    if not meta.get("description"):
+        issues.append("Missing meta description")
+    elif len(meta.get("description", "")) > 160:
+        issues.append("Meta description too long (>160 chars)")
+    
+    if checks.get("no_h1_tag"):
+        issues.append("Missing H1 tag")
+    if checks.get("duplicate_h1_tag"):
+        issues.append("Duplicate H1 tags")
+    
+    if checks.get("no_image_alt"):
+        issues.append("Images missing alt text")
+    
+    if checks.get("is_broken"):
+        issues.append("Page has broken elements")
+    
+    # Get word count
+    content = page.get("content", {})
+    word_count = content.get("plain_text_word_count", 0)
+    
+    return TechnicalAudit(
+        url=url,
+        title=meta.get("title", ""),
+        load_time=on_page.get("duration_time", 0) / 1000,  # Convert to seconds
+        page_size=page.get("resource_size", 0),
+        word_count=word_count,
+        h1_count=meta.get("htags", {}).get("h1", []) and len(meta.get("htags", {}).get("h1", [])) or 0,
+        h2_count=meta.get("htags", {}).get("h2", []) and len(meta.get("htags", {}).get("h2", [])) or 0,
+        internal_links=meta.get("internal_links_count", 0),
+        external_links=meta.get("external_links_count", 0),
+        images_count=meta.get("images_count", 0),
+        images_without_alt=checks.get("no_image_alt_count", 0) or 0,
+        meta_title=meta.get("title", ""),
+        meta_description=meta.get("description", ""),
+        canonical_url=meta.get("canonical", ""),
+        is_mobile_friendly=checks.get("is_mobile_friendly", False),
+        core_web_vitals={
+            "largest_contentful_paint": on_page.get("time_to_interactive", 0),
+            "first_input_delay": 0,  # Requires real user data
+            "cumulative_layout_shift": 0,  # Requires real user data
+        },
+        issues=issues,
+    )
+
+
+# ============================================================================
+# SCORING FUNCTIONS
+# ============================================================================
+
+def calculate_ai_visibility_score(
+    keyword_data: List[Dict],
+    chatgpt_mentions: Dict,
+    google_ai_mentions: Dict
+) -> float:
+    """
+    Calculate AI visibility score (0-100).
+    
+    Based on:
+    - Number of AI mentions
+    - Coverage across platforms
+    """
+    score = 0
+    
+    # ChatGPT mentions (up to 40 points)
+    chatgpt_count = chatgpt_mentions.get("total_mentions", 0)
+    score += min(chatgpt_count * 2, 40)
+    
+    # Google AI mentions (up to 40 points)
+    google_count = google_ai_mentions.get("total_mentions", 0)
+    score += min(google_count * 2, 40)
+    
+    # Keyword coverage (up to 20 points)
+    if keyword_data:
+        score += min(len(keyword_data), 20)
+    
+    return min(score, 100)
+
+
+def calculate_sentiment_score(sentiment_summary: Dict) -> float:
+    """
+    Calculate brand sentiment score (-100 to +100).
+    
+    Based on positive vs negative mention ratio.
+    """
+    distribution = sentiment_summary.get("sentiment_distribution", {})
+    
+    positive = distribution.get("positive", 0)
+    negative = distribution.get("negative", 0)
+    total = positive + negative
+    
+    if total == 0:
+        return 0
+    
+    # Score: (positive - negative) / total * 100
+    score = (positive - negative) / total * 100
+    
+    return round(score, 1)
+
+
+def calculate_technical_score(audits: List[TechnicalAudit]) -> float:
+    """
+    Calculate technical health score (0-100).
+    
+    Based on:
+    - Issue count
+    - Load time
+    - Mobile friendliness
+    """
+    if not audits:
+        return 0
+    
+    total_score = 0
+    
+    for audit in audits:
+        page_score = 100
+        
+        # Deduct for issues (5 points each)
+        page_score -= len(audit.issues) * 5
+        
+        # Deduct for slow load time (> 3 seconds)
+        if audit.load_time > 3:
+            page_score -= min((audit.load_time - 3) * 10, 30)
+        
+        # Deduct if not mobile friendly
+        if not audit.is_mobile_friendly:
+            page_score -= 20
+        
+        # Deduct for missing content
+        if audit.word_count < 300:
+            page_score -= 10
+        
+        total_score += max(page_score, 0)
+    
+    return round(total_score / len(audits), 1)
+
+
+# ============================================================================
+# TESTING
+# ============================================================================
+
+async def test_phase4():
+    """Test Phase 4 collection."""
+    import os
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    
+    # Mock client for testing
+    class MockClient:
+        async def post(self, endpoint, data):
+            return {"tasks": [{"result": [{"items": []}]}]}
+    
+    client = MockClient()
+    
+    result = await collect_ai_technical_data(
+        client=client,
+        domain="example.com",
+        brand_name="Example Brand",
+        market="Sweden",
+        language="sv",
+        top_keywords=["seo", "marketing"],
+        top_pages=["https://example.com/"],
+    )
+    
+    print(f"AI keyword data: {len(result['ai_keyword_data'])}")
+    print(f"Brand mentions: {len(result['brand_mentions'])}")
+    print(f"Technical audits: {len(result['technical_audits'])}")
+    print(f"AI visibility score: {result['ai_visibility_score']}")
+    print(f"Sentiment score: {result['brand_sentiment_score']}")
+    print(f"Technical score: {result['technical_health_score']}")
+
+
+if __name__ == "__main__":
+    asyncio.run(test_phase4())
