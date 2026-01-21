@@ -801,42 +801,48 @@ async def fetch_top_searches(
 async def fetch_bulk_traffic_estimation(
     client,
     domain: str,
-    keywords: List[str],
+    keywords: List[str],  # Not used - endpoint requires domains, not keywords
     market: str,
     language: str
 ) -> Dict[str, Any]:
     """
-    Estimate traffic potential for keywords at different positions.
-    Useful for opportunity sizing.
+    Estimate traffic for the domain across organic/paid channels.
+
+    NOTE: This endpoint estimates traffic for DOMAINS, not keywords.
+    The `targets` parameter accepts domains, subdomains, and URLs.
     """
     result = await client.post(
         "dataforseo_labs/google/bulk_traffic_estimation/live",
         [{
-            "targets": keywords[:200],  # Max 200 keywords
+            "targets": [domain],  # FIXED: must be domains, not keywords
             "location_name": market,
-            "language_name": language  # FIXED: was language_code
+            "language_name": language
         }]
     )
 
     items = _safe_get_items(result, get_first=False)
 
-    traffic_estimates = {}
-    total_potential = 0
-
-    for item in items:
-        keyword = item.get("keyword", "")
-        estimate = {
-            "traffic_at_pos_1": item.get("metrics", {}).get("pos_1", {}).get("etv", 0),
-            "traffic_at_pos_3": item.get("metrics", {}).get("pos_3", {}).get("etv", 0),
-            "traffic_at_pos_10": item.get("metrics", {}).get("pos_10", {}).get("etv", 0),
+    if not items:
+        return {
+            "domain": domain,
+            "organic_traffic": 0,
+            "paid_traffic": 0,
+            "organic_keywords": 0,
+            "paid_keywords": 0,
         }
-        traffic_estimates[keyword] = estimate
-        total_potential += estimate["traffic_at_pos_1"]
+
+    # Get the first (and only) domain result
+    item = items[0] if items else {}
+    metrics = item.get("metrics", {})
+    organic = metrics.get("organic", {})
+    paid = metrics.get("paid", {})
 
     return {
-        "keyword_estimates": traffic_estimates,
-        "total_pos_1_potential": total_potential,
-        "keywords_analyzed": len(traffic_estimates),
+        "domain": domain,
+        "organic_traffic": organic.get("etv", 0),
+        "organic_keywords": organic.get("count", 0),
+        "paid_traffic": paid.get("etv", 0),
+        "paid_keywords": paid.get("count", 0),
     }
 
 

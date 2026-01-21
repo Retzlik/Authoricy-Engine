@@ -53,8 +53,8 @@ class AnalysisRequest(BaseModel):
     email: EmailStr
     company_name: Optional[str] = None
     market: str = "Sweden"
-    language: str = "sv"
-    
+    language: str = "Swedish"  # Must be full language name, not code (e.g., "Swedish" not "sv")
+
     # Options
     skip_ai_analysis: bool = False
     priority: str = "normal"  # normal, high
