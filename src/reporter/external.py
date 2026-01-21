@@ -326,11 +326,12 @@ class ExternalReportBuilder:
         backlinks = phase1.get("backlink_summary", {})
         technical = phase1.get("technical_baseline", {})
 
-        keywords = summary.get("total_organic_keywords", 0)
-        traffic = summary.get("total_organic_traffic", 0)
-        dr = backlinks.get("domain_rank", 0)
-        rds = backlinks.get("referring_domains", 0)
-        perf_score = technical.get("performance_score", 0)
+        # Use 'or 0' to handle None values (not just missing keys)
+        keywords = summary.get("total_organic_keywords") or 0
+        traffic = summary.get("total_organic_traffic") or 0
+        dr = backlinks.get("domain_rank") or 0
+        rds = backlinks.get("referring_domains") or 0
+        perf_score = technical.get("performance_score") or 0
 
         return f"""
         <div class="page">
@@ -392,11 +393,14 @@ class ExternalReportBuilder:
 
         competitor_rows = ""
         for comp in competitors:
+            # Use 'or' to handle None values
+            common_kw = comp.get('common_keywords') or 0
+            org_traffic = comp.get('organic_traffic') or 0
             competitor_rows += f"""
             <tr>
-                <td>{html.escape(comp.get('domain', 'Unknown'))}</td>
-                <td>{comp.get('common_keywords', 0):,}</td>
-                <td>{comp.get('organic_traffic', 0):,.0f}</td>
+                <td>{html.escape(str(comp.get('domain', 'Unknown')))}</td>
+                <td>{common_kw:,}</td>
+                <td>{org_traffic:,.0f}</td>
             </tr>
             """
 
@@ -431,15 +435,18 @@ class ExternalReportBuilder:
         summary = analysis_data.get("summary", {})
 
         gap_count = len(gaps)
-        total_opportunity = sum(g.get("search_volume", 0) for g in gaps)
+        total_opportunity = sum(g.get("search_volume") or 0 for g in gaps)
 
         gap_rows = ""
         for gap in gaps[:5]:
+            # Use 'or' to handle None values
+            volume = gap.get('search_volume') or 0
+            difficulty = gap.get('difficulty') or 0
             gap_rows += f"""
             <tr>
-                <td>{html.escape(gap.get('keyword', 'Unknown'))}</td>
-                <td>{gap.get('search_volume', 0):,}</td>
-                <td>{gap.get('difficulty', 0):.0f}</td>
+                <td>{html.escape(str(gap.get('keyword', 'Unknown')))}</td>
+                <td>{volume:,}</td>
+                <td>{difficulty:.0f}</td>
             </tr>
             """
 

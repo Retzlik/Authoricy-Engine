@@ -199,15 +199,24 @@ class InternalReportBuilder:
         top_pages = phase1.get("top_pages", [])[:20]
         tech = phase1.get("technologies", [])
 
-        # Historical trend table
+        # Historical trend table (handle None values)
         hist_rows = ""
         for h in historical[-12:]:
-            hist_rows += f"<tr><td>{h.get('date', 'N/A')}</td><td>{h.get('organic_keywords', 0):,}</td><td>{h.get('organic_traffic', 0):,.0f}</td></tr>"
+            org_kw = h.get('organic_keywords') or 0
+            org_traffic = h.get('organic_traffic') or 0
+            hist_rows += f"<tr><td>{h.get('date', 'N/A')}</td><td>{org_kw:,}</td><td>{org_traffic:,.0f}</td></tr>"
 
-        # Top pages table
+        # Top pages table (handle None values)
         page_rows = ""
         for p in top_pages:
-            page_rows += f"<tr><td>{html.escape(str(p.get('page', ''))[:50])}</td><td>{p.get('organic_keywords', 0):,}</td><td>{p.get('organic_traffic', 0):,.0f}</td></tr>"
+            p_kw = p.get('organic_keywords') or 0
+            p_traffic = p.get('organic_traffic') or 0
+            page_rows += f"<tr><td>{html.escape(str(p.get('page', ''))[:50])}</td><td>{p_kw:,}</td><td>{p_traffic:,.0f}</td></tr>"
+
+        # Handle None values in overview
+        org_kw_overview = overview.get('organic_keywords') or 0
+        org_traffic_overview = overview.get('organic_traffic') or 0
+        paid_kw_overview = overview.get('paid_keywords') or 0
 
         return f"""
         <div class="page">
@@ -216,9 +225,9 @@ class InternalReportBuilder:
             <h2>2.1 Domain Metrics Overview</h2>
             <table>
                 <tr><th>Metric</th><th>Value</th></tr>
-                <tr><td>Organic Keywords</td><td>{overview.get('organic_keywords', 0):,}</td></tr>
-                <tr><td>Organic Traffic</td><td>{overview.get('organic_traffic', 0):,.0f}</td></tr>
-                <tr><td>Paid Keywords</td><td>{overview.get('paid_keywords', 0):,}</td></tr>
+                <tr><td>Organic Keywords</td><td>{org_kw_overview:,}</td></tr>
+                <tr><td>Organic Traffic</td><td>{org_traffic_overview:,.0f}</td></tr>
+                <tr><td>Paid Keywords</td><td>{paid_kw_overview:,}</td></tr>
             </table>
 
             <h2>2.2 24-Month Historical Trend</h2>
@@ -251,19 +260,26 @@ class InternalReportBuilder:
 
         ranked_rows = ""
         for kw in ranked:
+            # Handle None values
+            kw_pos = kw.get('position') or 0
+            kw_vol = kw.get('search_volume') or 0
+            kw_traffic = kw.get('traffic') or 0
             ranked_rows += f"""<tr>
                 <td>{html.escape(str(kw.get('keyword', '')))}</td>
-                <td>{kw.get('position', 0)}</td>
-                <td>{kw.get('search_volume', 0):,}</td>
-                <td>{kw.get('traffic', 0):,.0f}</td>
+                <td>{kw_pos}</td>
+                <td>{kw_vol:,}</td>
+                <td>{kw_traffic:,.0f}</td>
             </tr>"""
 
         gap_rows = ""
         for g in gaps:
+            # Handle None values
+            g_vol = g.get('search_volume') or 0
+            g_diff = g.get('difficulty') or 0
             gap_rows += f"""<tr>
                 <td>{html.escape(str(g.get('keyword', '')))}</td>
-                <td>{g.get('search_volume', 0):,}</td>
-                <td>{g.get('difficulty', 0):.0f}</td>
+                <td>{g_vol:,}</td>
+                <td>{g_diff:.0f}</td>
             </tr>"""
 
         return f"""
@@ -299,10 +315,13 @@ class InternalReportBuilder:
 
         comp_rows = ""
         for c in competitors:
+            # Handle None values
+            c_kw = c.get('common_keywords') or 0
+            c_traffic = c.get('organic_traffic') or 0
             comp_rows += f"""<tr>
                 <td>{html.escape(str(c.get('domain', '')))}</td>
-                <td>{c.get('common_keywords', 0):,}</td>
-                <td>{c.get('organic_traffic', 0):,.0f}</td>
+                <td>{c_kw:,}</td>
+                <td>{c_traffic:,.0f}</td>
             </tr>"""
 
         return f"""
@@ -336,6 +355,11 @@ class InternalReportBuilder:
         anchors = phase3.get("anchor_distribution", [])[:15]
         rds = phase3.get("referring_domains", [])[:15]
 
+        # Handle None values
+        total_bl = backlinks.get('total_backlinks') or 0
+        ref_domains = backlinks.get('referring_domains') or 0
+        domain_rank = backlinks.get('domain_rank') or 0
+
         return f"""
         <div class="page">
             <h1>5. Backlink Strategy</h1>
@@ -343,9 +367,9 @@ class InternalReportBuilder:
             <h2>5.1 Current Link Profile</h2>
             <table>
                 <tr><th>Metric</th><th>Value</th></tr>
-                <tr><td>Total Backlinks</td><td>{backlinks.get('total_backlinks', 0):,}</td></tr>
-                <tr><td>Referring Domains</td><td>{backlinks.get('referring_domains', 0):,}</td></tr>
-                <tr><td>Domain Rating</td><td>{backlinks.get('domain_rank', 0)}</td></tr>
+                <tr><td>Total Backlinks</td><td>{total_bl:,}</td></tr>
+                <tr><td>Referring Domains</td><td>{ref_domains:,}</td></tr>
+                <tr><td>Domain Rating</td><td>{domain_rank}</td></tr>
             </table>
 
             <h2>5.2 Link Building Targets</h2>
@@ -411,6 +435,12 @@ class InternalReportBuilder:
         phase1 = analysis_data.get("phase1_foundation", {})
         technical = phase1.get("technical_baseline", {})
 
+        # Handle None values
+        perf_score = technical.get('performance_score') or 0
+        access_score = technical.get('accessibility_score') or 0
+        bp_score = technical.get('best_practices_score') or 0
+        seo_score = technical.get('seo_score') or 0
+
         return f"""
         <div class="page">
             <h1>8. Technical SEO Register</h1>
@@ -418,10 +448,10 @@ class InternalReportBuilder:
             <h2>8.1 Core Web Vitals</h2>
             <table>
                 <tr><th>Metric</th><th>Score</th><th>Status</th></tr>
-                <tr><td>Performance</td><td>{technical.get('performance_score', 0):.0%}</td><td>{'Pass' if technical.get('performance_score', 0) > 0.5 else 'Needs Work'}</td></tr>
-                <tr><td>Accessibility</td><td>{technical.get('accessibility_score', 0):.0%}</td><td>{'Pass' if technical.get('accessibility_score', 0) > 0.5 else 'Needs Work'}</td></tr>
-                <tr><td>Best Practices</td><td>{technical.get('best_practices_score', 0):.0%}</td><td>{'Pass' if technical.get('best_practices_score', 0) > 0.5 else 'Needs Work'}</td></tr>
-                <tr><td>SEO</td><td>{technical.get('seo_score', 0):.0%}</td><td>{'Pass' if technical.get('seo_score', 0) > 0.5 else 'Needs Work'}</td></tr>
+                <tr><td>Performance</td><td>{perf_score:.0%}</td><td>{'Pass' if perf_score > 0.5 else 'Needs Work'}</td></tr>
+                <tr><td>Accessibility</td><td>{access_score:.0%}</td><td>{'Pass' if access_score > 0.5 else 'Needs Work'}</td></tr>
+                <tr><td>Best Practices</td><td>{bp_score:.0%}</td><td>{'Pass' if bp_score > 0.5 else 'Needs Work'}</td></tr>
+                <tr><td>SEO</td><td>{seo_score:.0%}</td><td>{'Pass' if seo_score > 0.5 else 'Needs Work'}</td></tr>
             </table>
 
             <h2>8.2 Technical Issue Priorities</h2>
