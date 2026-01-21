@@ -2,6 +2,11 @@
 Data Collection Orchestrator
 
 Coordinates the multi-phase data collection process.
+
+FIXES APPLIED:
+- Phase 3 call now uses correct argument order (named arguments)
+- Phase 4 call now includes brand_name parameter
+- Default language changed from "sv" to "Swedish" (full name)
 """
 
 import asyncio
@@ -18,16 +23,16 @@ class CollectionConfig:
     """Configuration for data collection."""
     domain: str
     market: str = "Sweden"
-    language: str = "sv"
+    language: str = "Swedish"  # FIXED: was "sv" - must be full name like "Swedish", "English"
     brand_name: Optional[str] = None
     industry: str = "General"
     competitors: Optional[List[str]] = None
-    
+
     # Limits
     max_seed_keywords: int = 5
     max_competitors: int = 5
     max_backlinks: int = 500
-    
+
     # Options
     skip_ai_analysis: bool = False
     skip_technical_audits: bool = False
@@ -50,7 +55,7 @@ class CollectionResult:
     warnings: List[str] = field(default_factory=list)
     duration_seconds: float = 0.0
 
-    # Phase 1: Foundation (12 endpoints)
+    # Phase 1: Foundation (11 endpoints - removed domain_pages_summary)
     domain_overview: Dict[str, Any] = field(default_factory=dict)
     historical_data: List[Dict] = field(default_factory=list)
     subdomains: List[Dict] = field(default_factory=list)
@@ -60,7 +65,6 @@ class CollectionResult:
     technical_baseline: Dict[str, Any] = field(default_factory=dict)
     technologies: List[Dict] = field(default_factory=list)
     whois_data: Dict[str, Any] = field(default_factory=dict)
-    domain_pages_summary: Dict[str, Any] = field(default_factory=dict)
     page_intersection: List[Dict] = field(default_factory=list)
     categories: List[Dict] = field(default_factory=list)
 
@@ -120,23 +124,23 @@ class CollectionResult:
 class DataCollectionOrchestrator:
     """
     Orchestrates the multi-phase data collection process.
-    
+
     Phases:
     1. Foundation - Domain basics, competitors, backlinks overview
     2. Keywords - Rankings, gaps, clusters
     3. Competitive - Detailed competitor analysis, link gaps
     4. AI & Technical - AI visibility, deep technical audit
     """
-    
+
     def __init__(self, client):
         """
         Initialize orchestrator with DataForSEO client.
-        
+
         Args:
             client: DataForSEOClient instance
         """
         self.client = client
-    
+
     async def collect_all(self, config: CollectionConfig) -> CollectionResult:
         """
         Execute full data collection across all phases.
@@ -220,13 +224,14 @@ class DataCollectionOrchestrator:
             try:
                 from src.collector.phase3 import collect_competitive_data
                 logger.info("Phase 3: Collecting competitive data...")
+                # FIXED: Use named arguments to ensure correct parameter mapping
                 competitive_data = await collect_competitive_data(
-                    self.client,
-                    config.domain,
-                    detected_competitors,
-                    config.market,
-                    config.language,
-                    priority_keywords=self._extract_priority_keywords(keywords_data)
+                    client=self.client,
+                    domain=config.domain,
+                    market=config.market,
+                    language=config.language,
+                    competitors=detected_competitors,
+                    top_keywords=self._extract_priority_keywords(keywords_data)
                 )
             except ImportError:
                 warnings.append("Phase 3 module not available, skipping...")
@@ -241,11 +246,15 @@ class DataCollectionOrchestrator:
             try:
                 from src.collector.phase4 import collect_ai_technical_data
                 logger.info("Phase 4: Collecting AI & technical data...")
+                # FIXED: Include brand_name and optional parameters
                 ai_tech_data = await collect_ai_technical_data(
-                    self.client,
-                    config.domain,
-                    config.market,
-                    config.language
+                    client=self.client,
+                    domain=config.domain,
+                    brand_name=config.brand_name or config.domain.split('.')[0],  # Extract brand from domain if not provided
+                    market=config.market,
+                    language=config.language,
+                    top_keywords=self._extract_priority_keywords(keywords_data) if keywords_data else None,
+                    top_pages=[p.get("page") for p in foundation.get("top_pages", [])[:5]] if foundation.get("top_pages") else None
                 )
             except ImportError:
                 warnings.append("Phase 4 module not available, skipping...")
@@ -280,18 +289,18 @@ class DataCollectionOrchestrator:
     async def collect(self, config: CollectionConfig) -> CollectionResult:
         """Alias for collect_all()."""
         return await self.collect_all(config)
-    
+
     def _should_abbreviate(self, foundation: Dict) -> bool:
         """Check if domain has enough data for full analysis."""
         keywords = foundation.get("domain_overview", {}).get("organic_keywords", 0)
         backlinks = foundation.get("backlink_summary", {}).get("total_backlinks", 0)
         return keywords < 10 and backlinks < 50
-    
+
     def _extract_top_competitors(self, foundation: Dict, limit: int = 5) -> List[str]:
         """Extract top competitor domains from foundation data."""
         competitors = foundation.get("competitors", [])
         return [c.get("domain") for c in competitors[:limit] if c.get("domain")]
-    
+
     def _extract_seed_keywords(self, foundation: Dict) -> List[str]:
         """Extract seed keywords from top pages."""
         pages = foundation.get("top_pages", [])
@@ -300,7 +309,7 @@ class DataCollectionOrchestrator:
             if kw := page.get("main_keyword"):
                 keywords.append(kw)
         return keywords[:5]
-    
+
     def _extract_priority_keywords(self, keywords_data: Dict) -> List[str]:
         """Extract priority keywords for competitive analysis."""
         ranked = keywords_data.get("ranked_keywords", [])
@@ -400,19 +409,3 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
     }
 
     return compiled
-
-
-def get_analysis_json(result: CollectionResult, indent: int = 2) -> str:
-    """
-    Get analysis data as JSON string.
-
-    Args:
-        result: CollectionResult from data collection
-        indent: JSON indentation level
-
-    Returns:
-        JSON string of compiled analysis data
-    """
-    import json
-    compiled = compile_analysis_data(result)
-    return json.dumps(compiled, indent=indent, default=str)

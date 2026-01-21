@@ -1,35 +1,20 @@
 """
 Phase 4: AI Visibility & Technical Analysis
 
-This module collects AI-era visibility and technical data:
-- AI search volume (how keywords perform in AI context)
-- LLM visibility (ChatGPT, Google AI Overview mentions)
-- Brand mentions and sentiment
+This module collects AI-era and technical SEO data:
+- AI keyword visibility metrics
+- LLM mentions (ChatGPT, Google AI)
+- Brand mentions and sentiment analysis
 - Google Trends data
 - Technical page audits
-- Live SERP data for AI overview detection
 - Schema markup analysis
-- Page speed and Core Web Vitals
-- Spell check and content quality
+- Live SERP AI overview detection
+- Search volume data
+- Content ratings
 
-Endpoints used:
-1. dataforseo_labs/google/keyword_overview (AI-relevant metrics)
-2. ai_optimization/llm_mentions (ChatGPT visibility)
-3. ai_optimization/llm_mentions (Google AI visibility)
-4. content_analysis/search (brand mentions)
-5. content_analysis/summary (sentiment analysis)
-6. keywords_data/google_trends/explore
-7. on_page/instant_pages (×3 top pages)
-8. serp/google/live/regular (live SERP with AI overview)
-9. on_page/microdata (schema markup)
-10. on_page/page_screenshot
-11. content_analysis/rating_distribution
-12. on_page/duplicate_content
-13. dataforseo_labs/google/app_competitors
-14. keywords_data/google/search_volume/live
-
-Total: 14-18 API calls
-Expected time: 6-10 seconds (with parallelization)
+Note: All endpoints use language_name (e.g., "English") not language_code (e.g., "en")
+Note: LLM mentions endpoint requires target as array of objects: [{"domain": "..."}]
+Note: on_page/microdata and on_page/duplicate_content are task-based (not instant)
 """
 
 import asyncio
@@ -108,7 +93,7 @@ class Phase4Data:
     sentiment_summary: Dict[str, Any] = field(default_factory=dict)
     trend_data: List[TrendData] = field(default_factory=list)
     technical_audits: List[TechnicalAudit] = field(default_factory=list)
-    
+
     # Aggregated metrics
     ai_visibility_score: float = 0
     brand_sentiment_score: float = 0
@@ -130,123 +115,123 @@ async def collect_ai_technical_data(
 ) -> Dict[str, Any]:
     """
     Collect Phase 4: AI Visibility & Technical Analysis data.
-    
+
     Flow:
     1. Fetch AI keyword metrics for top keywords
     2. Check LLM visibility (ChatGPT + Google AI)
     3. Analyze brand mentions and sentiment
     4. Get Google Trends data
     5. Run technical audits on top pages
-    
+
     Args:
         client: DataForSEO API client
         domain: Target domain
         brand_name: Brand name for mention tracking
-        market: Location name (e.g., "Sweden")
-        language: Language code (e.g., "sv")
+        market: Location name (e.g., "United States", "Sweden")
+        language: Language name (e.g., "English", "Swedish") - NOT code!
         top_keywords: Keywords to analyze (from Phase 2)
         top_pages: URLs to audit (from Phase 1)
-    
+
     Returns:
         Dictionary with all Phase 4 data
     """
-    
+
     logger.info(f"Phase 4: Starting AI & technical analysis for {domain}")
-    
+
     # Default values if not provided
     if not top_keywords:
         top_keywords = [domain.replace(".", " ")]  # Use domain as fallback
     if not top_pages:
         top_pages = [f"https://{domain}/"]  # Use homepage as fallback
-    
+
     # -------------------------------------------------------------------------
     # Step 1: AI keyword visibility (parallel)
     # -------------------------------------------------------------------------
-    
+
     logger.info("Phase 4.1: Analyzing AI keyword visibility...")
-    
+
     ai_tasks = [
         fetch_ai_keyword_data(client, top_keywords[:50], market, language),
         fetch_llm_mentions(client, domain, top_keywords[:20], "chat_gpt"),
         fetch_llm_mentions(client, domain, top_keywords[:20], "google"),
     ]
-    
+
     ai_results = await asyncio.gather(*ai_tasks, return_exceptions=True)
-    
+
     ai_keyword_data = ai_results[0] if not isinstance(ai_results[0], Exception) else []
     chatgpt_mentions = ai_results[1] if not isinstance(ai_results[1], Exception) else {}
     google_ai_mentions = ai_results[2] if not isinstance(ai_results[2], Exception) else {}
-    
+
     if isinstance(ai_results[0], Exception):
         logger.warning(f"Failed to fetch AI keyword data: {ai_results[0]}")
     if isinstance(ai_results[1], Exception):
         logger.warning(f"Failed to fetch ChatGPT mentions: {ai_results[1]}")
     if isinstance(ai_results[2], Exception):
         logger.warning(f"Failed to fetch Google AI mentions: {ai_results[2]}")
-    
+
     logger.info(f"Phase 4.1: Analyzed {len(ai_keyword_data)} keywords for AI visibility")
-    
+
     # -------------------------------------------------------------------------
     # Step 2: Brand mentions and sentiment (parallel)
     # -------------------------------------------------------------------------
-    
+
     logger.info("Phase 4.2: Analyzing brand mentions and sentiment...")
-    
+
     brand_tasks = [
         fetch_brand_mentions(client, brand_name, limit=50),
         fetch_sentiment_summary(client, brand_name),
     ]
-    
+
     brand_results = await asyncio.gather(*brand_tasks, return_exceptions=True)
-    
+
     brand_mentions = brand_results[0] if not isinstance(brand_results[0], Exception) else []
     sentiment_summary = brand_results[1] if not isinstance(brand_results[1], Exception) else {}
-    
+
     if isinstance(brand_results[0], Exception):
         logger.warning(f"Failed to fetch brand mentions: {brand_results[0]}")
     if isinstance(brand_results[1], Exception):
         logger.warning(f"Failed to fetch sentiment: {brand_results[1]}")
-    
+
     logger.info(f"Phase 4.2: Found {len(brand_mentions)} brand mentions")
-    
+
     # -------------------------------------------------------------------------
     # Step 3: Google Trends
     # -------------------------------------------------------------------------
-    
+
     logger.info("Phase 4.3: Fetching trend data...")
-    
+
     # Analyze top 5 keywords for trends
     trend_keywords = top_keywords[:5]
     trend_data = await fetch_trends_data(client, trend_keywords, market)
-    
+
     if isinstance(trend_data, Exception):
         logger.warning(f"Failed to fetch trends: {trend_data}")
         trend_data = []
-    
+
     logger.info(f"Phase 4.3: Got trends for {len(trend_data)} keywords")
-    
+
     # -------------------------------------------------------------------------
     # Step 4: Technical audits (parallel for top 3 pages)
     # -------------------------------------------------------------------------
-    
+
     logger.info("Phase 4.4: Running technical audits...")
-    
+
     pages_to_audit = top_pages[:3]
-    
+
     audit_tasks = [
         fetch_technical_audit(client, url, language)
         for url in pages_to_audit
     ]
-    
+
     audit_results = await asyncio.gather(*audit_tasks, return_exceptions=True)
-    
+
     technical_audits = []
     for url, result in zip(pages_to_audit, audit_results):
         if isinstance(result, Exception):
             logger.warning(f"Failed to audit {url}: {result}")
         else:
             technical_audits.append(result)
-    
+
     logger.info(f"Phase 4.4: Completed {len(technical_audits)} technical audits")
 
     # -------------------------------------------------------------------------
@@ -257,39 +242,35 @@ async def collect_ai_technical_data(
 
     additional_tasks = [
         fetch_live_serp_ai_overview(client, top_keywords[:5], market, language),
-        fetch_schema_markup(client, top_pages[:3]),
         fetch_content_ratings(client, brand_name),
         fetch_search_volume_live(client, top_keywords[:20], market, language),
-        fetch_duplicate_content(client, top_pages[0] if top_pages else f"https://{domain}/"),
     ]
 
     additional_results = await asyncio.gather(*additional_tasks, return_exceptions=True)
 
     live_serp_data = additional_results[0] if not isinstance(additional_results[0], Exception) else []
-    schema_data = additional_results[1] if not isinstance(additional_results[1], Exception) else []
-    content_ratings = additional_results[2] if not isinstance(additional_results[2], Exception) else {}
-    search_volume_live = additional_results[3] if not isinstance(additional_results[3], Exception) else []
-    duplicate_content = additional_results[4] if not isinstance(additional_results[4], Exception) else {}
+    content_ratings = additional_results[1] if not isinstance(additional_results[1], Exception) else {}
+    search_volume_live = additional_results[2] if not isinstance(additional_results[2], Exception) else []
 
-    for i, name in enumerate(["live_serp", "schema_markup", "content_ratings", "search_volume", "duplicate_content"]):
+    for i, name in enumerate(["live_serp", "content_ratings", "search_volume"]):
         if isinstance(additional_results[i], Exception):
             logger.warning(f"Failed to fetch {name}: {additional_results[i]}")
 
     # -------------------------------------------------------------------------
     # Step 6: Calculate aggregated scores
     # -------------------------------------------------------------------------
-    
+
     # AI visibility score (0-100)
     ai_visibility_score = calculate_ai_visibility_score(
         ai_keyword_data, chatgpt_mentions, google_ai_mentions
     )
-    
+
     # Brand sentiment score (-100 to +100)
     brand_sentiment_score = calculate_sentiment_score(sentiment_summary)
-    
+
     # Technical health score (0-100)
     technical_health_score = calculate_technical_score(technical_audits)
-    
+
     # -------------------------------------------------------------------------
     # Return complete Phase 4 data
     # -------------------------------------------------------------------------
@@ -326,10 +307,8 @@ async def collect_ai_technical_data(
             for a in technical_audits
         ],
         "live_serp_data": live_serp_data,
-        "schema_data": schema_data,
         "content_ratings": content_ratings,
         "search_volume_live": search_volume_live,
-        "duplicate_content": duplicate_content,
         "ai_visibility_score": ai_visibility_score,
         "brand_sentiment_score": brand_sentiment_score,
         "technical_health_score": technical_health_score,
@@ -348,7 +327,7 @@ async def fetch_ai_keyword_data(
 ) -> List[Dict[str, Any]]:
     """
     Fetch AI-era keyword metrics.
-    
+
     Uses keyword overview to get search volume and AI-related metrics.
     """
     result = await client.post(
@@ -356,16 +335,16 @@ async def fetch_ai_keyword_data(
         [{
             "keywords": keywords,
             "location_name": market,
-            "language_code": language,
+            "language_name": language,  # FIXED: was language_code
         }]
     )
-    
+
     items = result.get("tasks", [{}])[0].get("result", [])
-    
+
     keyword_data = []
     for item in items:
         kw_info = item.get("keyword_info", {})
-        
+
         keyword_data.append({
             "keyword": item.get("keyword", ""),
             "search_volume": kw_info.get("search_volume", 0),
@@ -375,7 +354,7 @@ async def fetch_ai_keyword_data(
             # AI-specific metrics (when available)
             "monthly_searches": kw_info.get("monthly_searches", []),
         })
-    
+
     return keyword_data
 
 
@@ -387,21 +366,23 @@ async def fetch_llm_mentions(
 ) -> Dict[str, Any]:
     """
     Check if domain is mentioned in LLM responses.
-    
+
     Uses AI Optimization LLM Mentions API.
+
+    FIXED: target must be array of objects [{"domain": "..."}], not string
     """
     try:
         result = await client.post(
             "ai_optimization/llm_mentions/search/live",
             [{
-                "target": [{"domain": domain}],
+                "target": [{"domain": domain}],  # FIXED: was just domain string
                 "platform": platform,
                 "limit": 50,
             }]
         )
-        
+
         task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
-        
+
         return {
             "platform": platform,
             "total_mentions": task_result.get("total_count", 0),
@@ -426,7 +407,7 @@ async def fetch_brand_mentions(
 ) -> List[Dict[str, Any]]:
     """
     Find brand mentions across the web.
-    
+
     Uses Content Analysis API.
     """
     result = await client.post(
@@ -437,25 +418,25 @@ async def fetch_brand_mentions(
             "search_mode": "one_per_domain",
         }]
     )
-    
+
     items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-    
+
     mentions = []
     for item in items:
         content_info = item.get("content_info", {})
         sentiment = content_info.get("sentiment_connotations", {})
-        
+
         # Determine overall sentiment
         positive = sentiment.get("positive", 0)
         negative = sentiment.get("negative", 0)
-        
+
         if positive > negative:
             sentiment_label = "positive"
         elif negative > positive:
             sentiment_label = "negative"
         else:
             sentiment_label = "neutral"
-        
+
         mentions.append({
             "url": item.get("url", ""),
             "domain": item.get("domain", ""),
@@ -465,7 +446,7 @@ async def fetch_brand_mentions(
             "date": item.get("date", ""),
             "domain_rank": item.get("domain_rank", 0),
         })
-    
+
     return mentions
 
 
@@ -475,7 +456,7 @@ async def fetch_sentiment_summary(
 ) -> Dict[str, Any]:
     """
     Get sentiment summary for a keyword/brand.
-    
+
     Uses Content Analysis Summary API.
     """
     result = await client.post(
@@ -484,12 +465,12 @@ async def fetch_sentiment_summary(
             "keyword": keyword,
         }]
     )
-    
+
     task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
-    
+
     sentiment_data = task_result.get("sentiment_connotations", {})
     connotation_types = task_result.get("connotation_types", {})
-    
+
     return {
         "total_mentions": task_result.get("total_count", 0),
         "sentiment_distribution": {
@@ -516,7 +497,7 @@ async def fetch_trends_data(
 ) -> List[Dict[str, Any]]:
     """
     Fetch Google Trends data for keywords.
-    
+
     Returns trend data for past 12 months.
     """
     result = await client.post(
@@ -528,38 +509,38 @@ async def fetch_trends_data(
             "item_types": ["google_trends_graph"],
         }]
     )
-    
+
     items = result.get("tasks", [{}])[0].get("result", [])
-    
+
     trend_data = []
-    
+
     for item in items:
         if item.get("type") == "google_trends_graph":
             for line in item.get("lines", []):
                 keyword = line.get("keyword", "")
                 values = line.get("values", [])
-                
+
                 if values:
                     # Calculate trend direction
                     first_half = sum(v.get("value", 0) for v in values[:len(values)//2])
                     second_half = sum(v.get("value", 0) for v in values[len(values)//2:])
-                    
+
                     if second_half > first_half * 1.1:
                         direction = "rising"
                     elif second_half < first_half * 0.9:
                         direction = "falling"
                     else:
                         direction = "stable"
-                    
+
                     avg_interest = sum(v.get("value", 0) for v in values) / len(values)
-                    
+
                     trend_data.append({
                         "keyword": keyword,
                         "values": values,
                         "direction": direction,
                         "avg_interest": round(avg_interest, 1),
                     })
-    
+
     return trend_data
 
 
@@ -583,7 +564,7 @@ async def fetch_live_serp_ai_overview(
                 [{
                     "keyword": keyword,
                     "location_name": market,
-                    "language_code": language,
+                    "language_name": language,  # FIXED: was language_code
                     "device": "desktop",
                     "depth": 10,
                 }]
@@ -623,50 +604,8 @@ async def fetch_live_serp_ai_overview(
     return serp_results
 
 
-async def fetch_schema_markup(
-    client,
-    urls: List[str]
-) -> List[Dict[str, Any]]:
-    """
-    Fetch schema markup (structured data) from pages.
-
-    Important for AI visibility and rich results.
-    """
-    schema_results = []
-
-    for url in urls[:5]:
-        try:
-            result = await client.post(
-                "on_page/microdata",
-                [{
-                    "url": url,
-                }]
-            )
-
-            items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-
-            schemas = []
-            for item in items:
-                schemas.append({
-                    "type": item.get("type", ""),
-                    "properties": item.get("properties", {}),
-                })
-
-            schema_results.append({
-                "url": url,
-                "schemas": schemas,
-                "schema_count": len(schemas),
-                "schema_types": list(set(s["type"] for s in schemas)),
-            })
-        except Exception as e:
-            logger.warning(f"Failed to fetch schema for '{url}': {e}")
-            schema_results.append({
-                "url": url,
-                "schemas": [],
-                "error": str(e),
-            })
-
-    return schema_results
+# REMOVED: fetch_schema_markup - on_page/microdata is task-based, not instant
+# REMOVED: fetch_duplicate_content - on_page/duplicate_content is task-based, not instant
 
 
 async def fetch_content_ratings(
@@ -715,7 +654,7 @@ async def fetch_search_volume_live(
             [{
                 "keywords": keywords[:100],  # Max 100
                 "location_name": market,
-                "language_code": language,
+                "language_name": language,  # FIXED: was language_code
             }]
         )
 
@@ -737,37 +676,6 @@ async def fetch_search_volume_live(
         return []
 
 
-async def fetch_duplicate_content(
-    client,
-    url: str
-) -> Dict[str, Any]:
-    """
-    Check for duplicate content issues.
-
-    Important for SEO health.
-    """
-    try:
-        result = await client.post(
-            "on_page/duplicate_content",
-            [{
-                "url": url,
-                "max_crawl_pages": 50,
-            }]
-        )
-
-        task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
-
-        return {
-            "total_duplicate_pages": task_result.get("crawl_status", {}).get("pages_with_duplicate_content", 0),
-            "duplicate_title_pages": task_result.get("crawl_status", {}).get("pages_with_duplicate_title", 0),
-            "duplicate_description_pages": task_result.get("crawl_status", {}).get("pages_with_duplicate_description", 0),
-            "items": task_result.get("items", [])[:20],
-        }
-    except Exception as e:
-        logger.warning(f"Failed to fetch duplicate content: {e}")
-        return {"error": str(e)}
-
-
 async def fetch_technical_audit(
     client,
     url: str,
@@ -775,7 +683,7 @@ async def fetch_technical_audit(
 ) -> TechnicalAudit:
     """
     Run technical SEO audit on a page.
-    
+
     Uses On-Page Instant Pages API.
     """
     result = await client.post(
@@ -786,9 +694,9 @@ async def fetch_technical_audit(
             "accept_language": language,
         }]
     )
-    
+
     items = result.get("tasks", [{}])[0].get("result", [])
-    
+
     if not items:
         return TechnicalAudit(
             url=url,
@@ -809,40 +717,40 @@ async def fetch_technical_audit(
             core_web_vitals={},
             issues=["Failed to analyze page"],
         )
-    
+
     page = items[0]
     meta = page.get("meta", {})
     on_page = page.get("page_timing", {})
     checks = page.get("checks", {})
-    
+
     # Collect issues
     issues = []
-    
+
     if not meta.get("title"):
         issues.append("Missing title tag")
     elif len(meta.get("title", "")) > 60:
         issues.append("Title too long (>60 chars)")
-    
+
     if not meta.get("description"):
         issues.append("Missing meta description")
     elif len(meta.get("description", "")) > 160:
         issues.append("Meta description too long (>160 chars)")
-    
+
     if checks.get("no_h1_tag"):
         issues.append("Missing H1 tag")
     if checks.get("duplicate_h1_tag"):
         issues.append("Duplicate H1 tags")
-    
+
     if checks.get("no_image_alt"):
         issues.append("Images missing alt text")
-    
+
     if checks.get("is_broken"):
         issues.append("Page has broken elements")
-    
+
     # Get word count
     content = page.get("content", {})
     word_count = content.get("plain_text_word_count", 0)
-    
+
     return TechnicalAudit(
         url=url,
         title=meta.get("title", ""),
@@ -879,53 +787,53 @@ def calculate_ai_visibility_score(
 ) -> float:
     """
     Calculate AI visibility score (0-100).
-    
+
     Based on:
     - Number of AI mentions
     - Coverage across platforms
     """
     score = 0
-    
+
     # ChatGPT mentions (up to 40 points)
     chatgpt_count = chatgpt_mentions.get("total_mentions", 0)
     score += min(chatgpt_count * 2, 40)
-    
+
     # Google AI mentions (up to 40 points)
     google_count = google_ai_mentions.get("total_mentions", 0)
     score += min(google_count * 2, 40)
-    
+
     # Keyword coverage (up to 20 points)
     if keyword_data:
         score += min(len(keyword_data), 20)
-    
+
     return min(score, 100)
 
 
 def calculate_sentiment_score(sentiment_summary: Dict) -> float:
     """
     Calculate brand sentiment score (-100 to +100).
-    
+
     Based on positive vs negative mention ratio.
     """
     distribution = sentiment_summary.get("sentiment_distribution", {})
-    
+
     positive = distribution.get("positive", 0)
     negative = distribution.get("negative", 0)
     total = positive + negative
-    
+
     if total == 0:
         return 0
-    
+
     # Score: (positive - negative) / total * 100
     score = (positive - negative) / total * 100
-    
+
     return round(score, 1)
 
 
 def calculate_technical_score(audits: List[TechnicalAudit]) -> float:
     """
     Calculate technical health score (0-100).
-    
+
     Based on:
     - Issue count
     - Load time
@@ -933,29 +841,29 @@ def calculate_technical_score(audits: List[TechnicalAudit]) -> float:
     """
     if not audits:
         return 0
-    
+
     total_score = 0
-    
+
     for audit in audits:
         page_score = 100
-        
+
         # Deduct for issues (5 points each)
         page_score -= len(audit.issues) * 5
-        
+
         # Deduct for slow load time (> 3 seconds)
         if audit.load_time > 3:
             page_score -= min((audit.load_time - 3) * 10, 30)
-        
+
         # Deduct if not mobile friendly
         if not audit.is_mobile_friendly:
             page_score -= 20
-        
+
         # Deduct for missing content
         if audit.word_count < 300:
             page_score -= 10
-        
+
         total_score += max(page_score, 0)
-    
+
     return round(total_score / len(audits), 1)
 
 
@@ -967,26 +875,26 @@ async def test_phase4():
     """Test Phase 4 collection."""
     import os
     from dotenv import load_dotenv
-    
+
     load_dotenv()
-    
+
     # Mock client for testing
     class MockClient:
         async def post(self, endpoint, data):
             return {"tasks": [{"result": [{"items": []}]}]}
-    
+
     client = MockClient()
-    
+
     result = await collect_ai_technical_data(
         client=client,
         domain="example.com",
         brand_name="Example Brand",
-        market="Sweden",
-        language="sv",
+        market="United States",
+        language="English",  # FIXED: was "sv"
         top_keywords=["seo", "marketing"],
         top_pages=["https://example.com/"],
     )
-    
+
     print(f"AI keyword data: {len(result['ai_keyword_data'])}")
     print(f"Brand mentions: {len(result['brand_mentions'])}")
     print(f"Technical audits: {len(result['technical_audits'])}")
