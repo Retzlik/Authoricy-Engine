@@ -14,7 +14,9 @@ from .orchestrator import (
     CollectionConfig,
     CollectionResult,
     compile_analysis_data,
+    get_analysis_json,
 )
+from .phase1 import collect_foundation_data
 from .phase2 import collect_keyword_data
 from .phase3 import collect_competitive_data
 from .phase4 import collect_ai_technical_data
@@ -23,14 +25,16 @@ __all__ = [
     # Client
     "DataForSEOClient",
     "DataForSEOError",
-    
+
     # Orchestrator
     "DataCollectionOrchestrator",
     "CollectionConfig",
     "CollectionResult",
     "compile_analysis_data",
-    
+    "get_analysis_json",
+
     # Phase collectors
+    "collect_foundation_data",
     "collect_keyword_data",
     "collect_competitive_data",
     "collect_ai_technical_data",

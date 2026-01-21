@@ -1,0 +1,287 @@
+/* Authoricy Report Styles */
+
+@page {
+    size: A4;
+    margin: 2cm;
+    @bottom-center {
+        content: counter(page) " / " counter(pages);
+        font-size: 10px;
+        color: #666;
+    }
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.6;
+    color: #333;
+}
+
+.page {
+    page-break-after: always;
+    min-height: 100vh;
+    padding: 20px 0;
+}
+
+.page:last-child {
+    page-break-after: avoid;
+}
+
+/* Typography */
+h1 {
+    font-size: 24pt;
+    color: #1a1a2e;
+    margin-bottom: 20px;
+    font-weight: 700;
+}
+
+h2 {
+    font-size: 18pt;
+    color: #2d3436;
+    margin: 25px 0 15px;
+    font-weight: 600;
+}
+
+h3 {
+    font-size: 14pt;
+    color: #2d3436;
+    margin: 20px 0 10px;
+    font-weight: 600;
+}
+
+h4 {
+    font-size: 12pt;
+    color: #555;
+    margin: 15px 0 8px;
+    font-weight: 500;
+}
+
+p {
+    margin-bottom: 12px;
+}
+
+/* Cover Page */
+.cover {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    min-height: 100vh;
+}
+
+.cover h1 {
+    font-size: 32pt;
+    color: #1a1a2e;
+    margin-bottom: 10px;
+}
+
+.cover .subtitle {
+    font-size: 14pt;
+    color: #666;
+    margin-bottom: 40px;
+}
+
+.cover .meta {
+    font-size: 10pt;
+    color: #888;
+    margin-top: 60px;
+}
+
+.logo {
+    font-size: 14pt;
+    font-weight: bold;
+    color: #4361ee;
+}
+
+.confidential {
+    font-size: 9pt;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* Highlight Boxes */
+.highlight-box {
+    background: #f8f9fa;
+    border-left: 4px solid #4361ee;
+    padding: 15px 20px;
+    margin: 20px 0;
+    border-radius: 0 4px 4px 0;
+}
+
+.highlight-box.warning {
+    border-left-color: #f72585;
+}
+
+.highlight-box.success {
+    border-left-color: #06d6a0;
+}
+
+.highlight-box.info {
+    border-left-color: #4cc9f0;
+}
+
+/* Metric Cards */
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 15px;
+    margin: 20px 0;
+}
+
+.metric-card {
+    background: #f8f9fa;
+    padding: 15px;
+    text-align: center;
+    border-radius: 8px;
+}
+
+.metric-card .value {
+    font-size: 24pt;
+    font-weight: bold;
+    color: #4361ee;
+}
+
+.metric-card .label {
+    font-size: 10pt;
+    color: #666;
+    margin-top: 5px;
+}
+
+/* Tables */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 15px 0;
+    font-size: 10pt;
+}
+
+th, td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
+
+th {
+    background: #f8f9fa;
+    font-weight: 600;
+    color: #2d3436;
+}
+
+tr:hover {
+    background: #fafafa;
+}
+
+/* Findings */
+.finding {
+    margin: 15px 0;
+    padding: 15px;
+    background: #fafafa;
+    border-radius: 8px;
+}
+
+.finding-title {
+    font-weight: 600;
+    color: #1a1a2e;
+    margin-bottom: 8px;
+}
+
+/* CTA Box */
+.cta-box {
+    background: #4361ee;
+    color: white;
+    padding: 30px;
+    text-align: center;
+    border-radius: 8px;
+    margin: 30px 0;
+}
+
+.cta-box h3 {
+    color: white;
+    margin-bottom: 15px;
+}
+
+.cta-box p {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+/* Lists */
+ul, ol {
+    margin: 10px 0 10px 20px;
+}
+
+li {
+    margin: 5px 0;
+}
+
+/* Code */
+pre {
+    background: #f5f5f5;
+    padding: 10px;
+    overflow-x: auto;
+    font-size: 9pt;
+    border-radius: 4px;
+}
+
+code {
+    background: #f5f5f5;
+    padding: 2px 4px;
+    font-size: 9pt;
+    border-radius: 2px;
+}
+
+/* Data Box */
+.data-box {
+    background: #f8f9fa;
+    padding: 15px;
+    margin: 15px 0;
+    border-radius: 4px;
+    font-size: 10pt;
+}
+
+/* Charts */
+.chart-container {
+    margin: 20px 0;
+    text-align: center;
+}
+
+/* Print Utilities */
+.no-print {
+    display: none !important;
+}
+
+.print-only {
+    display: block;
+}
+
+/* Colors */
+.text-primary {
+    color: #4361ee;
+}
+
+.text-success {
+    color: #06d6a0;
+}
+
+.text-warning {
+    color: #ffd166;
+}
+
+.text-danger {
+    color: #f72585;
+}
+
+.bg-primary {
+    background-color: #4361ee;
+}
+
+.bg-light {
+    background-color: #f8f9fa;
+}
