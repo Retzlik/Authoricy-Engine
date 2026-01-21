@@ -409,3 +409,20 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
     }
 
     return compiled
+
+
+def get_analysis_json(result: CollectionResult, indent: int = 2) -> str:
+    """
+    Get analysis data as JSON string.
+
+    Args:
+        result: CollectionResult from data collection
+        indent: JSON indentation level
+
+    Returns:
+        JSON string of compiled analysis data
+    """
+    import json
+
+    compiled = compile_analysis_data(result)
+    return json.dumps(compiled, indent=indent, default=str)
