@@ -25,6 +25,54 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _safe_get_items(result: Dict, get_first: bool = True) -> List[Dict]:
+    """
+    Safely extract items from DataForSEO API response.
+    Handles cases where result or nested values are None.
+
+    Args:
+        result: API response dict
+        get_first: If True, gets items from result[0], else returns result list
+
+    Returns:
+        List of items or empty list
+    """
+    tasks = result.get("tasks") or [{}]
+    task_result = tasks[0].get("result")
+
+    if task_result is None:
+        return []
+
+    if get_first:
+        if isinstance(task_result, list) and len(task_result) > 0:
+            first_result = task_result[0]
+            if isinstance(first_result, dict):
+                return first_result.get("items") or []
+        return []
+    else:
+        return task_result if isinstance(task_result, list) else []
+
+
+def _safe_get_first_result(result: Dict) -> Dict:
+    """
+    Safely get the first result object from DataForSEO API response.
+
+    Returns:
+        First result dict or empty dict
+    """
+    tasks = result.get("tasks") or [{}]
+    task_result = tasks[0].get("result")
+
+    if task_result is None:
+        return {}
+
+    if isinstance(task_result, list) and len(task_result) > 0:
+        first = task_result[0]
+        return first if isinstance(first, dict) else {}
+
+    return {}
+
+
 async def collect_foundation_data(
     client,
     domain: str,
@@ -100,21 +148,26 @@ async def fetch_domain_overview(client, domain: str, market: str, language: str)
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language  # FIXED: was language_code
+                "language_name": language
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])
+        # Response structure: result[0].items[0].metrics
+        items = _safe_get_items(result)
         if not items:
             return {}
 
         item = items[0]
+        metrics = item.get("metrics") or {}
+        organic = metrics.get("organic") or {}
+        paid = metrics.get("paid") or {}
+
         return {
-            "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
-            "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
-            "paid_keywords": item.get("metrics", {}).get("paid", {}).get("count", 0),
-            "rank": item.get("metrics", {}).get("organic", {}).get("pos_1", 0),
-            "visibility": item.get("metrics", {}).get("organic", {}).get("is_lost", 0),
+            "organic_keywords": organic.get("count", 0),
+            "organic_traffic": organic.get("etv", 0),
+            "paid_keywords": paid.get("count", 0),
+            "rank": organic.get("pos_1", 0),
+            "visibility": organic.get("is_lost", 0),
         }
     except Exception as e:
         logger.error(f"Domain overview failed: {e}")
@@ -129,17 +182,17 @@ async def fetch_historical_overview(client, domain: str, market: str, language: 
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language  # FIXED: was language_code
+                "language_name": language
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = _safe_get_items(result)
 
         return [
             {
                 "date": item.get("date"),
-                "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
-                "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+                "organic_keywords": (item.get("metrics") or {}).get("organic", {}).get("count", 0),
+                "organic_traffic": (item.get("metrics") or {}).get("organic", {}).get("etv", 0),
             }
             for item in items[-12:]  # Last 12 months
         ]
@@ -156,18 +209,18 @@ async def fetch_subdomains(client, domain: str, market: str, language: str) -> L
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language,  # FIXED: was language_code
+                "language_name": language,
                 "limit": 20
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = _safe_get_items(result)
 
         return [
             {
                 "subdomain": item.get("target"),
-                "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
-                "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+                "organic_keywords": (item.get("metrics") or {}).get("organic", {}).get("count", 0),
+                "organic_traffic": (item.get("metrics") or {}).get("organic", {}).get("etv", 0),
             }
             for item in items
         ]
@@ -184,18 +237,18 @@ async def fetch_relevant_pages(client, domain: str, market: str, language: str) 
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language,  # FIXED: was language_code
+                "language_name": language,
                 "limit": 50
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = _safe_get_items(result)
 
         return [
             {
                 "page": item.get("page_address"),
-                "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
-                "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+                "organic_keywords": (item.get("metrics") or {}).get("organic", {}).get("count", 0),
+                "organic_traffic": (item.get("metrics") or {}).get("organic", {}).get("etv", 0),
                 "main_keyword": item.get("main_keyword"),
             }
             for item in items
@@ -213,19 +266,19 @@ async def fetch_competitors(client, domain: str, market: str, language: str) -> 
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language,  # FIXED: was language_code
+                "language_name": language,
                 "limit": 20
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = _safe_get_items(result)
 
         return [
             {
                 "domain": item.get("domain"),
                 "relevance": item.get("avg_position"),
                 "common_keywords": item.get("se_keywords"),
-                "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+                "organic_traffic": (item.get("metrics") or {}).get("organic", {}).get("etv", 0),
             }
             for item in items
         ]
@@ -235,14 +288,19 @@ async def fetch_competitors(client, domain: str, market: str, language: str) -> 
 
 
 async def fetch_backlink_summary(client, domain: str) -> Dict:
-    """Fetch backlink overview."""
+    """Fetch backlink overview.
+
+    Note: backlinks/summary returns result[0] directly with properties,
+    not result[0].items - this is different from other endpoints.
+    """
     try:
         result = await client.post(
             "backlinks/summary/live",
             [{"target": domain}]
         )
 
-        item = result.get("tasks", [{}])[0].get("result", [{}])[0]
+        # Backlinks summary returns properties directly in result[0]
+        item = _safe_get_first_result(result)
 
         return {
             "total_backlinks": item.get("backlinks", 0),
@@ -257,7 +315,10 @@ async def fetch_backlink_summary(client, domain: str) -> Dict:
 
 
 async def fetch_lighthouse(client, url: str) -> Dict:
-    """Fetch Lighthouse performance metrics."""
+    """Fetch Lighthouse performance metrics.
+
+    Note: Lighthouse returns result[0] directly with categories, not items array.
+    """
     try:
         result = await client.post(
             "on_page/lighthouse/live/json",
@@ -267,14 +328,14 @@ async def fetch_lighthouse(client, url: str) -> Dict:
             }]
         )
 
-        item = result.get("tasks", [{}])[0].get("result", [{}])[0]
-        categories = item.get("categories", {})
+        item = _safe_get_first_result(result)
+        categories = item.get("categories") or {}
 
         return {
-            "performance_score": categories.get("performance", {}).get("score", 0),
-            "accessibility_score": categories.get("accessibility", {}).get("score", 0),
-            "best_practices_score": categories.get("best_practices", {}).get("score", 0),
-            "seo_score": categories.get("seo", {}).get("score", 0),
+            "performance_score": (categories.get("performance") or {}).get("score", 0),
+            "accessibility_score": (categories.get("accessibility") or {}).get("score", 0),
+            "best_practices_score": (categories.get("best_practices") or {}).get("score", 0),
+            "seo_score": (categories.get("seo") or {}).get("score", 0),
         }
     except Exception as e:
         logger.error(f"Lighthouse failed: {e}")
@@ -282,14 +343,19 @@ async def fetch_lighthouse(client, url: str) -> Dict:
 
 
 async def fetch_technologies(client, domain: str) -> List[Dict]:
-    """Fetch detected technologies."""
+    """Fetch detected technologies.
+
+    Note: Technologies endpoint returns result[0].technologies array,
+    not result[0].items.
+    """
     try:
         result = await client.post(
             "domain_analytics/technologies/domain_technologies/live",
             [{"target": domain}]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("technologies", [])
+        first_result = _safe_get_first_result(result)
+        items = first_result.get("technologies") or []
 
         return [
             {
@@ -304,14 +370,17 @@ async def fetch_technologies(client, domain: str) -> List[Dict]:
 
 
 async def fetch_domain_whois(client, domain: str) -> Dict:
-    """Fetch domain WHOIS data including registration and expiry info."""
+    """Fetch domain WHOIS data including registration and expiry info.
+
+    Note: WHOIS returns result[0] directly with properties.
+    """
     try:
         result = await client.post(
             "domain_analytics/whois/overview/live",
             [{"target": domain}]
         )
 
-        item = result.get("tasks", [{}])[0].get("result", [{}])[0]
+        item = _safe_get_first_result(result)
 
         return {
             "domain": item.get("domain", domain),
@@ -320,7 +389,7 @@ async def fetch_domain_whois(client, domain: str) -> Dict:
             "expiry_date": item.get("expiry_date", ""),
             "registrar": item.get("registrar", ""),
             "registered": item.get("registered", False),
-            "domain_age_days": item.get("metrics", {}).get("age_days", 0),
+            "domain_age_days": (item.get("metrics") or {}).get("age_days", 0),
         }
     except Exception as e:
         logger.error(f"WHOIS fetch failed: {e}")
@@ -340,18 +409,18 @@ async def fetch_page_intersection(client, domain: str, market: str, language: st
                     "1": f"https://{domain}/"
                 },
                 "location_name": market,
-                "language_name": language,  # FIXED: was language_code
+                "language_name": language,
                 "limit": 50
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = _safe_get_items(result)
 
         return [
             {
-                "keyword": item.get("keyword_data", {}).get("keyword", ""),
-                "search_volume": item.get("keyword_data", {}).get("keyword_info", {}).get("search_volume", 0),
-                "intersections": item.get("intersections", [])
+                "keyword": (item.get("keyword_data") or {}).get("keyword", ""),
+                "search_volume": (item.get("keyword_data") or {}).get("keyword_info", {}).get("search_volume", 0),
+                "intersections": item.get("intersections") or []
             }
             for item in items[:50]
         ]
@@ -368,19 +437,19 @@ async def fetch_categories_for_domain(client, domain: str, market: str, language
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language,  # FIXED: was language_code
+                "language_name": language,
                 "limit": 20
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = _safe_get_items(result)
 
         return [
             {
                 "category": item.get("category", ""),
                 "category_code": item.get("category_code", 0),
-                "keywords_count": item.get("metrics", {}).get("organic", {}).get("count", 0),
-                "traffic_share": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+                "keywords_count": (item.get("metrics") or {}).get("organic", {}).get("count", 0),
+                "traffic_share": (item.get("metrics") or {}).get("organic", {}).get("etv", 0),
             }
             for item in items
         ]
