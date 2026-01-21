@@ -21,8 +21,13 @@ from src.collector import (
     DataForSEOClient,
     DataCollectionOrchestrator,
     CollectionConfig,
+    CollectionResult,
     compile_analysis_data,
+    get_analysis_json,
 )
+from src.analyzer import AnalysisEngine
+from src.reporter import ReportGenerator
+from src.delivery import EmailDelivery
 
 # Configure logging
 logging.basicConfig(
@@ -180,39 +185,40 @@ async def run_analysis(
 ):
     """
     Run the full analysis pipeline in background.
-    
+
     Steps:
     1. Update job status to running
-    2. Collect data from DataForSEO
-    3. Analyze with Claude
-    4. Generate PDF report
-    5. Send email
+    2. Collect data from DataForSEO (60 endpoints)
+    3. Analyze with Claude (4 analysis loops)
+    4. Generate PDF reports (external + internal)
+    5. Send email via Resend
     6. Update job status to completed
     """
-    
+
     # Update status
     jobs[job_id].status = "running"
     jobs[job_id].started_at = datetime.now()
-    
+
     logger.info(f"[{job_id}] Starting analysis for {domain}")
-    
+
     try:
         # Get credentials from environment
         dataforseo_login = os.getenv("DATAFORSEO_LOGIN")
         dataforseo_password = os.getenv("DATAFORSEO_PASSWORD")
-        
+
         if not dataforseo_login or not dataforseo_password:
             raise ValueError("Missing DataForSEO credentials")
-        
+
         # Create client and orchestrator
         async with DataForSEOClient(
             login=dataforseo_login,
             password=dataforseo_password
         ) as client:
-            
+
             orchestrator = DataCollectionOrchestrator(client)
-            
-            # Run collection
+
+            # Run data collection (Phase 1-4: 60 endpoints)
+            logger.info(f"[{job_id}] Phase 1-4: Collecting data from DataForSEO...")
             result = await orchestrator.collect(CollectionConfig(
                 domain=domain,
                 market=market,
@@ -220,28 +226,126 @@ async def run_analysis(
                 brand_name=company_name,
                 skip_ai_analysis=skip_ai_analysis,
             ))
-            
+
             if not result.success:
-                raise Exception(f"Collection failed: {result.errors}")
-            
+                raise Exception(f"Collection failed: {', '.join(result.errors)}")
+
+            # Log any warnings
+            for warning in result.warnings:
+                logger.warning(f"[{job_id}] {warning}")
+
             # Compile data for analysis
             analysis_data = compile_analysis_data(result)
-            
-            logger.info(f"[{job_id}] Data collection complete: {result.duration_seconds:.1f}s")
-            
-            # TODO: Send to Claude for analysis
-            # TODO: Generate PDF
-            # TODO: Send email
-            
-            # For now, just log completion
-            logger.info(f"[{job_id}] Analysis complete (Claude/PDF/Email steps pending)")
-        
+
+            logger.info(
+                f"[{job_id}] Data collection complete: {result.duration_seconds:.1f}s, "
+                f"keywords={len(result.ranked_keywords)}, "
+                f"competitors={len(result.competitors)}"
+            )
+
+            # ================================================================
+            # ANALYSIS ENGINE (Claude AI - 4 Loops)
+            # ================================================================
+            anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+
+            if anthropic_key and not skip_ai_analysis:
+                logger.info(f"[{job_id}] Starting Claude AI analysis (4 loops)...")
+                try:
+                    engine = AnalysisEngine(api_key=anthropic_key)
+                    analysis_result = await engine.analyze(
+                        analysis_data,
+                        skip_enrichment=False,  # Include Loop 3
+                    )
+
+                    logger.info(
+                        f"[{job_id}] Analysis complete: "
+                        f"quality={analysis_result.quality_score}/10, "
+                        f"cost=${analysis_result.total_cost:.2f}"
+                    )
+
+                    if not analysis_result.passed_quality_gate:
+                        logger.warning(
+                            f"[{job_id}] Quality gate not passed "
+                            f"(score: {analysis_result.quality_score}/10)"
+                        )
+
+                except Exception as e:
+                    logger.error(f"[{job_id}] AI analysis failed: {e}")
+                    # Continue without AI analysis
+                    analysis_result = None
+            else:
+                logger.info(f"[{job_id}] AI analysis skipped")
+                analysis_result = None
+
+            # ================================================================
+            # REPORT GENERATION
+            # ================================================================
+            logger.info(f"[{job_id}] Generating PDF reports...")
+            try:
+                generator = ReportGenerator()
+
+                # External Report (Lead Magnet): 10-15 pages
+                external_report = await generator.generate_external(
+                    analysis_result,
+                    analysis_data,
+                )
+                logger.info(
+                    f"[{job_id}] External report generated: "
+                    f"{len(external_report.pdf_bytes)} bytes"
+                )
+
+                # Internal Report (Strategy Guide): 40-60 pages
+                internal_report = await generator.generate_internal(
+                    analysis_result,
+                    analysis_data,
+                )
+                logger.info(
+                    f"[{job_id}] Internal report generated: "
+                    f"{len(internal_report.pdf_bytes)} bytes"
+                )
+
+            except Exception as e:
+                logger.error(f"[{job_id}] PDF generation failed: {e}")
+                external_report = None
+                internal_report = None
+
+            # ================================================================
+            # EMAIL DELIVERY
+            # ================================================================
+            if external_report and os.getenv("RESEND_API_KEY"):
+                logger.info(f"[{job_id}] Sending report via email...")
+                try:
+                    delivery = EmailDelivery()
+                    email_result = await delivery.send_report(
+                        to_email=email,
+                        domain=domain,
+                        company_name=company_name,
+                        pdf_bytes=external_report.pdf_bytes,
+                        pdf_filename=external_report.filename,
+                    )
+
+                    if email_result.success:
+                        logger.info(
+                            f"[{job_id}] Email sent successfully: "
+                            f"{email_result.message_id}"
+                        )
+                    else:
+                        logger.error(
+                            f"[{job_id}] Email delivery failed: "
+                            f"{email_result.error}"
+                        )
+
+                except Exception as e:
+                    logger.error(f"[{job_id}] Email delivery error: {e}")
+            else:
+                logger.info(f"[{job_id}] Email delivery skipped (no report or no API key)")
+
         # Update status
         jobs[job_id].status = "completed"
         jobs[job_id].completed_at = datetime.now()
-        
+
         logger.info(f"[{job_id}] Job completed successfully")
-        
+
     except Exception as e:
         logger.exception(f"[{job_id}] Analysis failed: {e}")
         jobs[job_id].status = "failed"

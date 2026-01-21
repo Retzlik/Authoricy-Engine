@@ -1,15 +1,19 @@
 """
 Phase 1: Foundation Data Collection
 
-Collects baseline domain data through 8 parallel API calls:
+Collects baseline domain data through 12 parallel API calls:
 - Domain rank overview
 - Historical rank data
 - Subdomains
-- Top pages
+- Top pages (relevant_pages)
 - Competitors
 - Backlink summary
 - Lighthouse audit
 - Technologies
+- Domain whois overview
+- Page intersection
+- Domain pages summary
+- Bulk domain rank (for multiple competitors)
 """
 
 import asyncio
@@ -51,13 +55,18 @@ async def collect_foundation_data(
         fetch_backlink_summary(client, domain),
         fetch_lighthouse(client, f"https://{domain}"),
         fetch_technologies(client, domain),
+        fetch_domain_whois(client, domain),
+        fetch_domain_pages_summary(client, domain, market, language),
+        fetch_page_intersection(client, domain, market, language),
+        fetch_categories_for_domain(client, domain, market, language),
     ]
-    
+
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     names = [
         "domain_overview", "historical_data", "subdomains", "top_pages",
-        "competitors", "backlink_summary", "technical_baseline", "technologies"
+        "competitors", "backlink_summary", "technical_baseline", "technologies",
+        "whois_data", "domain_pages_summary", "page_intersection", "categories"
     ]
     
     data = {}
@@ -272,9 +281,9 @@ async def fetch_technologies(client, domain: str) -> List[Dict]:
             "domain_analytics/technologies/domain_technologies/live",
             [{"target": domain}]
         )
-        
+
         items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("technologies", [])
-        
+
         return [
             {
                 "name": item.get("name"),
@@ -284,4 +293,140 @@ async def fetch_technologies(client, domain: str) -> List[Dict]:
         ]
     except Exception as e:
         logger.error(f"Technologies failed: {e}")
+        return []
+
+
+async def fetch_domain_whois(client, domain: str) -> Dict:
+    """Fetch domain WHOIS data including registration and expiry info."""
+    try:
+        result = await client.post(
+            "domain_analytics/whois/overview/live",
+            [{"target": domain}]
+        )
+
+        item = result.get("tasks", [{}])[0].get("result", [{}])[0]
+
+        return {
+            "domain": item.get("domain", domain),
+            "create_date": item.get("create_date", ""),
+            "update_date": item.get("update_date", ""),
+            "expiry_date": item.get("expiry_date", ""),
+            "registrar": item.get("registrar", ""),
+            "registered": item.get("registered", False),
+            "domain_age_days": item.get("metrics", {}).get("age_days", 0),
+        }
+    except Exception as e:
+        logger.error(f"WHOIS fetch failed: {e}")
+        return {}
+
+
+async def fetch_domain_pages_summary(client, domain: str, market: str, language: str) -> Dict:
+    """Fetch summary of indexed pages for the domain."""
+    try:
+        result = await client.post(
+            "dataforseo_labs/google/domain_pages_summary/live",
+            [{
+                "target": domain,
+                "location_name": market,
+                "language_code": language
+            }]
+        )
+
+        item = result.get("tasks", [{}])[0].get("result", [{}])[0]
+
+        return {
+            "total_pages": item.get("metrics", {}).get("organic", {}).get("count", 0),
+            "top_pages_count": item.get("total_count", 0),
+            "avg_position": item.get("metrics", {}).get("organic", {}).get("pos", 0),
+            "estimated_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+        }
+    except Exception as e:
+        logger.error(f"Domain pages summary failed: {e}")
+        return {}
+
+
+async def fetch_page_intersection(client, domain: str, market: str, language: str) -> List[Dict]:
+    """Fetch page intersection data showing which pages compete for same keywords."""
+    try:
+        result = await client.post(
+            "dataforseo_labs/google/page_intersection/live",
+            [{
+                "pages": {
+                    "1": {"url": f"https://{domain}/"}
+                },
+                "location_name": market,
+                "language_code": language,
+                "limit": 50
+            }]
+        )
+
+        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+
+        return [
+            {
+                "keyword": item.get("keyword_data", {}).get("keyword", ""),
+                "search_volume": item.get("keyword_data", {}).get("keyword_info", {}).get("search_volume", 0),
+                "intersections": item.get("intersections", [])
+            }
+            for item in items[:50]
+        ]
+    except Exception as e:
+        logger.error(f"Page intersection failed: {e}")
+        return []
+
+
+async def fetch_categories_for_domain(client, domain: str, market: str, language: str) -> List[Dict]:
+    """Fetch top categories/verticals the domain ranks for."""
+    try:
+        result = await client.post(
+            "dataforseo_labs/google/categories_for_domain/live",
+            [{
+                "target": domain,
+                "location_name": market,
+                "language_code": language,
+                "limit": 20
+            }]
+        )
+
+        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+
+        return [
+            {
+                "category": item.get("category", ""),
+                "category_code": item.get("category_code", 0),
+                "keywords_count": item.get("metrics", {}).get("organic", {}).get("count", 0),
+                "traffic_share": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+            }
+            for item in items
+        ]
+    except Exception as e:
+        logger.error(f"Categories for domain failed: {e}")
+        return []
+
+
+async def fetch_bulk_domain_rank(client, domains: List[str], market: str, language: str) -> List[Dict]:
+    """Fetch domain rank metrics for multiple domains at once (useful for competitor comparison)."""
+    try:
+        result = await client.post(
+            "dataforseo_labs/google/bulk_domain_rank_overview/live",
+            [{
+                "targets": domains[:100],  # Max 100 domains per request
+                "location_name": market,
+                "language_code": language
+            }]
+        )
+
+        items = result.get("tasks", [{}])[0].get("result", [])
+
+        return [
+            {
+                "domain": item.get("target", ""),
+                "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+                "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
+                "domain_rank": item.get("rank", 0),
+            }
+            for item in items
+        ]
+    except Exception as e:
+        logger.error(f"Bulk domain rank failed: {e}")
         return []

@@ -9,14 +9,19 @@ Collects comprehensive keyword data including:
 - Semantic keyword expansion
 - Keyword gap identification
 - Difficulty scoring
+- Historical search volume trends
+- SERP element analysis
+- Top searches by keyword
+- Questions for keywords (People Also Ask)
+- Bulk traffic estimation
 
 Execution strategy:
 - Initial calls (ranked_keywords, keywords_for_site) run in parallel
 - Expansion calls depend on seed keywords from initial calls
 - Bulk operations (difficulty, intent) batch multiple keywords
 
-Expected API calls: 12-20 depending on seed keyword count
-Expected time: 5-8 seconds (with parallelization)
+Expected API calls: 18-25 depending on seed keyword count
+Expected time: 6-10 seconds (with parallelization)
 """
 
 import asyncio
@@ -212,15 +217,15 @@ async def collect_keyword_data(
     # -------------------------------------------------------------------------
     # Step 6: Difficulty scoring for priority keywords
     # -------------------------------------------------------------------------
-    
+
     logger.info("Step 5: Scoring keyword difficulty...")
-    
+
     # Combine gap keywords + top opportunities for difficulty scoring
     keywords_to_score = []
     keywords_to_score.extend([g["keyword"] for g in keyword_gaps[:100]])
     keywords_to_score.extend([kw["keyword"] for kw in ranked_keywords if kw.get("position", 100) > 10][:100])
     keywords_to_score = list(set(keywords_to_score))[:200]  # Dedupe, limit to 200
-    
+
     difficulty_scores = {}
     if keywords_to_score:
         difficulty_result = await fetch_bulk_difficulty(client, keywords_to_score, market, language)
@@ -228,6 +233,32 @@ async def collect_keyword_data(
             difficulty_scores = difficulty_result
         else:
             logger.warning(f"Failed to fetch difficulty: {difficulty_result}")
+
+    # -------------------------------------------------------------------------
+    # Step 6b: Additional keyword intelligence (parallel)
+    # -------------------------------------------------------------------------
+
+    logger.info("Step 6: Fetching additional keyword intelligence...")
+
+    additional_tasks = [
+        fetch_historical_search_volume(client, seed_keywords[:10], market, language),
+        fetch_serp_elements(client, seed_keywords[:20], market, language),
+        fetch_questions_for_keywords(client, seed_keywords[:5], market, language),
+        fetch_top_searches(client, domain, market, language),
+        fetch_bulk_traffic_estimation(client, domain, seed_keywords[:50], market, language),
+    ]
+
+    additional_results = await asyncio.gather(*additional_tasks, return_exceptions=True)
+
+    historical_volume = additional_results[0] if not isinstance(additional_results[0], Exception) else []
+    serp_elements = additional_results[1] if not isinstance(additional_results[1], Exception) else []
+    questions_data = additional_results[2] if not isinstance(additional_results[2], Exception) else []
+    top_searches = additional_results[3] if not isinstance(additional_results[3], Exception) else []
+    traffic_estimation = additional_results[4] if not isinstance(additional_results[4], Exception) else {}
+
+    for i, name in enumerate(["historical_volume", "serp_elements", "questions", "top_searches", "traffic_estimation"]):
+        if isinstance(additional_results[i], Exception):
+            logger.warning(f"Failed to fetch {name}: {additional_results[i]}")
     
     # -------------------------------------------------------------------------
     # Step 7: Calculate summary metrics
@@ -261,6 +292,11 @@ async def collect_keyword_data(
         ],
         "keyword_gaps": keyword_gaps,
         "difficulty_scores": difficulty_scores,
+        "historical_volume": historical_volume,
+        "serp_elements": serp_elements,
+        "questions_data": questions_data,
+        "top_searches": top_searches,
+        "traffic_estimation": traffic_estimation,
         **summary
     }
 
@@ -525,12 +561,12 @@ async def fetch_bulk_difficulty(
 ) -> Dict[str, int]:
     """
     Fetch keyword difficulty scores in bulk.
-    
+
     Returns dict mapping keyword -> difficulty score (0-100)
     """
     # API accepts max 1000 keywords
     keywords = keywords[:1000]
-    
+
     result = await client.post(
         "dataforseo_labs/google/bulk_keyword_difficulty/live",
         [{
@@ -539,16 +575,225 @@ async def fetch_bulk_difficulty(
             "language_code": language
         }]
     )
-    
+
     items = result.get("tasks", [{}])[0].get("result", [])
-    
+
     difficulty_map = {}
     for item in items:
         keyword = item.get("keyword", "")
         difficulty = item.get("keyword_difficulty", 0)
         difficulty_map[keyword] = difficulty
-    
+
     return difficulty_map
+
+
+async def fetch_historical_search_volume(
+    client,
+    keywords: List[str],
+    market: str,
+    language: str
+) -> List[Dict]:
+    """
+    Fetch historical search volume data for keywords (12 months).
+
+    Returns monthly volume trends for each keyword.
+    """
+    result = await client.post(
+        "dataforseo_labs/google/historical_search_volume/live",
+        [{
+            "keywords": keywords[:100],  # Max 100 keywords
+            "location_name": market,
+            "language_code": language
+        }]
+    )
+
+    items = result.get("tasks", [{}])[0].get("result", [])
+
+    historical_data = []
+    for item in items:
+        keyword = item.get("keyword", "")
+        monthly_searches = item.get("keyword_info", {}).get("monthly_searches", [])
+
+        historical_data.append({
+            "keyword": keyword,
+            "monthly_searches": monthly_searches,
+            "trend_direction": calculate_trend_direction(monthly_searches),
+        })
+
+    return historical_data
+
+
+def calculate_trend_direction(monthly_searches: List[Dict]) -> str:
+    """Calculate if trend is rising, falling, or stable."""
+    if not monthly_searches or len(monthly_searches) < 2:
+        return "stable"
+
+    values = [m.get("search_volume", 0) for m in monthly_searches]
+    first_half = sum(values[:len(values)//2])
+    second_half = sum(values[len(values)//2:])
+
+    if second_half > first_half * 1.15:
+        return "rising"
+    elif second_half < first_half * 0.85:
+        return "falling"
+    return "stable"
+
+
+async def fetch_serp_elements(
+    client,
+    keywords: List[str],
+    market: str,
+    language: str
+) -> List[Dict]:
+    """
+    Fetch SERP element distribution for keywords.
+
+    Shows what SERP features appear for each keyword (featured snippets, PAA, etc.)
+    """
+    result = await client.post(
+        "dataforseo_labs/google/serp_competitors/live",
+        [{
+            "keywords": keywords[:200],  # Max 200 keywords
+            "location_name": market,
+            "language_code": language,
+            "item_types": ["organic", "featured_snippet", "people_also_ask", "local_pack", "knowledge_graph"]
+        }]
+    )
+
+    task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+
+    serp_elements = {
+        "organic_results": task_result.get("organic_results_count", 0),
+        "featured_snippets": task_result.get("featured_snippets_count", 0),
+        "people_also_ask": task_result.get("people_also_ask_count", 0),
+        "local_packs": task_result.get("local_pack_count", 0),
+        "knowledge_graphs": task_result.get("knowledge_graph_count", 0),
+        "items": task_result.get("items", [])[:50],
+    }
+
+    return [serp_elements]
+
+
+async def fetch_questions_for_keywords(
+    client,
+    keywords: List[str],
+    market: str,
+    language: str
+) -> List[Dict]:
+    """
+    Fetch People Also Ask questions for keywords.
+
+    Returns related questions for content ideation.
+    """
+    all_questions = []
+
+    for keyword in keywords[:5]:  # Limit to 5 keywords to control costs
+        result = await client.post(
+            "dataforseo_labs/google/related_keywords/live",
+            [{
+                "keyword": keyword,
+                "location_name": market,
+                "language_code": language,
+                "include_questions": True,
+                "limit": 50
+            }]
+        )
+
+        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+
+        questions = [
+            {
+                "seed_keyword": keyword,
+                "question": item.get("keyword_data", {}).get("keyword", ""),
+                "search_volume": item.get("keyword_data", {}).get("keyword_info", {}).get("search_volume", 0),
+            }
+            for item in items
+            if "?" in item.get("keyword_data", {}).get("keyword", "")
+        ]
+
+        all_questions.extend(questions)
+
+    return all_questions
+
+
+async def fetch_top_searches(
+    client,
+    domain: str,
+    market: str,
+    language: str,
+    limit: int = 100
+) -> List[Dict]:
+    """
+    Fetch top performing search queries for the domain.
+
+    Returns highest traffic keywords.
+    """
+    result = await client.post(
+        "dataforseo_labs/google/ranked_keywords/live",
+        [{
+            "target": domain,
+            "location_name": market,
+            "language_code": language,
+            "limit": limit,
+            "order_by": ["ranked_serp_element.etv,desc"]  # Sort by estimated traffic
+        }]
+    )
+
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+
+    return [
+        {
+            "keyword": item.get("keyword_data", {}).get("keyword", ""),
+            "position": item.get("ranked_serp_element", {}).get("serp_item", {}).get("rank_group", 0),
+            "traffic": item.get("ranked_serp_element", {}).get("etv", 0),
+            "traffic_cost": item.get("ranked_serp_element", {}).get("estimated_paid_traffic_cost", 0),
+            "url": item.get("ranked_serp_element", {}).get("serp_item", {}).get("url", ""),
+        }
+        for item in items
+    ]
+
+
+async def fetch_bulk_traffic_estimation(
+    client,
+    domain: str,
+    keywords: List[str],
+    market: str,
+    language: str
+) -> Dict[str, Any]:
+    """
+    Estimate traffic potential for keywords at different positions.
+
+    Useful for opportunity sizing.
+    """
+    result = await client.post(
+        "dataforseo_labs/google/bulk_traffic_estimation/live",
+        [{
+            "targets": keywords[:200],  # Max 200 keywords
+            "location_name": market,
+            "language_code": language
+        }]
+    )
+
+    items = result.get("tasks", [{}])[0].get("result", [])
+
+    traffic_estimates = {}
+    total_potential = 0
+
+    for item in items:
+        keyword = item.get("keyword", "")
+        estimate = {
+            "traffic_at_pos_1": item.get("metrics", {}).get("pos_1", {}).get("etv", 0),
+            "traffic_at_pos_3": item.get("metrics", {}).get("pos_3", {}).get("etv", 0),
+            "traffic_at_pos_10": item.get("metrics", {}).get("pos_10", {}).get("etv", 0),
+        }
+        traffic_estimates[keyword] = estimate
+        total_potential += estimate["traffic_at_pos_1"]
+
+    return {
+        "keyword_estimates": traffic_estimates,
+        "total_pos_1_potential": total_potential,
+        "keywords_analyzed": len(traffic_estimates),
+    }
 
 
 # ============================================================================
