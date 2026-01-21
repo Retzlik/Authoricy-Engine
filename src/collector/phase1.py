@@ -1,7 +1,7 @@
 """
 Phase 1: Foundation Data Collection
 
-Collects baseline domain data through 12 parallel API calls:
+Collects baseline domain data through 11 parallel API calls:
 - Domain rank overview
 - Historical rank data
 - Subdomains
@@ -12,8 +12,10 @@ Collects baseline domain data through 12 parallel API calls:
 - Technologies
 - Domain whois overview
 - Page intersection
-- Domain pages summary
-- Bulk domain rank (for multiple competitors)
+- Categories for domain
+
+Note: domain_pages_summary endpoint removed (404 - does not exist)
+Note: bulk_domain_rank_overview endpoint removed (404 - does not exist)
 """
 
 import asyncio
@@ -31,21 +33,19 @@ async def collect_foundation_data(
 ) -> Dict[str, Any]:
     """
     Collect Phase 1: Foundation data.
-    
-    8 parallel API calls for domain baseline.
-    
+    11 parallel API calls for domain baseline.
+
     Args:
         client: DataForSEOClient instance
         domain: Target domain (without protocol)
-        market: Target market (e.g., "Sweden")
-        language: Language code (e.g., "sv")
-        
+        market: Target market (e.g., "United States", "Sweden")
+        language: Language name (e.g., "English", "Swedish") - NOT code!
+
     Returns:
         Dict containing all foundation data
     """
-    
     logger.info(f"Phase 1: Starting foundation collection for {domain}")
-    
+
     tasks = [
         fetch_domain_overview(client, domain, market, language),
         fetch_historical_overview(client, domain, market, language),
@@ -56,7 +56,6 @@ async def collect_foundation_data(
         fetch_lighthouse(client, f"https://{domain}"),
         fetch_technologies(client, domain),
         fetch_domain_whois(client, domain),
-        fetch_domain_pages_summary(client, domain, market, language),
         fetch_page_intersection(client, domain, market, language),
         fetch_categories_for_domain(client, domain, market, language),
     ]
@@ -64,24 +63,32 @@ async def collect_foundation_data(
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     names = [
-        "domain_overview", "historical_data", "subdomains", "top_pages",
-        "competitors", "backlink_summary", "technical_baseline", "technologies",
-        "whois_data", "domain_pages_summary", "page_intersection", "categories"
+        "domain_overview",
+        "historical_data",
+        "subdomains",
+        "top_pages",
+        "competitors",
+        "backlink_summary",
+        "technical_baseline",
+        "technologies",
+        "whois_data",
+        "page_intersection",
+        "categories"
     ]
-    
+
     data = {}
     for name, result in zip(names, results):
         if isinstance(result, Exception):
             logger.warning(f"Failed to fetch {name}: {result}")
             # Use empty dict for single-value items, empty list for arrays
-            if name in ["subdomains", "top_pages", "competitors", "technologies", "historical_data"]:
+            if name in ["subdomains", "top_pages", "competitors", "technologies", "historical_data", "page_intersection", "categories"]:
                 data[name] = []
             else:
                 data[name] = {}
         else:
             data[name] = result
             logger.info(f"✓ Collected {name}")
-    
+
     return data
 
 
@@ -93,14 +100,14 @@ async def fetch_domain_overview(client, domain: str, market: str, language: str)
             [{
                 "target": domain,
                 "location_name": market,
-                "language_code": language
+                "language_name": language  # FIXED: was language_code
             }]
         )
-        
+
         items = result.get("tasks", [{}])[0].get("result", [{}])
         if not items:
             return {}
-        
+
         item = items[0]
         return {
             "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
@@ -122,12 +129,12 @@ async def fetch_historical_overview(client, domain: str, market: str, language: 
             [{
                 "target": domain,
                 "location_name": market,
-                "language_code": language
+                "language_name": language  # FIXED: was language_code
             }]
         )
-        
+
         items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-        
+
         return [
             {
                 "date": item.get("date"),
@@ -149,13 +156,13 @@ async def fetch_subdomains(client, domain: str, market: str, language: str) -> L
             [{
                 "target": domain,
                 "location_name": market,
-                "language_code": language,
+                "language_name": language,  # FIXED: was language_code
                 "limit": 20
             }]
         )
-        
+
         items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-        
+
         return [
             {
                 "subdomain": item.get("target"),
@@ -177,13 +184,13 @@ async def fetch_relevant_pages(client, domain: str, market: str, language: str) 
             [{
                 "target": domain,
                 "location_name": market,
-                "language_code": language,
+                "language_name": language,  # FIXED: was language_code
                 "limit": 50
             }]
         )
-        
+
         items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-        
+
         return [
             {
                 "page": item.get("page_address"),
@@ -206,13 +213,13 @@ async def fetch_competitors(client, domain: str, market: str, language: str) -> 
             [{
                 "target": domain,
                 "location_name": market,
-                "language_code": language,
+                "language_name": language,  # FIXED: was language_code
                 "limit": 20
             }]
         )
-        
+
         items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-        
+
         return [
             {
                 "domain": item.get("domain"),
@@ -234,9 +241,9 @@ async def fetch_backlink_summary(client, domain: str) -> Dict:
             "backlinks/summary/live",
             [{"target": domain}]
         )
-        
+
         item = result.get("tasks", [{}])[0].get("result", [{}])[0]
-        
+
         return {
             "total_backlinks": item.get("backlinks", 0),
             "referring_domains": item.get("referring_domains", 0),
@@ -259,10 +266,10 @@ async def fetch_lighthouse(client, url: str) -> Dict:
                 "for_mobile": True
             }]
         )
-        
+
         item = result.get("tasks", [{}])[0].get("result", [{}])[0]
         categories = item.get("categories", {})
-        
+
         return {
             "performance_score": categories.get("performance", {}).get("score", 0),
             "accessibility_score": categories.get("accessibility", {}).get("score", 0),
@@ -320,29 +327,7 @@ async def fetch_domain_whois(client, domain: str) -> Dict:
         return {}
 
 
-async def fetch_domain_pages_summary(client, domain: str, market: str, language: str) -> Dict:
-    """Fetch summary of indexed pages for the domain."""
-    try:
-        result = await client.post(
-            "dataforseo_labs/google/domain_pages_summary/live",
-            [{
-                "target": domain,
-                "location_name": market,
-                "language_code": language
-            }]
-        )
-
-        item = result.get("tasks", [{}])[0].get("result", [{}])[0]
-
-        return {
-            "total_pages": item.get("metrics", {}).get("organic", {}).get("count", 0),
-            "top_pages_count": item.get("total_count", 0),
-            "avg_position": item.get("metrics", {}).get("organic", {}).get("pos", 0),
-            "estimated_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
-        }
-    except Exception as e:
-        logger.error(f"Domain pages summary failed: {e}")
-        return {}
+# REMOVED: fetch_domain_pages_summary - endpoint returns 404 (does not exist)
 
 
 async def fetch_page_intersection(client, domain: str, market: str, language: str) -> List[Dict]:
@@ -352,10 +337,10 @@ async def fetch_page_intersection(client, domain: str, market: str, language: st
             "dataforseo_labs/google/page_intersection/live",
             [{
                 "pages": {
-                    "1": {"url": f"https://{domain}/"}
+                    "1": f"https://{domain}/"
                 },
                 "location_name": market,
-                "language_code": language,
+                "language_name": language,  # FIXED: was language_code
                 "limit": 50
             }]
         )
@@ -383,7 +368,7 @@ async def fetch_categories_for_domain(client, domain: str, market: str, language
             [{
                 "target": domain,
                 "location_name": market,
-                "language_code": language,
+                "language_name": language,  # FIXED: was language_code
                 "limit": 20
             }]
         )
@@ -404,29 +389,4 @@ async def fetch_categories_for_domain(client, domain: str, market: str, language
         return []
 
 
-async def fetch_bulk_domain_rank(client, domains: List[str], market: str, language: str) -> List[Dict]:
-    """Fetch domain rank metrics for multiple domains at once (useful for competitor comparison)."""
-    try:
-        result = await client.post(
-            "dataforseo_labs/google/bulk_domain_rank_overview/live",
-            [{
-                "targets": domains[:100],  # Max 100 domains per request
-                "location_name": market,
-                "language_code": language
-            }]
-        )
-
-        items = result.get("tasks", [{}])[0].get("result", [])
-
-        return [
-            {
-                "domain": item.get("target", ""),
-                "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
-                "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
-                "domain_rank": item.get("rank", 0),
-            }
-            for item in items
-        ]
-    except Exception as e:
-        logger.error(f"Bulk domain rank failed: {e}")
-        return []
+# REMOVED: fetch_bulk_domain_rank - endpoint returns 404 (does not exist)

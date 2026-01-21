@@ -14,8 +14,8 @@ This module collects competitive and backlink data:
 - Page-level backlink intersection
 
 Endpoints used:
-1. dataforseo_labs/google/domain_rank_overview (×5 competitors)
-2. dataforseo_labs/google/domain_intersection (×3 competitors)
+1. dataforseo_labs/google/domain_rank_overview (x5 competitors)
+2. dataforseo_labs/google/domain_intersection (x3 competitors)
 3. dataforseo_labs/google/serp_competitors
 4. backlinks/backlinks
 5. backlinks/anchors
@@ -31,6 +31,9 @@ Endpoints used:
 
 Total: 15-18 API calls
 Expected time: 8-12 seconds (with parallelization)
+
+Note: All endpoints use language_name (e.g., "English") not language_code (e.g., "en")
+Note: backlinks/domain_intersection requires targets as dict, not array
 """
 
 import asyncio
@@ -123,7 +126,7 @@ class Phase3Data:
     referring_domains: List[ReferringDomain] = field(default_factory=list)
     link_gap_targets: List[LinkGapTarget] = field(default_factory=list)
     link_velocity: Dict[str, Any] = field(default_factory=dict)
-    
+
     # Aggregated metrics
     total_backlinks: int = 0
     total_referring_domains: int = 0
@@ -145,7 +148,7 @@ async def collect_competitive_data(
 ) -> Dict[str, Any]:
     """
     Collect Phase 3: Competitive Intelligence & Backlinks data.
-    
+
     Flow:
     1. If no competitors provided, identify them from SERP competitors
     2. Fetch competitor metrics in parallel
@@ -153,25 +156,25 @@ async def collect_competitive_data(
     4. Fetch backlink profile (links, anchors, referring domains) in parallel
     5. Identify link gap targets
     6. Get link velocity data
-    
+
     Args:
         client: DataForSEO API client
         domain: Target domain
-        market: Location name (e.g., "Sweden")
-        language: Language code (e.g., "sv")
+        market: Location name (e.g., "United States", "Sweden")
+        language: Language name (e.g., "English", "Swedish") - NOT code!
         competitors: Optional list of competitor domains (from Phase 1)
         top_keywords: Optional list of top keywords (from Phase 2)
-    
+
     Returns:
         Dictionary with all Phase 3 data
     """
-    
+
     logger.info(f"Phase 3: Starting competitive intelligence for {domain}")
-    
+
     # -------------------------------------------------------------------------
     # Step 1: Identify or validate competitors
     # -------------------------------------------------------------------------
-    
+
     if not competitors:
         logger.info("Phase 3.1: Identifying competitors from SERP data...")
         serp_competitors_data = await fetch_serp_competitors(
@@ -182,108 +185,105 @@ async def collect_competitive_data(
         else:
             logger.warning(f"Failed to fetch SERP competitors: {serp_competitors_data}")
             competitors = []
-    
+
     competitors = [c for c in competitors if c != domain][:5]  # Top 5, exclude self
+
     logger.info(f"Phase 3.1: Analyzing {len(competitors)} competitors: {competitors}")
-    
+
     # -------------------------------------------------------------------------
     # Step 2: Fetch competitor metrics (parallel)
     # -------------------------------------------------------------------------
-    
+
     logger.info("Phase 3.2: Fetching competitor metrics...")
-    
+
     competitor_metrics = []
     if competitors:
         metric_tasks = [
             fetch_domain_rank_overview(client, comp, market, language)
             for comp in competitors
         ]
-        
         metric_results = await asyncio.gather(*metric_tasks, return_exceptions=True)
-        
+
         for comp, result in zip(competitors, metric_results):
             if isinstance(result, Exception):
                 logger.warning(f"Failed to fetch metrics for {comp}: {result}")
             else:
                 competitor_metrics.append(result)
-    
+
     logger.info(f"Phase 3.2: Got metrics for {len(competitor_metrics)} competitors")
-    
+
     # -------------------------------------------------------------------------
     # Step 3: Analyze keyword overlaps (parallel, top 3 competitors)
     # -------------------------------------------------------------------------
-    
+
     logger.info("Phase 3.3: Analyzing keyword overlaps...")
-    
+
     keyword_overlaps = []
     top_competitors = competitors[:3]
-    
+
     if top_competitors:
         overlap_tasks = [
             fetch_domain_intersection(client, domain, comp, market, language)
             for comp in top_competitors
         ]
-        
         overlap_results = await asyncio.gather(*overlap_tasks, return_exceptions=True)
-        
+
         for comp, result in zip(top_competitors, overlap_results):
             if isinstance(result, Exception):
                 logger.warning(f"Failed to analyze overlap with {comp}: {result}")
             else:
                 keyword_overlaps.append(result)
-    
+
     logger.info(f"Phase 3.3: Analyzed {len(keyword_overlaps)} competitor overlaps")
-    
+
     # -------------------------------------------------------------------------
     # Step 4: Fetch backlink profile (parallel)
     # -------------------------------------------------------------------------
-    
+
     logger.info("Phase 3.4: Fetching backlink profile...")
-    
+
     backlink_tasks = [
         fetch_backlinks(client, domain, limit=500),
         fetch_anchors(client, domain, limit=100),
         fetch_referring_domains(client, domain, limit=200),
     ]
-    
+
     backlink_results = await asyncio.gather(*backlink_tasks, return_exceptions=True)
-    
+
     backlinks = backlink_results[0] if not isinstance(backlink_results[0], Exception) else []
     anchors = backlink_results[1] if not isinstance(backlink_results[1], Exception) else []
     referring_domains = backlink_results[2] if not isinstance(backlink_results[2], Exception) else []
-    
+
     if isinstance(backlink_results[0], Exception):
         logger.warning(f"Failed to fetch backlinks: {backlink_results[0]}")
     if isinstance(backlink_results[1], Exception):
         logger.warning(f"Failed to fetch anchors: {backlink_results[1]}")
     if isinstance(backlink_results[2], Exception):
         logger.warning(f"Failed to fetch referring domains: {backlink_results[2]}")
-    
+
     logger.info(f"Phase 3.4: Found {len(backlinks)} backlinks, {len(anchors)} anchors, "
                 f"{len(referring_domains)} referring domains")
-    
+
     # -------------------------------------------------------------------------
     # Step 5: Link gap analysis
     # -------------------------------------------------------------------------
-    
+
     logger.info("Phase 3.5: Identifying link gap targets...")
-    
+
     link_gap_targets = []
     if competitors:
         # Get domains linking to competitors but not to us
         targets_to_analyze = [domain] + competitors[:3]
-        
         link_gap_result = await fetch_backlink_domain_intersection(
             client, targets_to_analyze
         )
-        
         if not isinstance(link_gap_result, Exception):
             link_gap_targets = link_gap_result
         else:
             logger.warning(f"Failed to analyze link gaps: {link_gap_result}")
-    
+
     logger.info(f"Phase 3.5: Found {len(link_gap_targets)} link gap targets")
-    
+
     # -------------------------------------------------------------------------
     # Step 6: Link velocity
     # -------------------------------------------------------------------------
@@ -321,22 +321,22 @@ async def collect_competitive_data(
     for i, name in enumerate(["referring_networks", "broken_backlinks", "backlink_history", "bulk_ref_domains", "backlink_competitors"]):
         if isinstance(additional_results[i], Exception):
             logger.warning(f"Failed to fetch {name}: {additional_results[i]}")
-    
+
     # -------------------------------------------------------------------------
     # Step 7: Calculate aggregated metrics
     # -------------------------------------------------------------------------
-    
+
     total_backlinks = len(backlinks)
     total_referring_domains = len(referring_domains)
-    
+
     dofollow_count = sum(1 for bl in backlinks if bl.get("is_dofollow", False))
     dofollow_percentage = (dofollow_count / total_backlinks * 100) if total_backlinks else 0
-    
+
     avg_competitor_traffic = (
         sum(m.organic_traffic for m in competitor_metrics) / len(competitor_metrics)
         if competitor_metrics else 0
     )
-    
+
     # -------------------------------------------------------------------------
     # Return complete Phase 3 data
     # -------------------------------------------------------------------------
@@ -395,7 +395,6 @@ async def fetch_domain_rank_overview(
 ) -> CompetitorMetrics:
     """
     Fetch comprehensive metrics for a domain.
-    
     Returns traffic, keywords, rank, and backlink counts.
     """
     result = await client.post(
@@ -403,12 +402,12 @@ async def fetch_domain_rank_overview(
         [{
             "target": domain,
             "location_name": market,
-            "language_code": language,
+            "language_name": language,  # FIXED: was language_code
         }]
     )
-    
+
     data = result.get("tasks", [{}])[0].get("result", [{}])[0]
-    
+
     return CompetitorMetrics(
         domain=domain,
         organic_traffic=data.get("metrics", {}).get("organic", {}).get("etv", 0),
@@ -431,7 +430,6 @@ async def fetch_domain_intersection(
 ) -> KeywordOverlap:
     """
     Analyze keyword overlap between target and competitor.
-    
     Returns shared keywords and opportunities (competitor ranks, we don't).
     """
     result = await client.post(
@@ -440,25 +438,24 @@ async def fetch_domain_intersection(
             "target1": target,
             "target2": competitor,
             "location_name": market,
-            "language_code": language,
+            "language_name": language,  # FIXED: was language_code
             "limit": limit,
             "intersections": True,  # Get shared keywords
         }]
     )
-    
+
     task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
     items = task_result.get("items", [])
-    
+
     shared = 0
     opportunities = []
-    
+
     for item in items:
         kw_data = item.get("keyword_data", {})
         kw_info = kw_data.get("keyword_info", {})
-        
         first_serp = item.get("first_domain_serp_element", {})
         second_serp = item.get("second_domain_serp_element", {})
-        
+
         # Both ranking = shared
         if first_serp and second_serp:
             shared += 1
@@ -469,10 +466,10 @@ async def fetch_domain_intersection(
                 "search_volume": kw_info.get("search_volume", 0),
                 "competitor_position": second_serp.get("serp_item", {}).get("rank_group", 0),
             })
-    
+
     # Get totals from task result
     total_count = task_result.get("total_count", 0)
-    
+
     return KeywordOverlap(
         competitor=competitor,
         shared_keywords=shared,
@@ -492,7 +489,6 @@ async def fetch_serp_competitors(
 ) -> List[Dict[str, Any]]:
     """
     Identify competitors from SERP data.
-    
     Finds domains that rank for similar keywords.
     """
     result = await client.post(
@@ -500,13 +496,13 @@ async def fetch_serp_competitors(
         [{
             "keywords": keywords[:200],  # Max 200 keywords
             "location_name": market,
-            "language_code": language,
+            "language_name": language,  # FIXED: was language_code
             "limit": limit,
         }]
     )
-    
+
     items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-    
+
     competitors = []
     for item in items:
         competitors.append({
@@ -516,7 +512,7 @@ async def fetch_serp_competitors(
             "keywords_count": item.get("keywords_count", 0),
             "avg_position": item.get("avg_position", 0),
         })
-    
+
     return competitors
 
 
@@ -527,7 +523,6 @@ async def fetch_backlinks(
 ) -> List[Dict[str, Any]]:
     """
     Fetch backlinks to the domain.
-    
     Returns link source, anchor, ranks, and attributes.
     """
     result = await client.post(
@@ -539,9 +534,9 @@ async def fetch_backlinks(
             "mode": "as_is",  # All links, not one per domain
         }]
     )
-    
+
     items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-    
+
     backlinks = []
     for item in items:
         backlinks.append({
@@ -556,7 +551,7 @@ async def fetch_backlinks(
             "link_type": item.get("type", ""),
             "is_broken": item.get("is_broken", False),
         })
-    
+
     return backlinks
 
 
@@ -567,7 +562,6 @@ async def fetch_anchors(
 ) -> List[Dict[str, Any]]:
     """
     Fetch anchor text distribution.
-    
     Returns anchors with backlink counts.
     """
     result = await client.post(
@@ -578,10 +572,10 @@ async def fetch_anchors(
             "order_by": ["backlinks,desc"],
         }]
     )
-    
+
     items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
     total_backlinks = result.get("tasks", [{}])[0].get("result", [{}])[0].get("total_count", 1)
-    
+
     anchors = []
     for item in items:
         bl_count = item.get("backlinks", 0)
@@ -591,7 +585,7 @@ async def fetch_anchors(
             "referring_domains": item.get("referring_domains", 0),
             "percentage": round(bl_count / total_backlinks * 100, 2) if total_backlinks else 0,
         })
-    
+
     return anchors
 
 
@@ -602,7 +596,6 @@ async def fetch_referring_domains(
 ) -> List[Dict[str, Any]]:
     """
     Fetch referring domains.
-    
     Returns domains linking to target with metrics.
     """
     result = await client.post(
@@ -613,9 +606,9 @@ async def fetch_referring_domains(
             "order_by": ["rank,desc"],  # Best domains first
         }]
     )
-    
+
     items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-    
+
     domains = []
     for item in items:
         domains.append({
@@ -625,7 +618,7 @@ async def fetch_referring_domains(
             "first_seen": item.get("first_seen", ""),
             "is_broken": item.get("broken_backlinks", 0) > 0,
         })
-    
+
     return domains
 
 
@@ -636,39 +629,43 @@ async def fetch_backlink_domain_intersection(
 ) -> List[Dict[str, Any]]:
     """
     Find domains linking to competitors but not to us (link gap).
-    
     targets[0] = our domain, targets[1:] = competitors
+
+    FIXED: targets must be a dict with numbered keys, not an array
     """
+    # FIXED: Convert array to dict format required by API
+    targets_dict = {str(i+1): target for i, target in enumerate(targets)}
+
     result = await client.post(
         "backlinks/domain_intersection/live",
         [{
-            "targets": targets,
+            "targets": targets_dict,  # FIXED: was array, now dict
             "limit": limit,
             "order_by": ["1.rank,desc"],  # Sort by domain rank
         }]
     )
-    
+
     items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-    
+
     # Filter: domains that link to at least one competitor but not to us
     # The API returns intersection data - we need to filter
     link_gaps = []
-    
+
     for item in items:
         target_data = item.get("1", {})  # Our domain's data
-        
+
         # If target_data is empty/null, this domain doesn't link to us = opportunity
         if not target_data or target_data.get("backlinks", 0) == 0:
             competitors_linked = []
             total_competitor_links = 0
-            
+
             # Check each competitor (positions 2, 3, 4...)
             for i, target in enumerate(targets[1:], start=2):
                 comp_data = item.get(str(i), {})
                 if comp_data and comp_data.get("backlinks", 0) > 0:
                     competitors_linked.append(target)
                     total_competitor_links += comp_data.get("backlinks", 0)
-            
+
             if competitors_linked:
                 link_gaps.append({
                     "domain": item.get("domain", ""),
@@ -676,10 +673,10 @@ async def fetch_backlink_domain_intersection(
                     "links_to_competitors": total_competitor_links,
                     "competitors_linked": competitors_linked,
                 })
-    
+
     # Sort by number of competitors linked (more = better target)
     link_gaps.sort(key=lambda x: (len(x["competitors_linked"]), x["domain_rank"]), reverse=True)
-    
+
     return link_gaps
 
 
@@ -690,7 +687,6 @@ async def fetch_link_velocity(
 ) -> Dict[str, Any]:
     """
     Fetch link velocity (new/lost backlinks over time).
-
     Returns monthly data for the past N months.
     """
     # Calculate date range
@@ -745,7 +741,6 @@ async def fetch_referring_networks(
 ) -> Dict[str, Any]:
     """
     Fetch referring network data (IP blocks, subnets).
-
     Useful for identifying link network patterns.
     """
     result = await client.post(
@@ -789,7 +784,6 @@ async def fetch_broken_backlinks(
 ) -> List[Dict[str, Any]]:
     """
     Fetch broken backlinks pointing to the domain.
-
     Opportunities for link recovery via redirects or content restoration.
     """
     result = await client.post(
@@ -828,7 +822,6 @@ async def fetch_backlink_history(
 ) -> List[Dict[str, Any]]:
     """
     Fetch historical backlink counts.
-
     Shows backlink growth/decline over time.
     """
     date_to = datetime.now().strftime("%Y-%m-%d")
@@ -864,7 +857,6 @@ async def fetch_bulk_referring_domains(
 ) -> Dict[str, Any]:
     """
     Fetch referring domain counts for multiple domains at once.
-
     Useful for competitor comparison.
     """
     result = await client.post(
@@ -894,7 +886,6 @@ async def fetch_backlink_competitors(
 ) -> List[Dict[str, Any]]:
     """
     Find domains with similar backlink profiles (link competitors).
-
     Different from keyword competitors - these share similar link sources.
     """
     result = await client.post(
@@ -929,24 +920,24 @@ async def test_phase3():
     """Test Phase 3 collection."""
     import os
     from dotenv import load_dotenv
-    
+
     load_dotenv()
-    
+
     # Mock client for testing
     class MockClient:
         async def post(self, endpoint, data):
             return {"tasks": [{"result": [{"items": []}]}]}
-    
+
     client = MockClient()
-    
+
     result = await collect_competitive_data(
         client=client,
         domain="example.com",
-        market="Sweden",
-        language="sv",
+        market="United States",
+        language="English",  # FIXED: was "sv"
         competitors=["competitor1.com", "competitor2.com"],
     )
-    
+
     print(f"Competitor metrics: {len(result['competitor_metrics'])}")
     print(f"Keyword overlaps: {len(result['keyword_overlaps'])}")
     print(f"Backlinks: {len(result['backlinks'])}")
