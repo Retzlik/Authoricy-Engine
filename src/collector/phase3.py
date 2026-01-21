@@ -45,6 +45,55 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _safe_get_items(result: Dict, get_first: bool = True) -> List[Dict]:
+    """
+    Safely extract items from DataForSEO API response.
+    Handles cases where result or nested values are None.
+
+    Args:
+        result: API response dict
+        get_first: If True, gets items from result[0], else returns result list
+
+    Returns:
+        List of items or empty list
+    """
+    tasks = result.get("tasks") or [{}]
+    task_result = tasks[0].get("result")
+
+    if task_result is None:
+        return []
+
+    if get_first:
+        if isinstance(task_result, list) and len(task_result) > 0:
+            first_result = task_result[0]
+            if isinstance(first_result, dict):
+                return first_result.get("items") or []
+        return []
+    else:
+        # Return the result list directly (for endpoints that return list at result level)
+        return task_result if isinstance(task_result, list) else []
+
+
+def _safe_get_first_result(result: Dict) -> Dict:
+    """
+    Safely get the first result object from DataForSEO API response.
+
+    Returns:
+        First result dict or empty dict
+    """
+    tasks = result.get("tasks") or [{}]
+    task_result = tasks[0].get("result")
+
+    if task_result is None:
+        return {}
+
+    if isinstance(task_result, list) and len(task_result) > 0:
+        first = task_result[0]
+        return first if isinstance(first, dict) else {}
+
+    return {}
+
+
 # ============================================================================
 # DATA MODELS
 # ============================================================================
@@ -406,7 +455,7 @@ async def fetch_domain_rank_overview(
         }]
     )
 
-    data = result.get("tasks", [{}])[0].get("result", [{}])[0]
+    data = _safe_get_first_result(result)
 
     return CompetitorMetrics(
         domain=domain,
@@ -444,8 +493,8 @@ async def fetch_domain_intersection(
         }]
     )
 
-    task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
-    items = task_result.get("items", [])
+    task_result = _safe_get_first_result(result)
+    items = task_result.get("items") or []
 
     shared = 0
     opportunities = []
@@ -501,7 +550,7 @@ async def fetch_serp_competitors(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     competitors = []
     for item in items:
@@ -535,7 +584,7 @@ async def fetch_backlinks(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     backlinks = []
     for item in items:
@@ -573,8 +622,9 @@ async def fetch_anchors(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-    total_backlinks = result.get("tasks", [{}])[0].get("result", [{}])[0].get("total_count", 1)
+    first_result = _safe_get_first_result(result)
+    items = first_result.get("items") or []
+    total_backlinks = first_result.get("total_count", 1) or 1
 
     anchors = []
     for item in items:
@@ -607,7 +657,7 @@ async def fetch_referring_domains(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     domains = []
     for item in items:
@@ -645,7 +695,7 @@ async def fetch_backlink_domain_intersection(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     # Filter: domains that link to at least one competitor but not to us
     # The API returns intersection data - we need to filter
@@ -703,7 +753,7 @@ async def fetch_link_velocity(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     velocity_data = {
         "months": [],
@@ -753,7 +803,7 @@ async def fetch_referring_networks(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     networks = [
         {
@@ -797,7 +847,7 @@ async def fetch_broken_backlinks(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     broken_links = [
         {
@@ -836,7 +886,7 @@ async def fetch_backlink_history(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     history = [
         {
@@ -866,7 +916,7 @@ async def fetch_bulk_referring_domains(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    items = _safe_get_items(result, get_first=False)
 
     domain_data = {}
     for item in items:
@@ -896,7 +946,7 @@ async def fetch_backlink_competitors(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     competitors = [
         {

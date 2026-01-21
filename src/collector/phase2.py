@@ -34,6 +34,55 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _safe_get_items(result: Dict, get_first: bool = True) -> List[Dict]:
+    """
+    Safely extract items from DataForSEO API response.
+    Handles cases where result or nested values are None.
+
+    Args:
+        result: API response dict
+        get_first: If True, gets items from result[0], else returns result list
+
+    Returns:
+        List of items or empty list
+    """
+    tasks = result.get("tasks") or [{}]
+    task_result = tasks[0].get("result")
+
+    if task_result is None:
+        return []
+
+    if get_first:
+        if isinstance(task_result, list) and len(task_result) > 0:
+            first_result = task_result[0]
+            if isinstance(first_result, dict):
+                return first_result.get("items") or []
+        return []
+    else:
+        # Return the result list directly (for endpoints that return list at result level)
+        return task_result if isinstance(task_result, list) else []
+
+
+def _safe_get_first_result(result: Dict) -> Dict:
+    """
+    Safely get the first result object from DataForSEO API response.
+
+    Returns:
+        First result dict or empty dict
+    """
+    tasks = result.get("tasks") or [{}]
+    task_result = tasks[0].get("result")
+
+    if task_result is None:
+        return {}
+
+    if isinstance(task_result, list) and len(task_result) > 0:
+        first = task_result[0]
+        return first if isinstance(first, dict) else {}
+
+    return {}
+
+
 # ============================================================================
 # DATA MODELS
 # ============================================================================
@@ -332,7 +381,7 @@ async def fetch_ranked_keywords(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     keywords = []
     for item in items:
@@ -376,7 +425,7 @@ async def fetch_keywords_for_site(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     keywords = []
     for item in items:
@@ -413,7 +462,7 @@ async def fetch_search_intent(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    items = _safe_get_items(result, get_first=False)
 
     intent_map = {}
     for item in items:
@@ -448,7 +497,7 @@ async def fetch_keyword_suggestions(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     suggestions = []
     for item in items:
@@ -487,7 +536,7 @@ async def fetch_related_keywords(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     related = []
     for item in items:
@@ -527,7 +576,7 @@ async def fetch_keyword_ideas(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     ideas = []
     for item in items:
@@ -576,7 +625,7 @@ async def fetch_bulk_difficulty(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    items = _safe_get_items(result, get_first=False)
 
     difficulty_map = {}
     for item in items:
@@ -606,7 +655,7 @@ async def fetch_historical_search_volume(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    items = _safe_get_items(result, get_first=False)
 
     historical_data = []
     for item in items:
@@ -658,7 +707,7 @@ async def fetch_serp_elements(
         }]
     )
 
-    task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+    task_result = _safe_get_first_result(result)
 
     serp_elements = {
         "organic_results": task_result.get("organic_results_count", 0),
@@ -696,7 +745,7 @@ async def fetch_questions_for_keywords(
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = _safe_get_items(result)
 
         questions = [
             {
@@ -735,7 +784,7 @@ async def fetch_top_searches(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = _safe_get_items(result)
 
     return [
         {
@@ -769,7 +818,7 @@ async def fetch_bulk_traffic_estimation(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    items = _safe_get_items(result, get_first=False)
 
     traffic_estimates = {}
     total_potential = 0

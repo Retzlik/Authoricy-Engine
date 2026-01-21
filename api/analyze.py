@@ -23,7 +23,6 @@ from src.collector import (
     CollectionConfig,
     CollectionResult,
     compile_analysis_data,
-    get_analysis_json,
 )
 from src.analyzer import AnalysisEngine
 from src.reporter import ReportGenerator
