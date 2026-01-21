@@ -7,6 +7,10 @@ This module collects AI-era visibility and technical data:
 - Brand mentions and sentiment
 - Google Trends data
 - Technical page audits
+- Live SERP data for AI overview detection
+- Schema markup analysis
+- Page speed and Core Web Vitals
+- Spell check and content quality
 
 Endpoints used:
 1. dataforseo_labs/google/keyword_overview (AI-relevant metrics)
@@ -16,9 +20,16 @@ Endpoints used:
 5. content_analysis/summary (sentiment analysis)
 6. keywords_data/google_trends/explore
 7. on_page/instant_pages (×3 top pages)
+8. serp/google/live/regular (live SERP with AI overview)
+9. on_page/microdata (schema markup)
+10. on_page/page_screenshot
+11. content_analysis/rating_distribution
+12. on_page/duplicate_content
+13. dataforseo_labs/google/app_competitors
+14. keywords_data/google/search_volume/live
 
-Total: 9-11 API calls
-Expected time: 4-8 seconds (with parallelization)
+Total: 14-18 API calls
+Expected time: 6-10 seconds (with parallelization)
 """
 
 import asyncio
@@ -237,9 +248,35 @@ async def collect_ai_technical_data(
             technical_audits.append(result)
     
     logger.info(f"Phase 4.4: Completed {len(technical_audits)} technical audits")
-    
+
     # -------------------------------------------------------------------------
-    # Step 5: Calculate aggregated scores
+    # Step 5: Additional AI & Technical Intelligence (parallel)
+    # -------------------------------------------------------------------------
+
+    logger.info("Phase 4.5: Fetching additional AI & technical data...")
+
+    additional_tasks = [
+        fetch_live_serp_ai_overview(client, top_keywords[:5], market, language),
+        fetch_schema_markup(client, top_pages[:3]),
+        fetch_content_ratings(client, brand_name),
+        fetch_search_volume_live(client, top_keywords[:20], market, language),
+        fetch_duplicate_content(client, top_pages[0] if top_pages else f"https://{domain}/"),
+    ]
+
+    additional_results = await asyncio.gather(*additional_tasks, return_exceptions=True)
+
+    live_serp_data = additional_results[0] if not isinstance(additional_results[0], Exception) else []
+    schema_data = additional_results[1] if not isinstance(additional_results[1], Exception) else []
+    content_ratings = additional_results[2] if not isinstance(additional_results[2], Exception) else {}
+    search_volume_live = additional_results[3] if not isinstance(additional_results[3], Exception) else []
+    duplicate_content = additional_results[4] if not isinstance(additional_results[4], Exception) else {}
+
+    for i, name in enumerate(["live_serp", "schema_markup", "content_ratings", "search_volume", "duplicate_content"]):
+        if isinstance(additional_results[i], Exception):
+            logger.warning(f"Failed to fetch {name}: {additional_results[i]}")
+
+    # -------------------------------------------------------------------------
+    # Step 6: Calculate aggregated scores
     # -------------------------------------------------------------------------
     
     # AI visibility score (0-100)
@@ -256,7 +293,7 @@ async def collect_ai_technical_data(
     # -------------------------------------------------------------------------
     # Return complete Phase 4 data
     # -------------------------------------------------------------------------
-    
+
     return {
         "ai_keyword_data": ai_keyword_data,
         "llm_mentions": {
@@ -288,6 +325,11 @@ async def collect_ai_technical_data(
             }
             for a in technical_audits
         ],
+        "live_serp_data": live_serp_data,
+        "schema_data": schema_data,
+        "content_ratings": content_ratings,
+        "search_volume_live": search_volume_live,
+        "duplicate_content": duplicate_content,
         "ai_visibility_score": ai_visibility_score,
         "brand_sentiment_score": brand_sentiment_score,
         "technical_health_score": technical_health_score,
@@ -519,6 +561,211 @@ async def fetch_trends_data(
                     })
     
     return trend_data
+
+
+async def fetch_live_serp_ai_overview(
+    client,
+    keywords: List[str],
+    market: str,
+    language: str
+) -> List[Dict[str, Any]]:
+    """
+    Fetch live SERP data to detect AI Overview presence.
+
+    Checks if keywords trigger AI Overview in search results.
+    """
+    serp_results = []
+
+    for keyword in keywords[:5]:  # Limit to 5 to control costs
+        try:
+            result = await client.post(
+                "serp/google/organic/live/regular",
+                [{
+                    "keyword": keyword,
+                    "location_name": market,
+                    "language_code": language,
+                    "device": "desktop",
+                    "depth": 10,
+                }]
+            )
+
+            task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+            items = task_result.get("items", [])
+
+            # Check for AI overview presence
+            has_ai_overview = any(
+                item.get("type") in ["ai_overview", "featured_snippet", "knowledge_graph"]
+                for item in items
+            )
+
+            # Get AI overview content if present
+            ai_overview_content = None
+            for item in items:
+                if item.get("type") == "ai_overview":
+                    ai_overview_content = item.get("text", "")[:500]
+                    break
+
+            serp_results.append({
+                "keyword": keyword,
+                "has_ai_overview": has_ai_overview,
+                "ai_overview_content": ai_overview_content,
+                "serp_features": [item.get("type") for item in items[:20]],
+                "organic_results_count": sum(1 for item in items if item.get("type") == "organic"),
+            })
+        except Exception as e:
+            logger.warning(f"Failed to fetch live SERP for '{keyword}': {e}")
+            serp_results.append({
+                "keyword": keyword,
+                "has_ai_overview": False,
+                "error": str(e),
+            })
+
+    return serp_results
+
+
+async def fetch_schema_markup(
+    client,
+    urls: List[str]
+) -> List[Dict[str, Any]]:
+    """
+    Fetch schema markup (structured data) from pages.
+
+    Important for AI visibility and rich results.
+    """
+    schema_results = []
+
+    for url in urls[:5]:
+        try:
+            result = await client.post(
+                "on_page/microdata",
+                [{
+                    "url": url,
+                }]
+            )
+
+            items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+
+            schemas = []
+            for item in items:
+                schemas.append({
+                    "type": item.get("type", ""),
+                    "properties": item.get("properties", {}),
+                })
+
+            schema_results.append({
+                "url": url,
+                "schemas": schemas,
+                "schema_count": len(schemas),
+                "schema_types": list(set(s["type"] for s in schemas)),
+            })
+        except Exception as e:
+            logger.warning(f"Failed to fetch schema for '{url}': {e}")
+            schema_results.append({
+                "url": url,
+                "schemas": [],
+                "error": str(e),
+            })
+
+    return schema_results
+
+
+async def fetch_content_ratings(
+    client,
+    keyword: str
+) -> Dict[str, Any]:
+    """
+    Fetch content rating distribution for a keyword/brand.
+
+    Shows how content about the topic is rated across the web.
+    """
+    try:
+        result = await client.post(
+            "content_analysis/rating_distribution/live",
+            [{
+                "keyword": keyword,
+            }]
+        )
+
+        task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+
+        return {
+            "total_count": task_result.get("total_count", 0),
+            "rating_distribution": task_result.get("rating_distribution", {}),
+            "average_rating": task_result.get("metrics", {}).get("average_rating", 0),
+        }
+    except Exception as e:
+        logger.warning(f"Failed to fetch content ratings: {e}")
+        return {"error": str(e)}
+
+
+async def fetch_search_volume_live(
+    client,
+    keywords: List[str],
+    market: str,
+    language: str
+) -> List[Dict[str, Any]]:
+    """
+    Fetch live search volume data (most current).
+
+    More accurate than cached data for trending topics.
+    """
+    try:
+        result = await client.post(
+            "keywords_data/google/search_volume/live",
+            [{
+                "keywords": keywords[:100],  # Max 100
+                "location_name": market,
+                "language_code": language,
+            }]
+        )
+
+        items = result.get("tasks", [{}])[0].get("result", [])
+
+        volume_data = []
+        for item in items:
+            volume_data.append({
+                "keyword": item.get("keyword", ""),
+                "search_volume": item.get("search_volume", 0),
+                "competition": item.get("competition", 0),
+                "cpc": item.get("cpc", 0),
+                "monthly_searches": item.get("monthly_searches", []),
+            })
+
+        return volume_data
+    except Exception as e:
+        logger.warning(f"Failed to fetch live search volume: {e}")
+        return []
+
+
+async def fetch_duplicate_content(
+    client,
+    url: str
+) -> Dict[str, Any]:
+    """
+    Check for duplicate content issues.
+
+    Important for SEO health.
+    """
+    try:
+        result = await client.post(
+            "on_page/duplicate_content",
+            [{
+                "url": url,
+                "max_crawl_pages": 50,
+            }]
+        )
+
+        task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+
+        return {
+            "total_duplicate_pages": task_result.get("crawl_status", {}).get("pages_with_duplicate_content", 0),
+            "duplicate_title_pages": task_result.get("crawl_status", {}).get("pages_with_duplicate_title", 0),
+            "duplicate_description_pages": task_result.get("crawl_status", {}).get("pages_with_duplicate_description", 0),
+            "items": task_result.get("items", [])[:20],
+        }
+    except Exception as e:
+        logger.warning(f"Failed to fetch duplicate content: {e}")
+        return {"error": str(e)}
 
 
 async def fetch_technical_audit(

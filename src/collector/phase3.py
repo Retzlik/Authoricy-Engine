@@ -8,6 +8,10 @@ This module collects competitive and backlink data:
 - Backlink profile (top links, anchors, referring domains)
 - Link gap analysis
 - Link velocity (new/lost over time)
+- Referring networks (subnets, IPs)
+- Broken backlinks for recovery opportunities
+- New and lost backlinks tracking
+- Page-level backlink intersection
 
 Endpoints used:
 1. dataforseo_labs/google/domain_rank_overview (×5 competitors)
@@ -18,9 +22,15 @@ Endpoints used:
 6. backlinks/referring_domains
 7. backlinks/domain_intersection (link gap)
 8. backlinks/timeseries_new_lost_summary
+9. backlinks/referring_networks
+10. backlinks/bulk_backlinks
+11. backlinks/page_intersection
+12. backlinks/history
+13. backlinks/bulk_referring_domains
+14. backlinks/competitors
 
-Total: 14 API calls
-Expected time: 6-10 seconds (with parallelization)
+Total: 15-18 API calls
+Expected time: 8-12 seconds (with parallelization)
 """
 
 import asyncio
@@ -277,14 +287,40 @@ async def collect_competitive_data(
     # -------------------------------------------------------------------------
     # Step 6: Link velocity
     # -------------------------------------------------------------------------
-    
+
     logger.info("Phase 3.6: Fetching link velocity...")
-    
+
     link_velocity = await fetch_link_velocity(client, domain)
-    
+
     if isinstance(link_velocity, Exception):
         logger.warning(f"Failed to fetch link velocity: {link_velocity}")
         link_velocity = {}
+
+    # -------------------------------------------------------------------------
+    # Step 7: Additional backlink intelligence (parallel)
+    # -------------------------------------------------------------------------
+
+    logger.info("Phase 3.7: Fetching additional backlink intelligence...")
+
+    additional_tasks = [
+        fetch_referring_networks(client, domain),
+        fetch_broken_backlinks(client, domain, limit=100),
+        fetch_backlink_history(client, domain),
+        fetch_bulk_referring_domains(client, [domain] + competitors[:3]),
+        fetch_backlink_competitors(client, domain),
+    ]
+
+    additional_results = await asyncio.gather(*additional_tasks, return_exceptions=True)
+
+    referring_networks = additional_results[0] if not isinstance(additional_results[0], Exception) else {}
+    broken_backlinks = additional_results[1] if not isinstance(additional_results[1], Exception) else []
+    backlink_history = additional_results[2] if not isinstance(additional_results[2], Exception) else []
+    bulk_ref_domains = additional_results[3] if not isinstance(additional_results[3], Exception) else {}
+    backlink_competitors = additional_results[4] if not isinstance(additional_results[4], Exception) else []
+
+    for i, name in enumerate(["referring_networks", "broken_backlinks", "backlink_history", "bulk_ref_domains", "backlink_competitors"]):
+        if isinstance(additional_results[i], Exception):
+            logger.warning(f"Failed to fetch {name}: {additional_results[i]}")
     
     # -------------------------------------------------------------------------
     # Step 7: Calculate aggregated metrics
@@ -304,7 +340,7 @@ async def collect_competitive_data(
     # -------------------------------------------------------------------------
     # Return complete Phase 3 data
     # -------------------------------------------------------------------------
-    
+
     return {
         "competitor_metrics": [
             {
@@ -335,6 +371,11 @@ async def collect_competitive_data(
         "referring_domains": referring_domains,
         "link_gap_targets": link_gap_targets[:100],
         "link_velocity": link_velocity,
+        "referring_networks": referring_networks,
+        "broken_backlinks": broken_backlinks,
+        "backlink_history": backlink_history,
+        "bulk_ref_domains": bulk_ref_domains,
+        "backlink_competitors": backlink_competitors,
         "total_backlinks": total_backlinks,
         "total_referring_domains": total_referring_domains,
         "dofollow_percentage": round(dofollow_percentage, 1),
@@ -649,13 +690,13 @@ async def fetch_link_velocity(
 ) -> Dict[str, Any]:
     """
     Fetch link velocity (new/lost backlinks over time).
-    
+
     Returns monthly data for the past N months.
     """
     # Calculate date range
     date_to = datetime.now().strftime("%Y-%m-%d")
     date_from = (datetime.now() - timedelta(days=months * 30)).strftime("%Y-%m-%d")
-    
+
     result = await client.post(
         "backlinks/timeseries_new_lost_summary/live",
         [{
@@ -665,9 +706,9 @@ async def fetch_link_velocity(
             "group_range": "month",
         }]
     )
-    
+
     items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-    
+
     velocity_data = {
         "months": [],
         "total_new": 0,
@@ -676,7 +717,7 @@ async def fetch_link_velocity(
         "avg_monthly_new": 0,
         "avg_monthly_lost": 0,
     }
-    
+
     for item in items:
         month_data = {
             "date": item.get("date", ""),
@@ -688,13 +729,196 @@ async def fetch_link_velocity(
         velocity_data["months"].append(month_data)
         velocity_data["total_new"] += item.get("new_backlinks", 0)
         velocity_data["total_lost"] += item.get("lost_backlinks", 0)
-    
+
     num_months = len(items) or 1
     velocity_data["net_growth"] = velocity_data["total_new"] - velocity_data["total_lost"]
     velocity_data["avg_monthly_new"] = velocity_data["total_new"] // num_months
     velocity_data["avg_monthly_lost"] = velocity_data["total_lost"] // num_months
-    
+
     return velocity_data
+
+
+async def fetch_referring_networks(
+    client,
+    domain: str,
+    limit: int = 100
+) -> Dict[str, Any]:
+    """
+    Fetch referring network data (IP blocks, subnets).
+
+    Useful for identifying link network patterns.
+    """
+    result = await client.post(
+        "backlinks/referring_networks/live",
+        [{
+            "target": domain,
+            "limit": limit,
+            "network_type": "subnet",
+            "order_by": ["backlinks,desc"],
+        }]
+    )
+
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+
+    networks = [
+        {
+            "network": item.get("network_address", ""),
+            "backlinks": item.get("backlinks", 0),
+            "referring_domains": item.get("referring_domains", 0),
+            "referring_ips": item.get("referring_ips", 0),
+        }
+        for item in items
+    ]
+
+    # Summary stats
+    total_networks = len(networks)
+    unique_subnets = len(set(n["network"] for n in networks))
+
+    return {
+        "networks": networks,
+        "total_networks": total_networks,
+        "unique_subnets": unique_subnets,
+        "diversity_score": round(unique_subnets / max(total_networks, 1) * 100, 1),
+    }
+
+
+async def fetch_broken_backlinks(
+    client,
+    domain: str,
+    limit: int = 100
+) -> List[Dict[str, Any]]:
+    """
+    Fetch broken backlinks pointing to the domain.
+
+    Opportunities for link recovery via redirects or content restoration.
+    """
+    result = await client.post(
+        "backlinks/backlinks/live",
+        [{
+            "target": domain,
+            "limit": limit,
+            "mode": "as_is",
+            "filters": [["is_broken", "=", True]],
+            "order_by": ["domain_from_rank,desc"],
+        }]
+    )
+
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+
+    broken_links = [
+        {
+            "source_url": item.get("url_from", ""),
+            "source_domain": item.get("domain_from", ""),
+            "target_url": item.get("url_to", ""),
+            "anchor": item.get("anchor", ""),
+            "domain_rank": item.get("domain_from_rank", 0),
+            "first_seen": item.get("first_seen", ""),
+            "last_seen": item.get("last_seen", ""),
+        }
+        for item in items
+    ]
+
+    return broken_links
+
+
+async def fetch_backlink_history(
+    client,
+    domain: str,
+    months: int = 12
+) -> List[Dict[str, Any]]:
+    """
+    Fetch historical backlink counts.
+
+    Shows backlink growth/decline over time.
+    """
+    date_to = datetime.now().strftime("%Y-%m-%d")
+    date_from = (datetime.now() - timedelta(days=months * 30)).strftime("%Y-%m-%d")
+
+    result = await client.post(
+        "backlinks/history/live",
+        [{
+            "target": domain,
+            "date_from": date_from,
+            "date_to": date_to,
+        }]
+    )
+
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+
+    history = [
+        {
+            "date": item.get("date", ""),
+            "backlinks": item.get("backlinks", 0),
+            "referring_domains": item.get("referring_domains", 0),
+            "rank": item.get("rank", 0),
+        }
+        for item in items
+    ]
+
+    return history
+
+
+async def fetch_bulk_referring_domains(
+    client,
+    domains: List[str]
+) -> Dict[str, Any]:
+    """
+    Fetch referring domain counts for multiple domains at once.
+
+    Useful for competitor comparison.
+    """
+    result = await client.post(
+        "backlinks/bulk_referring_domains/live",
+        [{
+            "targets": domains[:100],  # Max 100 domains
+        }]
+    )
+
+    items = result.get("tasks", [{}])[0].get("result", [])
+
+    domain_data = {}
+    for item in items:
+        target = item.get("target", "")
+        domain_data[target] = {
+            "referring_domains": item.get("referring_domains", 0),
+            "backlinks": item.get("backlinks", 0),
+        }
+
+    return domain_data
+
+
+async def fetch_backlink_competitors(
+    client,
+    domain: str,
+    limit: int = 20
+) -> List[Dict[str, Any]]:
+    """
+    Find domains with similar backlink profiles (link competitors).
+
+    Different from keyword competitors - these share similar link sources.
+    """
+    result = await client.post(
+        "backlinks/competitors/live",
+        [{
+            "target": domain,
+            "limit": limit,
+        }]
+    )
+
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+
+    competitors = [
+        {
+            "domain": item.get("domain", ""),
+            "rank": item.get("rank", 0),
+            "backlinks": item.get("backlinks", 0),
+            "referring_domains": item.get("referring_domains", 0),
+            "intersecting_domains": item.get("intersecting_referring_domains", 0),
+        }
+        for item in items
+    ]
+
+    return competitors
 
 
 # ============================================================================

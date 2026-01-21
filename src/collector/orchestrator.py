@@ -50,7 +50,7 @@ class CollectionResult:
     warnings: List[str] = field(default_factory=list)
     duration_seconds: float = 0.0
 
-    # Phase 1: Foundation
+    # Phase 1: Foundation (12 endpoints)
     domain_overview: Dict[str, Any] = field(default_factory=dict)
     historical_data: List[Dict] = field(default_factory=list)
     subdomains: List[Dict] = field(default_factory=list)
@@ -59,34 +59,62 @@ class CollectionResult:
     backlink_summary: Dict[str, Any] = field(default_factory=dict)
     technical_baseline: Dict[str, Any] = field(default_factory=dict)
     technologies: List[Dict] = field(default_factory=list)
+    whois_data: Dict[str, Any] = field(default_factory=dict)
+    domain_pages_summary: Dict[str, Any] = field(default_factory=dict)
+    page_intersection: List[Dict] = field(default_factory=list)
+    categories: List[Dict] = field(default_factory=list)
 
-    # Phase 2: Keywords
+    # Phase 2: Keywords (18 endpoints)
     ranked_keywords: List[Dict] = field(default_factory=list)
     keyword_gaps: List[Dict] = field(default_factory=list)
     keyword_clusters: List[Dict] = field(default_factory=list)
     keyword_universe: List[Dict] = field(default_factory=list)
     intent_classification: Dict[str, Any] = field(default_factory=dict)
     difficulty_scores: Dict[str, float] = field(default_factory=dict)
+    historical_volume: List[Dict] = field(default_factory=list)
+    serp_elements: List[Dict] = field(default_factory=list)
+    questions_data: List[Dict] = field(default_factory=list)
+    top_searches: List[Dict] = field(default_factory=list)
+    traffic_estimation: Dict[str, Any] = field(default_factory=dict)
 
-    # Phase 3: Competitive
+    # Phase 3: Competitive (15 endpoints)
     competitor_analysis: List[Dict] = field(default_factory=list)
     competitor_metrics: Dict[str, Any] = field(default_factory=dict)
     competitor_trajectories: Dict[str, List] = field(default_factory=dict)
     keyword_intersections: Dict[str, List] = field(default_factory=dict)
+    keyword_overlaps: List[Dict] = field(default_factory=list)
     link_gaps: List[Dict] = field(default_factory=list)
+    link_gap_targets: List[Dict] = field(default_factory=list)
     top_backlinks: List[Dict] = field(default_factory=list)
+    backlinks: List[Dict] = field(default_factory=list)
     anchor_distribution: List[Dict] = field(default_factory=list)
     referring_domains: List[Dict] = field(default_factory=list)
     link_velocity: List[Dict] = field(default_factory=list)
+    referring_networks: Dict[str, Any] = field(default_factory=dict)
+    broken_backlinks: List[Dict] = field(default_factory=list)
+    backlink_history: List[Dict] = field(default_factory=list)
+    bulk_ref_domains: Dict[str, Any] = field(default_factory=dict)
+    backlink_competitors: List[Dict] = field(default_factory=list)
 
-    # Phase 4: AI & Technical
+    # Phase 4: AI & Technical (15 endpoints)
     ai_visibility: Dict[str, Any] = field(default_factory=dict)
+    ai_keyword_data: List[Dict] = field(default_factory=list)
     ai_mentions: Dict[str, Any] = field(default_factory=dict)
+    llm_mentions: Dict[str, Any] = field(default_factory=dict)
     llm_responses: Dict[str, Any] = field(default_factory=dict)
     brand_mentions: List[Dict] = field(default_factory=list)
+    sentiment_summary: Dict[str, Any] = field(default_factory=dict)
     trend_data: Dict[str, Any] = field(default_factory=dict)
     technical_audit: Dict[str, Any] = field(default_factory=dict)
     technical_audits: Dict[str, Any] = field(default_factory=dict)
+    live_serp_data: List[Dict] = field(default_factory=list)
+    schema_data: List[Dict] = field(default_factory=list)
+    content_ratings: Dict[str, Any] = field(default_factory=dict)
+    search_volume_live: List[Dict] = field(default_factory=list)
+    duplicate_content: Dict[str, Any] = field(default_factory=dict)
+    ai_visibility_score: float = 0.0
+    brand_sentiment_score: float = 0.0
+    technical_health_score: float = 0.0
 
 
 class DataCollectionOrchestrator:
