@@ -323,13 +323,17 @@ async def collect_competitive_data(
     if competitors:
         # Get domains linking to competitors but not to us
         targets_to_analyze = [domain] + competitors[:3]
-        link_gap_result = await fetch_backlink_domain_intersection(
-            client, targets_to_analyze
-        )
-        if not isinstance(link_gap_result, Exception):
-            link_gap_targets = link_gap_result
-        else:
-            logger.warning(f"Failed to analyze link gaps: {link_gap_result}")
+        try:
+            link_gap_result = await fetch_backlink_domain_intersection(
+                client, targets_to_analyze
+            )
+            if not isinstance(link_gap_result, Exception):
+                link_gap_targets = link_gap_result
+            else:
+                logger.warning(f"Failed to analyze link gaps: {link_gap_result}")
+        except Exception as e:
+            # Link gap is non-critical - continue without it
+            logger.warning(f"Link gap analysis failed (non-critical): {e}")
 
     logger.info(f"Phase 3.5: Found {len(link_gap_targets)} link gap targets")
 

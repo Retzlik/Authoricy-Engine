@@ -377,7 +377,7 @@ async def fetch_ranked_keywords(
             "location_name": market,
             "language_name": language,  # FIXED: was language_code
             "limit": limit,
-            "order_by": ["keyword_data.keyword_info.search_volume,desc"]
+            # Note: order_by not needed - results are sorted by relevance by default
         }]
     )
 
@@ -696,6 +696,8 @@ async def fetch_serp_elements(
     """
     Fetch SERP element distribution for keywords.
     Shows what SERP features appear for each keyword (featured snippets, PAA, etc.)
+
+    Note: serp_competitors endpoint doesn't support item_types filter.
     """
     result = await client.post(
         "dataforseo_labs/google/serp_competitors/live",
@@ -703,7 +705,7 @@ async def fetch_serp_elements(
             "keywords": keywords[:200],  # Max 200 keywords
             "location_name": market,
             "language_name": language,  # FIXED: was language_code
-            "item_types": ["organic", "featured_snippet", "people_also_ask", "local_pack", "knowledge_graph"]
+            # Note: item_types is NOT a valid field for this endpoint
         }]
     )
 
@@ -780,22 +782,26 @@ async def fetch_top_searches(
             "location_name": market,
             "language_name": language,  # FIXED: was language_code
             "limit": limit,
-            "order_by": ["ranked_serp_element.etv,desc"]  # Sort by estimated traffic
+            # Note: order_by not supported - we'll sort results client-side
         }]
     )
 
     items = _safe_get_items(result)
 
-    return [
+    results = [
         {
             "keyword": item.get("keyword_data", {}).get("keyword", ""),
             "position": item.get("ranked_serp_element", {}).get("serp_item", {}).get("rank_group", 0),
-            "traffic": item.get("ranked_serp_element", {}).get("etv", 0),
-            "traffic_cost": item.get("ranked_serp_element", {}).get("estimated_paid_traffic_cost", 0),
+            "traffic": item.get("ranked_serp_element", {}).get("etv") or 0,
+            "traffic_cost": item.get("ranked_serp_element", {}).get("estimated_paid_traffic_cost") or 0,
             "url": item.get("ranked_serp_element", {}).get("serp_item", {}).get("url", ""),
         }
         for item in items
     ]
+
+    # Sort by traffic descending (client-side since order_by not supported)
+    results.sort(key=lambda x: x["traffic"], reverse=True)
+    return results
 
 
 async def fetch_bulk_traffic_estimation(
@@ -891,9 +897,9 @@ async def expand_keyword(
     # Convert to list
     keywords_list = list(all_keywords.values())
 
-    # Calculate cluster metrics
-    total_volume = sum(kw.get("search_volume", 0) for kw in keywords_list)
-    competitions = [kw.get("competition", 0) for kw in keywords_list if kw.get("competition")]
+    # Calculate cluster metrics (handle None values safely)
+    total_volume = sum(kw.get("search_volume") or 0 for kw in keywords_list)
+    competitions = [kw.get("competition") or 0 for kw in keywords_list if kw.get("competition") is not None]
     avg_difficulty = sum(competitions) / len(competitions) * 100 if competitions else 50
 
     return KeywordCluster(
