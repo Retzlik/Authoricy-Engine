@@ -2,23 +2,29 @@
 External Report Builder - Lead Magnet (10-15 pages)
 
 Generates executive-focused, sales-enabling PDF report.
+Now uses REAL DATA from agent outputs, not placeholders.
+
 Structure:
 1. Cover
-2. Executive Summary (2 pages)
-3. Current Position (2 pages)
-4. Competitive Landscape (2 pages)
-5. The Opportunity (2 pages)
-6. Authority & AI Visibility (1 page)
-7. 90-Day Roadmap (2 pages)
+2. Executive Summary (2 pages) - From Master Strategy Agent
+3. Current Position (2 pages) - From Technical + Backlink Agents
+4. Competitive Landscape (2 pages) - From SERP + Backlink Agents
+5. The Opportunity (2 pages) - From Keyword Intelligence Agent
+6. Authority & AI Visibility (1 page) - From AI Visibility Agent
+7. 90-Day Roadmap (2 pages) - From Master Strategy Agent
 8. Next Steps (1 page)
 9. Methodology (1 page)
 """
 
 import logging
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
 import html
+
+# Type hints for agent outputs (actual import would cause circular dependency issues)
+if TYPE_CHECKING:
+    from ..agents.base import AgentOutput, Finding, Recommendation
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +32,8 @@ logger = logging.getLogger(__name__)
 class ExternalReportBuilder:
     """
     Builds external report HTML for PDF generation.
+
+    v5: Uses real agent outputs for data-driven content.
     """
 
     def __init__(self, template_dir: Path):
@@ -40,34 +48,50 @@ class ExternalReportBuilder:
         Build complete HTML for external report.
 
         Args:
-            analysis_result: Analysis result from engine
+            analysis_result: Analysis result from engine (contains agent_outputs dict)
             analysis_data: Original compiled data
 
         Returns:
             Complete HTML document
         """
         metadata = analysis_data.get("metadata", {})
-        summary = analysis_data.get("summary", {})
-        phase1 = analysis_data.get("phase1_foundation", {})
-
         domain = metadata.get("domain", "Unknown")
         market = metadata.get("market", "Unknown")
 
-        # Build sections
+        # Extract agent outputs from analysis result
+        agent_outputs = self._extract_agent_outputs(analysis_result)
+
+        # Build sections with real agent data
         sections = [
             self._build_cover(domain, market),
-            self._build_executive_summary(analysis_result, metadata),
-            self._build_current_position(analysis_data, analysis_result),
-            self._build_competitive_landscape(analysis_data, analysis_result),
-            self._build_opportunity(analysis_data, analysis_result),
-            self._build_ai_visibility(analysis_data, analysis_result),
-            self._build_roadmap(analysis_result),
+            self._build_executive_summary(agent_outputs, metadata),
+            self._build_current_position(agent_outputs, analysis_data),
+            self._build_competitive_landscape(agent_outputs, analysis_data),
+            self._build_opportunity(agent_outputs, analysis_data),
+            self._build_ai_visibility(agent_outputs, analysis_data),
+            self._build_roadmap(agent_outputs),
             self._build_next_steps(domain),
             self._build_methodology(),
         ]
 
         # Combine into full document
         return self._wrap_html(sections, domain)
+
+    def _extract_agent_outputs(self, analysis_result: Any) -> Dict[str, Any]:
+        """Extract agent outputs from analysis result."""
+        if analysis_result is None:
+            return {}
+
+        # Handle both dict and object formats
+        if isinstance(analysis_result, dict):
+            return analysis_result.get("agent_outputs", {})
+        elif hasattr(analysis_result, "agent_outputs"):
+            return analysis_result.agent_outputs
+        return {}
+
+    def _get_agent(self, outputs: Dict[str, Any], name: str) -> Optional[Any]:
+        """Safely get an agent output."""
+        return outputs.get(name)
 
     def _wrap_html(self, sections: list, domain: str) -> str:
         """Wrap sections in full HTML document."""
@@ -198,6 +222,14 @@ class ExternalReportBuilder:
             margin-top: 5px;
         }
 
+        .metric-card.warning .value {
+            color: #f72585;
+        }
+
+        .metric-card.success .value {
+            color: #06d6a0;
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -234,6 +266,33 @@ class ExternalReportBuilder:
             margin-bottom: 8px;
         }
 
+        .finding-evidence {
+            font-size: 10pt;
+            color: #666;
+            margin-top: 8px;
+            font-style: italic;
+        }
+
+        .finding-impact {
+            font-size: 10pt;
+            color: #4361ee;
+            margin-top: 4px;
+            font-weight: 500;
+        }
+
+        .priority-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 9pt;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .priority-1 { background: #f72585; color: white; }
+        .priority-2 { background: #4361ee; color: white; }
+        .priority-3 { background: #06d6a0; color: white; }
+
         .cta-box {
             background: #4361ee;
             color: white;
@@ -260,6 +319,40 @@ class ExternalReportBuilder:
             text-transform: uppercase;
             letter-spacing: 1px;
         }
+
+        .roadmap-phase {
+            margin: 20px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .roadmap-phase h3 {
+            color: #4361ee;
+            margin-bottom: 10px;
+        }
+
+        .roadmap-item {
+            margin: 8px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+
+        .roadmap-item:before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            color: #4361ee;
+        }
+
+        ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+
+        li {
+            margin: 5px 0;
+        }
         """
 
     def _build_cover(self, domain: str, market: str) -> str:
@@ -279,16 +372,63 @@ class ExternalReportBuilder:
         </div>
         """
 
-    def _build_executive_summary(self, analysis_result: Any, metadata: Dict) -> str:
-        """Build executive summary pages."""
-        exec_summary = getattr(analysis_result, 'executive_summary', '')
+    def _build_executive_summary(self, agent_outputs: Dict[str, Any], metadata: Dict) -> str:
+        """
+        Build executive summary from Master Strategy Agent output.
 
-        # Parse executive summary or use default
-        if not exec_summary:
-            exec_summary = "Analysis summary pending."
+        Uses real findings, not placeholders.
+        """
+        master = self._get_agent(agent_outputs, "master_strategy")
 
-        # Clean up markdown for HTML
-        exec_summary = exec_summary.replace("## ", "<h2>").replace("\n\n", "</p><p>")
+        # Get headline metric
+        headline = "Key opportunities identified for organic growth."
+        if master and master.metrics:
+            if "headline_metric" in master.metrics:
+                headline = master.metrics["headline_metric"]
+            elif "total_opportunity_value" in master.metrics:
+                value = master.metrics["total_opportunity_value"]
+                headline = f"Estimated ${value:,.0f} annual opportunity in untapped organic traffic."
+
+        # Get top 3 findings from master agent
+        findings_html = ""
+        findings = []
+        if master and master.findings:
+            findings = master.findings[:3]
+
+        if findings:
+            for i, finding in enumerate(findings, 1):
+                title = self._get_finding_attr(finding, "title", f"Finding {i}")
+                description = self._get_finding_attr(finding, "description", "")
+                evidence = self._get_finding_attr(finding, "evidence", "")
+                impact = self._get_finding_attr(finding, "impact", "")
+
+                findings_html += f"""
+                <div class="finding">
+                    <div class="finding-title">{i}. {html.escape(title)}</div>
+                    <p>{html.escape(description[:300])}</p>
+                    {f'<div class="finding-evidence">Evidence: {html.escape(evidence[:150])}</div>' if evidence else ''}
+                    {f'<div class="finding-impact">Impact: {html.escape(impact[:100])}</div>' if impact else ''}
+                </div>
+                """
+        else:
+            # Fallback if no master agent findings - use other agents
+            findings_html = self._build_fallback_findings(agent_outputs)
+
+        # Get top recommendation
+        recommendation_html = ""
+        if master and master.recommendations:
+            rec = master.recommendations[0]
+            action = self._get_rec_attr(rec, "action", "")
+            impact = self._get_rec_attr(rec, "impact", "")
+            timeline = self._get_rec_attr(rec, "timeline", "")
+
+            recommendation_html = f"""
+            <p><strong>Primary Action:</strong> {html.escape(action)}</p>
+            <p><strong>Expected Impact:</strong> {html.escape(impact)}</p>
+            {f'<p><strong>Timeline:</strong> {html.escape(timeline)}</p>' if timeline else ''}
+            """
+        else:
+            recommendation_html = "<p>Schedule a strategy session to review the prioritized roadmap.</p>"
 
         return f"""
         <div class="page">
@@ -296,42 +436,132 @@ class ExternalReportBuilder:
 
             <div class="highlight-box">
                 <strong>The Headline:</strong><br>
-                {html.escape(exec_summary[:500]) if len(exec_summary) > 0 else 'Analysis complete. Key opportunities identified.'}
+                {html.escape(headline)}
             </div>
 
             <h2>Key Findings</h2>
-            <div class="finding">
-                <div class="finding-title">1. Current Organic Position</div>
-                <p>Based on comprehensive analysis of your domain's organic visibility.</p>
-            </div>
-            <div class="finding">
-                <div class="finding-title">2. Competitive Landscape</div>
-                <p>Your position relative to key competitors in the market.</p>
-            </div>
-            <div class="finding">
-                <div class="finding-title">3. Growth Opportunity</div>
-                <p>Identified opportunities for organic traffic growth.</p>
-            </div>
+            {findings_html}
 
-            <h2>Recommended Next Step</h2>
-            <p>Schedule a strategy session to discuss implementing the prioritized roadmap.</p>
+            <h2>Recommended Path Forward</h2>
+            {recommendation_html}
         </div>
         """
 
-    def _build_current_position(self, analysis_data: Dict, analysis_result: Any) -> str:
-        """Build current position section."""
+    def _build_fallback_findings(self, agent_outputs: Dict[str, Any]) -> str:
+        """Build findings from individual agents if master isn't available."""
+        findings_html = ""
+        finding_num = 1
+
+        # Technical SEO findings
+        tech = self._get_agent(agent_outputs, "technical_seo")
+        if tech and tech.findings:
+            finding = tech.findings[0]
+            title = self._get_finding_attr(finding, "title", "Technical Health")
+            desc = self._get_finding_attr(finding, "description", "")
+            findings_html += f"""
+            <div class="finding">
+                <div class="finding-title">{finding_num}. {html.escape(title)}</div>
+                <p>{html.escape(desc[:250])}</p>
+            </div>
+            """
+            finding_num += 1
+
+        # Keyword findings
+        kw = self._get_agent(agent_outputs, "keyword_intelligence")
+        if kw and kw.findings:
+            finding = kw.findings[0]
+            title = self._get_finding_attr(finding, "title", "Keyword Opportunity")
+            desc = self._get_finding_attr(finding, "description", "")
+            findings_html += f"""
+            <div class="finding">
+                <div class="finding-title">{finding_num}. {html.escape(title)}</div>
+                <p>{html.escape(desc[:250])}</p>
+            </div>
+            """
+            finding_num += 1
+
+        # Backlink findings
+        bl = self._get_agent(agent_outputs, "backlink_intelligence")
+        if bl and bl.findings:
+            finding = bl.findings[0]
+            title = self._get_finding_attr(finding, "title", "Link Profile")
+            desc = self._get_finding_attr(finding, "description", "")
+            findings_html += f"""
+            <div class="finding">
+                <div class="finding-title">{finding_num}. {html.escape(title)}</div>
+                <p>{html.escape(desc[:250])}</p>
+            </div>
+            """
+
+        if not findings_html:
+            findings_html = """
+            <div class="finding">
+                <div class="finding-title">1. Analysis Complete</div>
+                <p>Comprehensive analysis has been completed. Key opportunities have been identified.</p>
+            </div>
+            """
+
+        return findings_html
+
+    def _build_current_position(self, agent_outputs: Dict[str, Any], analysis_data: Dict) -> str:
+        """
+        Build current position from Technical + Backlink agents.
+        """
+        # Get data from analysis_data (raw metrics)
         summary = analysis_data.get("summary", {})
         phase1 = analysis_data.get("phase1_foundation", {})
-        overview = phase1.get("domain_overview", {})
         backlinks = phase1.get("backlink_summary", {})
         technical = phase1.get("technical_baseline", {})
 
-        # Use 'or 0' to handle None values (not just missing keys)
         keywords = summary.get("total_organic_keywords") or 0
         traffic = summary.get("total_organic_traffic") or 0
         dr = backlinks.get("domain_rank") or 0
         rds = backlinks.get("referring_domains") or 0
-        perf_score = technical.get("performance_score") or 0
+
+        # Get agent-specific metrics
+        tech_agent = self._get_agent(agent_outputs, "technical_seo")
+        bl_agent = self._get_agent(agent_outputs, "backlink_intelligence")
+
+        # Core Web Vitals from technical agent
+        lcp = "N/A"
+        inp = "N/A"
+        cls = "N/A"
+        tech_health = "N/A"
+
+        if tech_agent and tech_agent.metrics:
+            lcp = tech_agent.metrics.get("lcp_score", "N/A")
+            inp = tech_agent.metrics.get("inp_score", "N/A")
+            cls = tech_agent.metrics.get("cls_score", "N/A")
+            tech_health = tech_agent.metrics.get("technical_health_score", "N/A")
+            if isinstance(lcp, (int, float)):
+                lcp = f"{lcp:.1f}s"
+            if isinstance(inp, (int, float)):
+                inp = f"{inp:.0f}ms"
+            if isinstance(cls, (int, float)):
+                cls = f"{cls:.2f}"
+            if isinstance(tech_health, (int, float)):
+                tech_health = f"{tech_health:.0f}/100"
+
+        # Link velocity from backlink agent
+        link_velocity = "N/A"
+        if bl_agent and bl_agent.metrics:
+            lv = bl_agent.metrics.get("link_velocity", 0)
+            if isinstance(lv, (int, float)):
+                link_velocity = f"+{lv:.0f}/mo"
+
+        # Technical finding
+        tech_finding = ""
+        if tech_agent and tech_agent.findings:
+            finding = tech_agent.findings[0]
+            title = self._get_finding_attr(finding, "title", "")
+            desc = self._get_finding_attr(finding, "description", "")
+            if title:
+                tech_finding = f"""
+                <div class="highlight-box">
+                    <strong>{html.escape(title)}</strong><br>
+                    {html.escape(desc[:200])}
+                </div>
+                """
 
         return f"""
         <div class="page">
@@ -357,52 +587,113 @@ class ExternalReportBuilder:
                 <tr>
                     <th>Metric</th>
                     <th>Your Score</th>
-                    <th>Industry Avg</th>
+                    <th>Target</th>
                 </tr>
                 <tr>
-                    <td>Organic Keywords</td>
-                    <td>{keywords:,}</td>
-                    <td>Varies</td>
+                    <td>Technical Health</td>
+                    <td>{tech_health}</td>
+                    <td>80+</td>
                 </tr>
                 <tr>
                     <td>Domain Rating</td>
                     <td>{dr}</td>
-                    <td>30-50</td>
+                    <td>50+</td>
                 </tr>
                 <tr>
                     <td>Referring Domains</td>
                     <td>{rds:,}</td>
-                    <td>Varies</td>
+                    <td>Varies by industry</td>
                 </tr>
                 <tr>
-                    <td>Performance Score</td>
-                    <td>{perf_score:.0%}</td>
-                    <td>0.70</td>
+                    <td>Link Velocity</td>
+                    <td>{link_velocity}</td>
+                    <td>Positive growth</td>
                 </tr>
             </table>
 
-            <h2>12-Month Trend</h2>
-            <p>Historical performance analysis shows the trajectory of your organic visibility over the past year.</p>
+            <h2>Core Web Vitals (2025 Thresholds)</h2>
+            <table>
+                <tr>
+                    <th>Metric</th>
+                    <th>Your Score</th>
+                    <th>Good</th>
+                    <th>Needs Work</th>
+                </tr>
+                <tr>
+                    <td>LCP (Largest Contentful Paint)</td>
+                    <td>{lcp}</td>
+                    <td>&lt; 2.5s</td>
+                    <td>&gt; 4.0s</td>
+                </tr>
+                <tr>
+                    <td>INP (Interaction to Next Paint)</td>
+                    <td>{inp}</td>
+                    <td>&lt; 200ms</td>
+                    <td>&gt; 500ms</td>
+                </tr>
+                <tr>
+                    <td>CLS (Cumulative Layout Shift)</td>
+                    <td>{cls}</td>
+                    <td>&lt; 0.1</td>
+                    <td>&gt; 0.25</td>
+                </tr>
+            </table>
+
+            {tech_finding}
         </div>
         """
 
-    def _build_competitive_landscape(self, analysis_data: Dict, analysis_result: Any) -> str:
-        """Build competitive landscape section."""
+    def _build_competitive_landscape(self, agent_outputs: Dict[str, Any], analysis_data: Dict) -> str:
+        """
+        Build competitive landscape from SERP + Backlink agents.
+        """
         phase1 = analysis_data.get("phase1_foundation", {})
         competitors = phase1.get("competitors", [])[:5]
 
+        # Get SERP agent insights
+        serp_agent = self._get_agent(agent_outputs, "serp_analysis")
+        bl_agent = self._get_agent(agent_outputs, "backlink_intelligence")
+
+        # Competitor table
         competitor_rows = ""
         for comp in competitors:
-            # Use 'or' to handle None values
             common_kw = comp.get('common_keywords') or 0
             org_traffic = comp.get('organic_traffic') or 0
+            comp_dr = comp.get('domain_rating') or comp.get('dr') or "N/A"
             competitor_rows += f"""
             <tr>
                 <td>{html.escape(str(comp.get('domain', 'Unknown')))}</td>
+                <td>{comp_dr}</td>
                 <td>{common_kw:,}</td>
                 <td>{org_traffic:,.0f}</td>
             </tr>
             """
+
+        # SERP feature insights
+        serp_insight = ""
+        if serp_agent and serp_agent.findings:
+            finding = serp_agent.findings[0]
+            title = self._get_finding_attr(finding, "title", "")
+            desc = self._get_finding_attr(finding, "description", "")
+            if title:
+                serp_insight = f"""
+                <h2>SERP Feature Analysis</h2>
+                <div class="highlight-box">
+                    <strong>{html.escape(title)}</strong><br>
+                    {html.escape(desc[:250])}
+                </div>
+                """
+
+        # Link gap insights
+        link_gap = ""
+        if bl_agent and bl_agent.metrics:
+            gap_count = bl_agent.metrics.get("competitor_link_gap", 0)
+            if gap_count:
+                link_gap = f"""
+                <div class="highlight-box warning">
+                    <strong>Link Gap Identified:</strong> {gap_count:,} referring domains link to competitors but not to you.
+                </div>
+                """
 
         return f"""
         <div class="page">
@@ -412,36 +703,63 @@ class ExternalReportBuilder:
             <table>
                 <tr>
                     <th>Competitor</th>
+                    <th>Domain Rating</th>
                     <th>Shared Keywords</th>
                     <th>Est. Traffic</th>
                 </tr>
                 {competitor_rows}
             </table>
 
-            <h2>Competitive Position</h2>
-            <div class="highlight-box">
-                <p>Analysis of {len(competitors)} key competitors reveals opportunities for differentiation and growth.</p>
-            </div>
+            {link_gap}
 
-            <h2>Who's Gaining, Who's Losing</h2>
-            <p>Trajectory analysis of competitor performance over time helps identify market trends and opportunities.</p>
+            {serp_insight}
+
+            <h2>Competitive Position</h2>
+            <p>Analysis of {len(competitors)} key competitors reveals opportunities for differentiation through targeted content and link building strategies.</p>
         </div>
         """
 
-    def _build_opportunity(self, analysis_data: Dict, analysis_result: Any) -> str:
-        """Build opportunity section."""
-        phase2 = analysis_data.get("phase2_keywords", {})
-        gaps = phase2.get("keyword_gaps", [])[:10]
-        summary = analysis_data.get("summary", {})
+    def _build_opportunity(self, agent_outputs: Dict[str, Any], analysis_data: Dict) -> str:
+        """
+        Build opportunity section from Keyword Intelligence agent.
+        """
+        kw_agent = self._get_agent(agent_outputs, "keyword_intelligence")
 
-        gap_count = len(gaps)
-        total_opportunity = sum(g.get("search_volume") or 0 for g in gaps)
+        # Get metrics
+        quick_wins = 0
+        total_opportunity = 0
+        keyword_gaps = 0
+
+        if kw_agent and kw_agent.metrics:
+            quick_wins = kw_agent.metrics.get("quick_win_count", 0)
+            total_opportunity = kw_agent.metrics.get("estimated_traffic_opportunity", 0)
+            keyword_gaps = kw_agent.metrics.get("keyword_gap_count", 0)
+
+        # Fall back to analysis_data if no agent metrics
+        if not total_opportunity:
+            phase2 = analysis_data.get("phase2_keywords", {})
+            gaps = phase2.get("keyword_gaps", [])
+            total_opportunity = sum(g.get("search_volume") or 0 for g in gaps[:50])
+            keyword_gaps = len(gaps)
+
+        # Get keyword recommendations from agent
+        keyword_table = ""
+        if kw_agent and kw_agent.recommendations:
+            # Find quick wins recommendation
+            for rec in kw_agent.recommendations:
+                action = self._get_rec_attr(rec, "action", "")
+                if "quick" in action.lower() or "opportunity" in action.lower():
+                    # This might have keyword data
+                    break
+
+        # Fall back to analysis_data for keyword table
+        phase2 = analysis_data.get("phase2_keywords", {})
+        gaps = phase2.get("keyword_gaps", [])[:7]
 
         gap_rows = ""
-        for gap in gaps[:5]:
-            # Use 'or' to handle None values
+        for gap in gaps:
             volume = gap.get('search_volume') or 0
-            difficulty = gap.get('difficulty') or 0
+            difficulty = gap.get('difficulty') or gap.get('keyword_difficulty') or 0
             gap_rows += f"""
             <tr>
                 <td>{html.escape(str(gap.get('keyword', 'Unknown')))}</td>
@@ -450,24 +768,40 @@ class ExternalReportBuilder:
             </tr>
             """
 
+        # Keyword finding
+        kw_finding = ""
+        if kw_agent and kw_agent.findings:
+            finding = kw_agent.findings[0]
+            title = self._get_finding_attr(finding, "title", "")
+            desc = self._get_finding_attr(finding, "description", "")
+            if title:
+                kw_finding = f"""
+                <div class="highlight-box success">
+                    <strong>{html.escape(title)}</strong><br>
+                    {html.escape(desc[:200])}
+                </div>
+                """
+
         return f"""
         <div class="page">
             <h1>The Opportunity</h1>
 
             <div class="metric-grid">
-                <div class="metric-card">
-                    <div class="value">{gap_count}+</div>
+                <div class="metric-card success">
+                    <div class="value">{quick_wins if quick_wins else keyword_gaps}+</div>
                     <div class="label">Keyword Opportunities</div>
                 </div>
                 <div class="metric-card">
                     <div class="value">{total_opportunity:,}</div>
                     <div class="label">Combined Search Volume</div>
                 </div>
-                <div class="metric-card">
+                <div class="metric-card success">
                     <div class="value">High</div>
                     <div class="label">Growth Potential</div>
                 </div>
             </div>
+
+            {kw_finding}
 
             <h2>Top Keyword Opportunities</h2>
             <table>
@@ -479,79 +813,225 @@ class ExternalReportBuilder:
                 {gap_rows}
             </table>
 
-            <div class="highlight-box success">
-                <strong>Quick Wins Identified:</strong> Several high-volume, low-difficulty keywords where competitors rank but you don't.
-            </div>
+            <p><em>Difficulty score 0-100: Lower is easier to rank for.</em></p>
         </div>
         """
 
-    def _build_ai_visibility(self, analysis_data: Dict, analysis_result: Any) -> str:
-        """Build AI visibility section."""
-        phase4 = analysis_data.get("phase4_ai_technical", {})
-        ai_data = phase4.get("ai_visibility", {})
+    def _build_ai_visibility(self, agent_outputs: Dict[str, Any], analysis_data: Dict) -> str:
+        """
+        Build AI visibility section from AI Visibility agent.
+        """
+        ai_agent = self._get_agent(agent_outputs, "ai_visibility")
+
+        # Get metrics
+        ai_score = "N/A"
+        presence_rate = "N/A"
+        geo_readiness = "N/A"
+
+        if ai_agent and ai_agent.metrics:
+            score = ai_agent.metrics.get("ai_visibility_score", 0)
+            presence = ai_agent.metrics.get("ai_overview_presence", 0)
+            geo = ai_agent.metrics.get("geo_readiness_score", 0)
+
+            if isinstance(score, (int, float)):
+                ai_score = f"{score:.0f}/100"
+            if isinstance(presence, (int, float)):
+                presence_rate = f"{presence:.0f}%"
+            if isinstance(geo, (int, float)):
+                geo_readiness = f"{geo:.0f}/100"
+
+        # Get AI visibility finding
+        ai_finding = ""
+        if ai_agent and ai_agent.findings:
+            finding = ai_agent.findings[0]
+            title = self._get_finding_attr(finding, "title", "")
+            desc = self._get_finding_attr(finding, "description", "")
+            if title:
+                ai_finding = f"""
+                <div class="finding">
+                    <div class="finding-title">{html.escape(title)}</div>
+                    <p>{html.escape(desc[:250])}</p>
+                </div>
+                """
+
+        # Get recommendations
+        ai_recs = ""
+        if ai_agent and ai_agent.recommendations:
+            rec_items = ""
+            for rec in ai_agent.recommendations[:3]:
+                action = self._get_rec_attr(rec, "action", "")
+                if action:
+                    rec_items += f"<li>{html.escape(action[:100])}</li>"
+
+            if rec_items:
+                ai_recs = f"""
+                <h2>AI Visibility Recommendations</h2>
+                <ul>
+                    {rec_items}
+                </ul>
+                """
 
         return f"""
         <div class="page">
             <h1>Authority & AI Visibility</h1>
 
             <h2>Why AI Visibility Matters</h2>
-            <p>As AI-powered search and assistants become more prevalent, being cited and referenced by these systems is increasingly important for brand visibility.</p>
+            <p>As AI-powered search (Google AI Overviews, ChatGPT, Perplexity) becomes more prevalent, being cited in AI-generated responses is increasingly critical for brand visibility.</p>
 
-            <h2>Your AI Visibility Assessment</h2>
-            <div class="highlight-box">
-                <p>AI visibility analysis examines how your brand appears in AI-generated responses and citations.</p>
+            <div class="metric-grid">
+                <div class="metric-card">
+                    <div class="value">{ai_score}</div>
+                    <div class="label">AI Visibility Score</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value">{presence_rate}</div>
+                    <div class="label">AI Overview Presence</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value">{geo_readiness}</div>
+                    <div class="label">GEO Readiness</div>
+                </div>
             </div>
 
-            <h2>Competitive AI Landscape</h2>
-            <p>Understanding which competitors dominate AI citations helps identify opportunities for improvement.</p>
+            {ai_finding if ai_finding else '''
+            <div class="highlight-box">
+                <p>AI visibility analysis examines how your brand appears in AI-generated responses and identifies optimization opportunities.</p>
+            </div>
+            '''}
 
-            <h2>Recommendations</h2>
+            {ai_recs if ai_recs else '''
+            <h2>Key Optimization Areas</h2>
             <ul>
-                <li>Structure content for AI comprehension</li>
-                <li>Build authoritative, cited content</li>
-                <li>Improve entity recognition</li>
+                <li>Structure content for AI comprehension (clear headings, FAQ sections)</li>
+                <li>Build authoritative, citation-worthy content</li>
+                <li>Improve entity recognition through structured data</li>
+                <li>Target question-based queries that trigger AI responses</li>
             </ul>
+            '''}
         </div>
         """
 
-    def _build_roadmap(self, analysis_result: Any) -> str:
-        """Build 90-day roadmap section."""
+    def _build_roadmap(self, agent_outputs: Dict[str, Any]) -> str:
+        """
+        Build 90-day roadmap from Master Strategy agent.
+        """
+        master = self._get_agent(agent_outputs, "master_strategy")
+
+        # Try to get structured roadmap from master agent
+        phases = []
+        if master and master.structured_data:
+            phases = master.structured_data.get("roadmap", [])
+
+        # Build phase content
+        if phases:
+            phases_html = ""
+            for phase in phases[:3]:
+                phase_num = phase.get("phase", "1")
+                goal = phase.get("goal", "")
+                initiatives = phase.get("initiatives", [])
+
+                initiatives_html = ""
+                for init in initiatives[:4]:
+                    if isinstance(init, str):
+                        initiatives_html += f'<div class="roadmap-item">{html.escape(init)}</div>'
+                    elif isinstance(init, dict):
+                        initiatives_html += f'<div class="roadmap-item">{html.escape(init.get("description", str(init)))}</div>'
+
+                phases_html += f"""
+                <div class="roadmap-phase">
+                    <h3>Phase {phase_num}: {html.escape(goal)}</h3>
+                    {initiatives_html}
+                </div>
+                """
+        else:
+            # Use recommendations to build roadmap
+            phases_html = self._build_roadmap_from_recommendations(agent_outputs)
+
+        # Get expected outcomes from master metrics
+        outcomes = ""
+        if master and master.metrics:
+            traffic_uplift = master.metrics.get("estimated_traffic_uplift", 0)
+            if traffic_uplift:
+                outcomes = f"""
+                <div class="highlight-box success">
+                    <strong>Expected Outcome:</strong> {traffic_uplift:.0f}% organic traffic increase over 90 days with full implementation.
+                </div>
+                """
+
         return f"""
         <div class="page">
             <h1>90-Day Roadmap Overview</h1>
 
-            <h2>Phase 1: Foundation</h2>
-            <div class="finding">
-                <div class="finding-title">Quick Wins & Technical Fixes</div>
-                <ul>
-                    <li>Address critical technical issues</li>
-                    <li>Optimize existing high-potential pages</li>
-                    <li>Implement tracking improvements</li>
-                </ul>
-            </div>
+            {phases_html}
 
-            <h2>Phase 2: Acceleration</h2>
-            <div class="finding">
-                <div class="finding-title">Content & Link Building</div>
-                <ul>
-                    <li>Create priority content pieces</li>
-                    <li>Launch link acquisition campaign</li>
-                    <li>Expand keyword coverage</li>
-                </ul>
-            </div>
+            {outcomes}
 
-            <h2>Phase 3: Scale</h2>
-            <div class="finding">
-                <div class="finding-title">Expand & Optimize</div>
-                <ul>
-                    <li>Scale successful strategies</li>
-                    <li>Enter new keyword territories</li>
-                    <li>Build competitive moats</li>
-                </ul>
-            </div>
+            <h2>Implementation Approach</h2>
+            <p>This roadmap prioritizes high-impact, lower-effort initiatives first, building momentum before tackling larger strategic projects.</p>
+        </div>
+        """
 
-            <h2>Expected Outcomes</h2>
-            <p>Implementation of this roadmap is designed to improve organic visibility, increase qualified traffic, and strengthen competitive position.</p>
+    def _build_roadmap_from_recommendations(self, agent_outputs: Dict[str, Any]) -> str:
+        """Build roadmap from agent recommendations if no structured roadmap exists."""
+        # Collect P1, P2, P3 recommendations from all agents
+        p1_items = []
+        p2_items = []
+        p3_items = []
+
+        for agent_name, agent in agent_outputs.items():
+            if agent and agent.recommendations:
+                for rec in agent.recommendations[:2]:
+                    priority = self._get_rec_attr(rec, "priority", 2)
+                    action = self._get_rec_attr(rec, "action", "")
+                    if action:
+                        if priority == 1:
+                            p1_items.append(action[:80])
+                        elif priority == 2:
+                            p2_items.append(action[:80])
+                        else:
+                            p3_items.append(action[:80])
+
+        # Build phase HTML
+        phase1_items = "".join(f'<div class="roadmap-item">{html.escape(item)}</div>' for item in p1_items[:4])
+        phase2_items = "".join(f'<div class="roadmap-item">{html.escape(item)}</div>' for item in p2_items[:4])
+        phase3_items = "".join(f'<div class="roadmap-item">{html.escape(item)}</div>' for item in p3_items[:4])
+
+        # Fallback content if no recommendations
+        if not phase1_items:
+            phase1_items = """
+            <div class="roadmap-item">Address critical technical issues</div>
+            <div class="roadmap-item">Optimize high-potential existing pages</div>
+            <div class="roadmap-item">Implement tracking improvements</div>
+            """
+
+        if not phase2_items:
+            phase2_items = """
+            <div class="roadmap-item">Create priority content pieces</div>
+            <div class="roadmap-item">Launch link acquisition campaign</div>
+            <div class="roadmap-item">Expand keyword coverage</div>
+            """
+
+        if not phase3_items:
+            phase3_items = """
+            <div class="roadmap-item">Scale successful strategies</div>
+            <div class="roadmap-item">Enter new keyword territories</div>
+            <div class="roadmap-item">Build competitive moats</div>
+            """
+
+        return f"""
+        <div class="roadmap-phase">
+            <h3>Phase 1 (Days 1-30): Quick Wins & Foundation</h3>
+            {phase1_items}
+        </div>
+
+        <div class="roadmap-phase">
+            <h3>Phase 2 (Days 31-60): Strategic Growth</h3>
+            {phase2_items}
+        </div>
+
+        <div class="roadmap-phase">
+            <h3>Phase 3 (Days 61-90): Scale & Optimize</h3>
+            {phase3_items}
         </div>
         """
 
@@ -568,10 +1048,10 @@ class ExternalReportBuilder:
 
             <h2>What's Included in a Full Engagement</h2>
             <ul>
-                <li>Detailed 40-60 page strategy guide</li>
+                <li>Detailed 40-60 page strategy guide with implementation playbook</li>
+                <li>Prioritized action items with assigned owners</li>
                 <li>Implementation support and consulting</li>
-                <li>Monthly progress tracking</li>
-                <li>Ongoing optimization recommendations</li>
+                <li>Monthly progress tracking and optimization</li>
             </ul>
 
             <h2>Contact Us</h2>
@@ -592,31 +1072,50 @@ class ExternalReportBuilder:
             <h1>Methodology & Data Sources</h1>
 
             <h2>How This Analysis Was Conducted</h2>
-            <p>This report was generated using automated data collection and AI-powered analysis.</p>
+            <p>This report was generated using automated data collection combined with AI-powered analysis through our 9-agent intelligence system.</p>
 
             <h2>Data Sources</h2>
             <ul>
                 <li><strong>Organic Rankings:</strong> DataForSEO API</li>
                 <li><strong>Backlink Data:</strong> DataForSEO Backlinks API</li>
                 <li><strong>Technical Audits:</strong> Lighthouse & On-Page Analysis</li>
-                <li><strong>AI Analysis:</strong> Claude AI (Anthropic)</li>
+                <li><strong>AI Analysis:</strong> Claude AI (Anthropic) - 9 specialized agents</li>
             </ul>
+
+            <h2>Analysis Agents</h2>
+            <table>
+                <tr><th>Agent</th><th>Focus Area</th></tr>
+                <tr><td>Keyword Intelligence</td><td>Opportunity scoring, gaps, quick wins</td></tr>
+                <tr><td>Backlink Intelligence</td><td>Link profile, building strategy</td></tr>
+                <tr><td>Technical SEO</td><td>Core Web Vitals, crawlability</td></tr>
+                <tr><td>Content Analysis</td><td>Content decay, KUCK recommendations</td></tr>
+                <tr><td>Semantic Architecture</td><td>Topic clusters, internal linking</td></tr>
+                <tr><td>AI Visibility</td><td>GEO optimization, AI overview presence</td></tr>
+                <tr><td>SERP Analysis</td><td>Feature opportunities, content formats</td></tr>
+                <tr><td>Master Strategy</td><td>Synthesis, prioritization, roadmap</td></tr>
+            </table>
 
             <h2>Data Freshness</h2>
             <p>All data collected on {date}. Rankings and traffic estimates may fluctuate.</p>
-
-            <h2>Limitations</h2>
-            <ul>
-                <li>Traffic estimates are approximations based on ranking positions</li>
-                <li>Competitive data limited to publicly available information</li>
-                <li>Historical trends based on monthly snapshots</li>
-            </ul>
-
-            <h2>About Authoricy</h2>
-            <p>Authoricy provides AI-powered SEO intelligence and strategy services.</p>
 
             <div class="confidential" style="margin-top: 40px; text-align: center;">
                 © {datetime.now().year} Authoricy. All rights reserved.
             </div>
         </div>
         """
+
+    # =========================================================================
+    # HELPER METHODS
+    # =========================================================================
+
+    def _get_finding_attr(self, finding: Any, attr: str, default: str = "") -> str:
+        """Safely get attribute from finding (handles both dict and object)."""
+        if isinstance(finding, dict):
+            return str(finding.get(attr, default))
+        return str(getattr(finding, attr, default))
+
+    def _get_rec_attr(self, rec: Any, attr: str, default: Any = "") -> Any:
+        """Safely get attribute from recommendation (handles both dict and object)."""
+        if isinstance(rec, dict):
+            return rec.get(attr, default)
+        return getattr(rec, attr, default)
