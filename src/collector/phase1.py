@@ -355,14 +355,23 @@ async def fetch_technologies(client, domain: str) -> List[Dict]:
         )
 
         first_result = _safe_get_first_result(result)
-        items = first_result.get("technologies") or []
+        technologies_data = first_result.get("technologies")
+
+        # Ensure we have a list before processing
+        if not isinstance(technologies_data, list):
+            logger.warning(f"Technologies data is not a list: {type(technologies_data)}")
+            return []
+
+        # Safely slice and process
+        items = technologies_data[:20] if len(technologies_data) > 20 else technologies_data
 
         return [
             {
-                "name": item.get("name"),
-                "category": item.get("category"),
+                "name": item.get("name") if isinstance(item, dict) else str(item),
+                "category": item.get("category") if isinstance(item, dict) else "unknown",
             }
-            for item in items[:20]  # Limit to top 20
+            for item in items
+            if item is not None
         ]
     except Exception as e:
         logger.error(f"Technologies failed: {e}")

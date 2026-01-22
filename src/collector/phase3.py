@@ -676,6 +676,22 @@ async def fetch_referring_domains(
     return domains
 
 
+def _clean_domain(domain: str) -> str:
+    """Clean domain by removing protocol and trailing slashes."""
+    domain = domain.strip()
+    # Remove protocol
+    if domain.startswith("https://"):
+        domain = domain[8:]
+    elif domain.startswith("http://"):
+        domain = domain[7:]
+    # Remove trailing slash
+    domain = domain.rstrip("/")
+    # Remove www. prefix for consistency
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
+
+
 async def fetch_backlink_domain_intersection(
     client,
     targets: List[str],
@@ -686,26 +702,74 @@ async def fetch_backlink_domain_intersection(
     targets[0] = our domain, targets[1:] = competitors
 
     FIXED: targets must be a dict with numbered keys, not an array
+    FIXED: Clean domains and handle API errors gracefully
     """
-    # FIXED: Convert array to dict format required by API
-    targets_dict = {str(i+1): target for i, target in enumerate(targets)}
+    # Validate and clean targets
+    if not targets or len(targets) < 2:
+        logger.warning("Link gap analysis requires at least 2 targets (domain + 1 competitor)")
+        return []
 
-    result = await client.post(
-        "backlinks/domain_intersection/live",
-        [{
-            "targets": targets_dict,  # FIXED: was array, now dict
-            "limit": limit,
-            "order_by": ["1.rank,desc"],  # Sort by domain rank
-        }]
-    )
+    # Clean all domains
+    cleaned_targets = [_clean_domain(t) for t in targets if t]
+    cleaned_targets = [t for t in cleaned_targets if t]  # Remove empty strings
+
+    if len(cleaned_targets) < 2:
+        logger.warning("Not enough valid targets for link gap analysis")
+        return []
+
+    # Limit to max 5 targets (API limitation)
+    cleaned_targets = cleaned_targets[:5]
+
+    # Convert array to dict format required by API
+    targets_dict = {str(i+1): target for i, target in enumerate(cleaned_targets)}
+
+    try:
+        result = await client.post(
+            "backlinks/domain_intersection/live",
+            [{
+                "targets": targets_dict,
+                "limit": limit,
+                "order_by": ["rank,desc"],  # FIXED: Use simple field name, not "1.rank"
+            }]
+        )
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "500" in error_msg or "internal server error" in error_msg:
+            logger.warning(f"Link gap API returned 500 error - this may be a temporary DataForSEO issue")
+            # Try with fewer targets as fallback
+            if len(cleaned_targets) > 2:
+                logger.info("Retrying link gap with fewer targets...")
+                targets_dict_reduced = {str(i+1): target for i, target in enumerate(cleaned_targets[:2])}
+                try:
+                    result = await client.post(
+                        "backlinks/domain_intersection/live",
+                        [{
+                            "targets": targets_dict_reduced,
+                            "limit": limit,
+                            "order_by": ["rank,desc"],
+                        }]
+                    )
+                except Exception as retry_e:
+                    logger.warning(f"Link gap retry also failed: {retry_e}")
+                    return []
+            else:
+                return []
+        else:
+            raise
 
     items = _safe_get_items(result)
 
+    if not items:
+        logger.info("Link gap analysis returned no results")
+        return []
+
     # Filter: domains that link to at least one competitor but not to us
-    # The API returns intersection data - we need to filter
     link_gaps = []
 
     for item in items:
+        if not isinstance(item, dict):
+            continue
+
         target_data = item.get("1", {})  # Our domain's data
 
         # If target_data is empty/null, this domain doesn't link to us = opportunity
@@ -714,7 +778,7 @@ async def fetch_backlink_domain_intersection(
             total_competitor_links = 0
 
             # Check each competitor (positions 2, 3, 4...)
-            for i, target in enumerate(targets[1:], start=2):
+            for i, target in enumerate(cleaned_targets[1:], start=2):
                 comp_data = item.get(str(i), {})
                 if comp_data and comp_data.get("backlinks", 0) > 0:
                     competitors_linked.append(target)
@@ -731,6 +795,7 @@ async def fetch_backlink_domain_intersection(
     # Sort by number of competitors linked (more = better target)
     link_gaps.sort(key=lambda x: (len(x["competitors_linked"]), x["domain_rank"]), reverse=True)
 
+    logger.info(f"Link gap analysis found {len(link_gaps)} opportunities")
     return link_gaps
 
 
