@@ -1,7 +1,13 @@
 """
 Output Processing Module
 
-Handles parsing and validation of agent outputs.
+Handles parsing, validation, and conversion of agent outputs.
+
+Components:
+- OutputParser: Parses raw text (XML/JSON/Markdown)
+- AgentOutputConverter: Converts raw output to validated AgentOutput
+- BatchOutputConverter: Processes multiple agents at once
+- Schemas: Defines expected output structure for each agent
 """
 
 from .parser import (
@@ -9,6 +15,12 @@ from .parser import (
     ParseResult,
     ParsedFinding,
     ParsedRecommendation,
+)
+
+from .converter import (
+    AgentOutputConverter,
+    BatchOutputConverter,
+    ConversionResult,
 )
 
 from .schemas import (
@@ -35,6 +47,10 @@ __all__ = [
     "ParseResult",
     "ParsedFinding",
     "ParsedRecommendation",
+    # Converter
+    "AgentOutputConverter",
+    "BatchOutputConverter",
+    "ConversionResult",
     # Schemas
     "AGENT_SCHEMAS",
     "get_schema",
