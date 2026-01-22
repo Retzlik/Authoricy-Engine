@@ -24,6 +24,133 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Domains that should NEVER be considered competitors
+# These are platforms, social media, search engines, etc.
+NON_COMPETITOR_DOMAINS = {
+    # Social Media
+    "facebook.com", "www.facebook.com", "m.facebook.com",
+    "youtube.com", "www.youtube.com", "m.youtube.com",
+    "twitter.com", "www.twitter.com", "x.com",
+    "instagram.com", "www.instagram.com",
+    "linkedin.com", "www.linkedin.com",
+    "tiktok.com", "www.tiktok.com",
+    "pinterest.com", "www.pinterest.com",
+    "reddit.com", "www.reddit.com",
+    "tumblr.com", "www.tumblr.com",
+    "snapchat.com", "www.snapchat.com",
+    "whatsapp.com", "www.whatsapp.com",
+    "telegram.org", "www.telegram.org",
+    "discord.com", "www.discord.com",
+
+    # Search Engines
+    "google.com", "www.google.com", "google.se", "google.co.uk",
+    "bing.com", "www.bing.com",
+    "yahoo.com", "www.yahoo.com",
+    "duckduckgo.com", "www.duckduckgo.com",
+    "baidu.com", "www.baidu.com",
+    "yandex.com", "www.yandex.com",
+
+    # E-commerce Platforms (unless client is e-commerce)
+    "amazon.com", "www.amazon.com", "amazon.se", "amazon.co.uk", "amazon.de",
+    "ebay.com", "www.ebay.com", "ebay.se", "ebay.co.uk",
+    "etsy.com", "www.etsy.com",
+    "aliexpress.com", "www.aliexpress.com",
+    "alibaba.com", "www.alibaba.com",
+    "wish.com", "www.wish.com",
+
+    # Reference/Encyclopedia
+    "wikipedia.org", "www.wikipedia.org", "en.wikipedia.org", "sv.wikipedia.org",
+    "wikimedia.org", "www.wikimedia.org",
+    "britannica.com", "www.britannica.com",
+    "quora.com", "www.quora.com",
+    "medium.com", "www.medium.com",
+
+    # News/Media Aggregators
+    "news.google.com", "news.yahoo.com",
+    "msn.com", "www.msn.com",
+    "cnn.com", "www.cnn.com",
+    "bbc.com", "www.bbc.com", "bbc.co.uk",
+    "nytimes.com", "www.nytimes.com",
+    "theguardian.com", "www.theguardian.com",
+    "forbes.com", "www.forbes.com",
+    "businessinsider.com", "www.businessinsider.com",
+
+    # Developer/Tech Platforms
+    "github.com", "www.github.com",
+    "stackoverflow.com", "www.stackoverflow.com",
+    "stackexchange.com", "www.stackexchange.com",
+    "npmjs.com", "www.npmjs.com",
+    "pypi.org", "www.pypi.org",
+
+    # Cloud/Infrastructure
+    "cloudflare.com", "www.cloudflare.com",
+    "aws.amazon.com",
+    "azure.microsoft.com",
+    "cloud.google.com",
+
+    # App Stores
+    "play.google.com",
+    "apps.apple.com", "itunes.apple.com",
+
+    # Job Sites
+    "indeed.com", "www.indeed.com",
+    "glassdoor.com", "www.glassdoor.com",
+    "monster.com", "www.monster.com",
+
+    # Review Sites (generic)
+    "trustpilot.com", "www.trustpilot.com",
+    "yelp.com", "www.yelp.com",
+    "tripadvisor.com", "www.tripadvisor.com",
+
+    # Maps
+    "maps.google.com",
+    "maps.apple.com",
+}
+
+
+def _is_real_competitor(domain: str, target_domain: str) -> bool:
+    """
+    Check if a domain is a real business competitor.
+
+    Filters out:
+    - Social media platforms
+    - Search engines
+    - Generic platforms (Amazon, eBay, Wikipedia, etc.)
+    - The target domain itself
+    - Subdomains of non-competitor domains
+
+    Args:
+        domain: The potential competitor domain
+        target_domain: The domain being analyzed
+
+    Returns:
+        True if this is a real competitor, False otherwise
+    """
+    if not domain:
+        return False
+
+    domain_lower = domain.lower().strip()
+    target_lower = target_domain.lower().strip()
+
+    # Filter out the target domain itself
+    if domain_lower == target_lower or domain_lower.endswith(f".{target_lower}"):
+        return False
+
+    # Check against known non-competitor domains
+    if domain_lower in NON_COMPETITOR_DOMAINS:
+        return False
+
+    # Check if it's a subdomain of a non-competitor
+    for non_competitor in NON_COMPETITOR_DOMAINS:
+        if domain_lower.endswith(f".{non_competitor}"):
+            return False
+        # Also check root domain match (e.g., "m.facebook.com" -> "facebook.com")
+        root_domain = domain_lower.split(".")[-2] + "." + domain_lower.split(".")[-1] if domain_lower.count(".") >= 1 else domain_lower
+        if root_domain in NON_COMPETITOR_DOMAINS:
+            return False
+
+    return True
+
 
 def _safe_get_items(result: Dict, get_first: bool = True) -> List[Dict]:
     """
@@ -259,7 +386,11 @@ async def fetch_relevant_pages(client, domain: str, market: str, language: str) 
 
 
 async def fetch_competitors(client, domain: str, market: str, language: str) -> List[Dict]:
-    """Fetch organic competitors."""
+    """Fetch organic competitors.
+
+    IMPORTANT: Filters out non-competitors like social media, platforms, etc.
+    Only returns actual business competitors that share keyword overlap.
+    """
     try:
         result = await client.post(
             "dataforseo_labs/google/competitors_domain/live",
@@ -267,21 +398,39 @@ async def fetch_competitors(client, domain: str, market: str, language: str) -> 
                 "target": domain,
                 "location_name": market,
                 "language_name": language,
-                "limit": 20
+                "limit": 50  # Fetch more to allow for filtering
             }]
         )
 
         items = _safe_get_items(result)
 
-        return [
-            {
-                "domain": item.get("domain"),
+        competitors = []
+        for item in items:
+            competitor_domain = item.get("domain", "")
+
+            # Filter out non-competitors (social media, platforms, etc.)
+            if not _is_real_competitor(competitor_domain, domain):
+                logger.debug(f"Filtered non-competitor: {competitor_domain}")
+                continue
+
+            # Only include if there are meaningful common keywords
+            common_keywords = item.get("se_keywords", 0)
+            if common_keywords < 5:  # Must share at least 5 keywords
+                continue
+
+            competitors.append({
+                "domain": competitor_domain,
                 "relevance": item.get("avg_position"),
-                "common_keywords": item.get("se_keywords"),
+                "common_keywords": common_keywords,
                 "organic_traffic": (item.get("metrics") or {}).get("organic", {}).get("etv", 0),
-            }
-            for item in items
-        ]
+            })
+
+            # Stop after getting 20 real competitors
+            if len(competitors) >= 20:
+                break
+
+        logger.info(f"Found {len(competitors)} real competitors (filtered from {len(items)} raw results)")
+        return competitors
     except Exception as e:
         logger.error(f"Competitors failed: {e}")
         return []
