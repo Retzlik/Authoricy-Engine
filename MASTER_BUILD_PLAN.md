@@ -1,230 +1,194 @@
-# MASTER BUILD PLAN: Authoricy Intelligence Engine v4+v5
-
-## From Current State to Production-Ready SEO Intelligence System
+# MASTER BUILD PLAN: Authoricy Intelligence Engine
+## Complete Transformation from Current State to v4+v5 Production System
 
 **Created:** January 2026
+**Status:** CRITICAL - Current system produces unusable reports
 **Target:** Full v4 Infrastructure + v5 Prompt Engineering
-**Current State:** ~35% Complete (infrastructure only, analysis broken)
-**Target State:** Production-ready, generating actionable insights
+**Estimated Effort:** 20-30 development days
 
 ---
 
-# EXECUTIVE SUMMARY
+# PART 1: EXECUTIVE SUMMARY
 
 ## The Problem
 
-The current implementation collects data but produces **useless reports**:
-- Template text with no real insights
-- Wrong/impossible data (e.g., DR of 173)
-- Irrelevant keywords (Hungarian weather queries for Swedish sites)
-- Generic placeholder text instead of data-driven analysis
+The current system **collects data but produces garbage reports**:
+- Generic template text: "Based on comprehensive analysis..." (says nothing)
+- Placeholder recommendations: "Optimize existing high-potential pages" (which pages?)
+- Missing specific data: No actual keyword recommendations, no URLs, no metrics
+- Wrong architecture: 4 generic loops instead of 9 specialized agents
+- No quality gates: Garbage in → Garbage out
 
-**Root Cause:** We built the system backwards - data collection without methodology, no quality gates, generic Claude prompts instead of specialized agents.
+**Root Cause:** The system was built for data collection, not intelligence generation. The analysis layer is essentially a stub with generic prompts.
 
 ## The Solution
 
-Merge **v4 Technical Blueprint** (infrastructure, agents, scoring) with **v5 Prompt Engineering** (specialized prompts, few-shot examples, quality gates).
+Implement **v4 Technical Infrastructure** + **v5 Prompt Engineering**:
 
-## What Changes
-
-| Component | Current | v4+v5 Target |
-|-----------|---------|--------------|
-| Analysis Architecture | 4 generic loops | 9 specialized agents |
-| Prompts | Generic "analyze this" | Expert personas with few-shot examples |
-| Quality Control | None | 23/25 checks required to pass |
-| Output Format | Free text | Structured XML with schemas |
-| Scoring | None | Opportunity, Difficulty, Decay formulas |
-| Anti-patterns | Not detected | 6 anti-patterns actively avoided |
+| Component | Current | Required | Gap |
+|-----------|---------|----------|-----|
+| Analysis Architecture | 4 generic loops | 9 specialized agents | Complete rewrite |
+| Prompts | ~50 lines generic | ~500 lines per agent with examples | 10x more detailed |
+| Quality Gates | None | 25 checks, 23 required to pass | New system |
+| Scoring Formulas | None | Opportunity, Personalized Difficulty, Decay | New calculations |
+| Output Format | Free text | Structured XML with schemas | New parsing |
+| Report Content | Template placeholders | Data-driven specific recommendations | Complete rewrite |
 
 ---
 
-# PART 1: CURRENT STATE ANALYSIS
+# PART 2: DETAILED CURRENT STATE ANALYSIS
 
-## What Works
+## 2.1 What Currently Exists (and Works)
 
-### Data Collection (~75% complete)
-- Phase 1: Domain foundation (11 endpoints) ✅
-- Phase 2: Keyword intelligence (12-18 endpoints) ✅
-- Phase 3: Competitive analysis (14 endpoints) ⚠️ Some failures
-- Phase 4: AI visibility (9-11 endpoints) ⚠️ Some missing
-
-### Infrastructure (~90% complete)
-- FastAPI server with background jobs ✅
-- DataForSEO client with retry logic ✅
-- Authentication framework ✅
-- Rate limiting ✅
-- File-based persistence ✅
-
-### Report Framework (~20% complete)
-- Report generator class structure ✅
-- External/Internal builder skeletons ✅
-- Chart generator framework ✅
-- ❌ No HTML templates
-- ❌ No CSS styling
-- ❌ No real content generation
-
-## What's Broken
-
-### Analysis Engine (0% functional)
-- Loop 1-4 exist as stubs only
-- Prompts are generic, not specialized
-- No structured output parsing
-- No quality validation
-- Claude generates fluff, not insights
-
-### Report Output (0% useful)
-- Reports contain template placeholders
-- No data-driven narrative
-- Missing comparative context
-- No actionable recommendations
-
----
-
-# PART 2: V4 SPECIFICATION REQUIREMENTS
-
-## 2.1 Nine Specialized Agents (replacing 4 generic loops)
-
-| Agent | Expert Persona | Primary Output |
-|-------|---------------|----------------|
-| 1. Keyword Intelligence | Search demand analyst (10+ years) | Keyword clusters, intent mapping, opportunity scoring |
-| 2. Backlink Intelligence | Link building strategist | Link gap analysis, acquisition targets, velocity benchmarks |
-| 3. Technical SEO | Site architecture expert | Core Web Vitals, crawlability, indexation issues |
-| 4. Content Analysis | Content strategist | Content gaps, decay detection, optimization priorities |
-| 5. Semantic Architecture | Information architect | Topic clusters, internal linking, site structure |
-| 6. AI Visibility | AI search optimization expert | LLM mention tracking, AI SERP features, citation optimization |
-| 7. SERP Analysis | Search landscape analyst | SERP feature opportunities, competitive positioning |
-| 8. Local SEO | Local search specialist (conditional) | NAP consistency, local pack optimization |
-| 9. Master Strategy | Chief strategy synthesizer | Unified roadmap, priority matrix, executive summary |
-
-## 2.2 Scoring Formulas (v4 Technical)
-
-### Opportunity Score
+### Data Collection ✅ ~80% Complete
 ```
-Opportunity = (Search_Volume × CTR_Potential × (1 - Current_Position/100)) / Difficulty_Adjusted
+src/collector/
+├── client.py          ✅ DataForSEO client with retry logic
+├── orchestrator.py    ✅ Phase coordination, dependency handling
+├── phase1.py          ✅ 11 endpoints - domain foundation
+├── phase2.py          ✅ 12-18 endpoints - keyword intelligence
+├── phase3.py          ⚠️ 14 endpoints - some failures (link gap 500 errors)
+└── phase4.py          ⚠️ 9-11 endpoints - some missing AI endpoints
 ```
 
-### Personalized Difficulty (MarketMuse methodology)
-```
-PD = Base_Difficulty × (1 + Topical_Authority_Gap) × (1 - Domain_Strength_Ratio)
-```
+**Verdict:** Data collection works but has gaps. Needs hardening, not rewrite.
 
-### Content Decay Score
+### API & Infrastructure ✅ ~90% Complete
 ```
-Decay = Days_Since_Update × (1 - Traffic_Retention) × Competitive_Movement
-```
-
-## 2.3 Database Schema (v4 Technical)
-
-```
-jobs:
-  - id, domain, email, status, progress
-  - created_at, started_at, completed_at
-  - data_cost, analysis_cost, total_cost
-  - quality_score, error_log
-
-analysis_results:
-  - job_id, agent_name, raw_output
-  - structured_output (JSON), quality_checks
-  - tokens_used, cost
-
-reports:
-  - job_id, type (external/internal)
-  - pdf_url, html_content, pages
-  - generated_at
+api/analyze.py         ✅ FastAPI endpoints, background jobs
+src/auth/              ✅ API key management, rate limiting
+src/persistence/       ✅ File storage, caching
+src/delivery/          ✅ Email delivery via Resend
 ```
 
-## 2.4 Agent Python Classes (v4 Technical)
+**Verdict:** Infrastructure is solid. Keep as-is.
 
-Each agent follows this structure:
+## 2.2 What Currently Exists (and is BROKEN)
+
+### Analysis Engine ❌ 0% Usable
+
+**Current Architecture (WRONG):**
+```
+src/analyzer/
+├── engine.py          ❌ Orchestrates 4 generic loops
+├── loop1.py           ❌ Generic "interpret data" prompt
+├── loop2.py           ❌ Generic "synthesize strategy" prompt
+├── loop3.py           ❌ Stub - enrichment not implemented
+└── loop4.py           ❌ Generic quality review
+```
+
+**Current Loop 1 Prompt (Example of the Problem):**
 ```python
-class KeywordIntelligenceAgent:
-    def __init__(self, claude_client, data):
-        self.client = claude_client
-        self.data = data
-        self.persona = KEYWORD_EXPERT_PERSONA
+SYSTEM_PROMPT = """You are an expert SEO analyst with 15 years of experience..."""
 
-    async def analyze(self) -> AgentOutput:
-        # 1. Prepare context from data
-        context = self._prepare_context()
+# This is the ENTIRE guidance given to Claude:
+# - No expert persona with behavioral constraints
+# - No few-shot examples
+# - No quality gates
+# - No structured output schema
+# - No scoring formulas
+# - No anti-patterns to avoid
+```
 
-        # 2. Run analysis with specialized prompt
-        raw_output = await self.client.complete(
-            system=self.persona,
-            prompt=self._build_prompt(context),
-            examples=FEW_SHOT_EXAMPLES
-        )
+**Result:** Claude generates vague, generic text that could apply to any website.
 
-        # 3. Parse structured output
-        structured = self._parse_xml_output(raw_output)
+### Report Generation ❌ 10% Usable
 
-        # 4. Run quality checks
-        quality = self._run_quality_checks(structured)
+**Current Report Content:**
+```html
+<!-- From external.py - this is what gets generated -->
+<div class="finding">
+    <div class="finding-title">1. Current Organic Position</div>
+    <p>Based on comprehensive analysis of your domain's organic visibility.</p>
+</div>
+```
 
-        # 5. Return validated output
-        return AgentOutput(
-            agent="keyword_intelligence",
-            structured=structured,
-            quality=quality,
-            passed=quality.score >= 23/25
-        )
+**Problem:** This says NOTHING. No specific keywords, no URLs, no metrics, no actions.
+
+**What v5 Requires:**
+```html
+<div class="finding">
+    <div class="finding-title">1. Target "enterprise project management software" (2,400 vol, KD 52)</div>
+    <p>Your DR 52 matches top-10 average. Create 2,500-word comparison page at
+    /solutions/enterprise-project-management/. Expected: Position 5-8 within 90 days,
+    +190 monthly visits. Confidence: 0.85</p>
+</div>
 ```
 
 ---
 
-# PART 3: V5 PROMPT ENGINEERING REQUIREMENTS
+# PART 3: V4 + V5 REQUIREMENTS COMPARISON
 
-## 3.1 Seven Core Principles
+## 3.1 Architecture Comparison
 
-### 1. Specificity Over Generality
-❌ BAD: "Improve your content quality"
-✅ GOOD: "Your /pricing page has 47% less content depth than competitor average (234 words vs 442). Add comparison tables and FAQ sections."
-
-### 2. Data-Grounded Assertions
-❌ BAD: "You have strong backlinks"
-✅ GOOD: "Your DR 45 trails competitor median of 52 by 7 points. 73% of your backlinks come from 3 referring domains."
-
-### 3. Comparative Context
-❌ BAD: "Your traffic is declining"
-✅ GOOD: "Traffic down 23% while competitor average grew 12% - a 35-point swing indicating market share loss."
-
-### 4. Actionable Specificity
-❌ BAD: "Create more content"
-✅ GOOD: "Create pillar page for 'produktutveckling' (2,400 vol, KD 34) targeting informational intent, linking to 5 existing cluster pages."
-
-### 5. Confidence Calibration
-❌ BAD: "This will definitely work"
-✅ GOOD: "High confidence (historical data supports): Technical fixes. Medium confidence (requires testing): Content expansion. Low confidence (market dependent): Link acquisition timeline."
-
-### 6. Chain-of-Thought Reasoning
-Show the analytical process:
+### Current: 4 Generic Loops
 ```
-Given: DR 45, 1,200 referring domains, 15,000 organic keywords
-Observation: DR below competitor median (52)
-Analysis: Gap is primarily in editorial links (you: 12%, competitors: 34%)
-Implication: Content-driven link building should be priority
-Recommendation: Launch linkable asset program targeting industry publications
+Loop 1: Data Interpretation    → Generic prompt, free-text output
+Loop 2: Strategic Synthesis    → Generic prompt, free-text output
+Loop 3: SERP Enrichment        → Stub (not implemented)
+Loop 4: Quality Review         → Generic 8-dimension scoring
 ```
 
-### 7. Structured XML Output
-```xml
-<finding confidence="high" priority="1">
-  <observation>Technical SEO score 67/100, 23 points below competitor median</observation>
-  <evidence>
-    <metric name="LCP" value="4.2s" benchmark="2.5s" gap="-1.7s"/>
-    <metric name="CLS" value="0.25" benchmark="0.1" gap="-0.15"/>
-  </evidence>
-  <impact>Estimated 15-20% traffic loss from Core Web Vitals penalty</impact>
-  <action effort="medium" timeline="2-4 weeks">
-    Implement image lazy loading and font-display:swap
-  </action>
-</finding>
+### Required: 9 Specialized Agents (from v4)
+```
+1. Keyword Intelligence Agent     → Expert persona, structured output, scoring formulas
+2. Backlink Intelligence Agent    → Link gap analysis, strategy selection matrix
+3. Technical SEO Agent            → CWV analysis, issue prioritization
+4. Content Analysis Agent         → Decay detection, KUCK recommendations
+5. Semantic Architecture Agent    → Topical maps, SERP-validated clustering
+6. AI Visibility Agent            → GEO optimization, citation tracking
+7. SERP Analysis Agent            → Feature analysis, format requirements
+8. Local SEO Agent (conditional)  → NAP, local pack optimization
+9. Master Strategy Agent          → Synthesize all outputs into unified plan
 ```
 
-## 3.2 Quality Gates (23/25 Required)
+## 3.2 Prompt Engineering Comparison
 
-Each agent output must pass these checks:
+### Current Prompt (Loop 1 - 36 lines)
+```python
+SYSTEM_PROMPT = """You are an expert SEO analyst with 15 years of experience...
+## CRITICAL RULES
+1. Every claim must cite specific data...
+"""
+# No persona, no examples, no quality checks, no output schema
+```
 
-### Specificity Checks (7)
+### Required Prompt (v5 Keyword Agent - ~500 lines)
+```python
+SYSTEM_PROMPT = """
+You are a Senior Keyword Strategist with 15 years of experience at enterprise SEO agencies
+(BrightEdge, Conductor, iProspect, Terakeet). You have personally managed keyword strategies
+for Fortune 500 companies including Microsoft, Salesforce, and Adobe...
+
+<behavioral_constraints>
+You NEVER say:
+- "Consider focusing on long-tail keywords" (too vague - which keywords?)
+- "Build topical authority" (without a specific topic map with keywords)
+- "Create quality content" (meaningless without specific content specifications)
+...
+You ALWAYS:
+- Reference specific numbers from the data (search volume, position, KD, etc.)
+- Compare against specific competitors or benchmarks
+...
+</behavioral_constraints>
+
+<quality_standard>
+Your output should match what a €15,000/month agency delivers after 3 months of analysis.
+If a CMO could apply this analysis to any other website, you have failed.
+</quality_standard>
+"""
+
+# Plus: Few-shot examples, output schema, quality gates (25 checks)
+```
+
+## 3.3 Quality Gates Comparison
+
+### Current: None
+The current system has no quality validation. Whatever Claude outputs goes directly to the report.
+
+### Required (v5): 25 Checks, 23 Must Pass
+
+**Specificity Checks (7):**
 - [ ] Contains specific numbers, not vague qualifiers
 - [ ] References actual pages/URLs from the domain
 - [ ] Includes competitor-specific comparisons
@@ -233,7 +197,7 @@ Each agent output must pass these checks:
 - [ ] Avoids weasel words ("might", "could", "potentially")
 - [ ] Includes timeframes for recommendations
 
-### Actionability Checks (6)
+**Actionability Checks (6):**
 - [ ] Each finding has clear next step
 - [ ] Actions are prioritized (P1/P2/P3)
 - [ ] Effort estimates included
@@ -241,7 +205,7 @@ Each agent output must pass these checks:
 - [ ] Success metrics defined
 - [ ] Owner/role suggested
 
-### Data-Grounding Checks (6)
+**Data-Grounding Checks (6):**
 - [ ] Every claim cites source data
 - [ ] Metrics include context (benchmark, trend)
 - [ ] Comparisons use same time periods
@@ -249,7 +213,7 @@ Each agent output must pass these checks:
 - [ ] Data limitations acknowledged
 - [ ] Confidence levels assigned
 
-### Non-Generic Checks (6)
+**Non-Generic Checks (6):**
 - [ ] No placeholder text
 - [ ] No "best practice" without customization
 - [ ] Industry-specific context applied
@@ -257,515 +221,682 @@ Each agent output must pass these checks:
 - [ ] Competitive landscape reflected
 - [ ] Unique opportunities identified
 
-## 3.3 Anti-Patterns to Avoid
+## 3.4 Scoring Formulas (v4) - Currently Missing
 
-### 1. Hedge Everything
-❌ "You might want to consider possibly looking into maybe improving..."
-✅ "Implement lazy loading on /products page to reduce LCP from 4.2s to under 2.5s"
+### Opportunity Score
+```python
+Opportunity_Score = (
+    Volume_Score × 0.20 +
+    Difficulty_Inverse × 0.20 +
+    Business_Intent × 0.20 +
+    Position_Gap × 0.20 +
+    Topical_Alignment × 0.20
+) × Freshness_Modifier
 
-### 2. Generic Best Practice
-❌ "Follow SEO best practices for meta descriptions"
-✅ "Your /services meta description (47 chars) underperforms. Expand to 145-155 chars including primary keyword 'konsulttjänster' and unique value prop."
-
-### 3. Data Dump
-❌ Listing 500 keywords without analysis
-✅ "Top 3 opportunity clusters: [cluster 1] 12,400 combined vol, KD 28-34, current coverage 23%..."
-
-### 4. Obvious Observation
-❌ "Competitors rank higher than you"
-✅ "Competitor A outranks you on 67% of shared keywords, specifically dominating informational queries (82% vs 34% coverage)"
-
-### 5. Missing "So What"
-❌ "Your bounce rate is 65%"
-✅ "65% bounce rate on /pricing (vs 42% site average) suggests pricing page doesn't match search intent. Users searching 'pris' expect comparison tables."
-
-### 6. Contradictory Recommendations
-❌ "Focus on technical SEO" AND "Focus on content" AND "Focus on links"
-✅ "Phase 1 (weeks 1-4): Technical fixes (blocking issues). Phase 2 (weeks 5-12): Content expansion. Phase 3 (ongoing): Link acquisition."
-
-## 3.4 Few-Shot Examples Format
-
-Each agent prompt includes:
+# Intent weights: Transactional=100, Commercial=75, Informational=50, Navigational=25
+# CTR curve: Pos1=31.7%, Pos2=24.7%, Pos3=18.7%...
 ```
-## Examples
 
-### Good Example (Score: 24/25)
-<input>
-[Abbreviated real data snapshot]
-</input>
-<output>
-[Full structured output demonstrating all principles]
-</output>
-<why_good>
-- Specific metrics with benchmarks
-- Clear action items with effort estimates
-- Proper confidence calibration
-</why_good>
+### Personalized Difficulty (MarketMuse Methodology)
+```python
+Personal_KD = Base_KD × (1 - Authority_Advantage)
 
-### Bad Example (Score: 12/25)
-<input>
-[Same data snapshot]
-</input>
-<output>
-[Typical generic output]
-</output>
-<why_bad>
-- Vague language ("improve your SEO")
-- No specific metrics or comparisons
-- Generic recommendations without customization
-</why_bad>
+Authority_Advantage = min(0.5,
+    (Site_DR - Avg_SERP_DR) / 100 +
+    Topical_Authority_Bonus
+)
+
+Topical_Authority_Bonus = min(0.3,
+    count(ranked_keywords in same category) / 100
+)
+```
+
+### Content Decay Score
+```python
+Decay_Score = (
+    (Peak_Traffic - Current_Traffic) / Peak_Traffic × 0.40 +
+    (Peak_Position - Current_Position) / 10 × 0.30 +
+    (Peak_CTR - Current_CTR) / Peak_CTR × 0.20 +
+    Age_Factor × 0.10
+)
+
+# Thresholds: >0.5 Critical, 0.3-0.5 Major, 0.1-0.3 Light, <0.1 Monitor
 ```
 
 ---
 
-# PART 4: GAP ANALYSIS - CURRENT vs V4+V5
+# PART 4: IMPLEMENTATION PLAN
 
-## 4.1 Architecture Gap
-
-| Component | Current | V4+V5 Required | Gap |
-|-----------|---------|----------------|-----|
-| Analysis units | 4 loops | 9 agents | +5 agents, different paradigm |
-| Prompt structure | Single generic | Persona + examples + schema | Complete rewrite |
-| Output format | Free text | Structured XML | New parsing layer |
-| Quality control | None | 23/25 gate | New validation system |
-| Scoring | None | 3 formulas | New calculation layer |
-
-## 4.2 Code Changes Required
-
-### New Files to Create
-```
-src/agents/
-  ├── __init__.py
-  ├── base.py              # BaseAgent class with quality checks
-  ├── keyword.py           # KeywordIntelligenceAgent
-  ├── backlink.py          # BacklinkIntelligenceAgent
-  ├── technical.py         # TechnicalSEOAgent
-  ├── content.py           # ContentAnalysisAgent
-  ├── semantic.py          # SemanticArchitectureAgent
-  ├── ai_visibility.py     # AIVisibilityAgent
-  ├── serp.py              # SERPAnalysisAgent
-  ├── local.py             # LocalSEOAgent (conditional)
-  └── master.py            # MasterStrategyAgent
-
-src/prompts/
-  ├── __init__.py
-  ├── personas.py          # Expert persona definitions
-  ├── keyword_prompt.py    # Full prompt with examples
-  ├── backlink_prompt.py
-  ├── technical_prompt.py
-  ├── content_prompt.py
-  ├── semantic_prompt.py
-  ├── ai_visibility_prompt.py
-  ├── serp_prompt.py
-  ├── local_prompt.py
-  └── master_prompt.py
-
-src/scoring/
-  ├── __init__.py
-  ├── opportunity.py       # Opportunity Score calculation
-  ├── difficulty.py        # Personalized Difficulty calculation
-  └── decay.py             # Content Decay Score calculation
-
-src/quality/
-  ├── gates.py             # Quality gate definitions (exists, needs update)
-  ├── checks.py            # 25 individual check implementations
-  └── anti_patterns.py     # Anti-pattern detection
-
-src/output/
-  ├── __init__.py
-  ├── schemas.py           # XML output schemas
-  └── parser.py            # XML parsing and validation
-```
-
-### Files to Modify
-```
-src/analyzer/engine.py     # Replace loop orchestration with agent orchestration
-src/analyzer/client.py     # Add structured output support
-src/reporter/external.py   # Consume agent outputs
-src/reporter/internal.py   # Consume agent outputs
-api/analyze.py             # Update pipeline
-```
-
-### Files to Delete/Replace
-```
-src/analyzer/loop1.py      # Replace with agents
-src/analyzer/loop2.py
-src/analyzer/loop3.py
-src/analyzer/loop4.py
-```
-
-## 4.3 Data Collection Gaps
-
-### Missing Endpoints (15 total)
-```
-Phase 2:
-- keywords_data/google_ads/search_volume (validation)
-
-Phase 3:
-- historical_rank_overview ×4 (competitor trajectories)
-- backlinks/competitors
-- backlinks/bulk_ranks
-- backlinks/bulk_referring_domains
-
-Phase 4:
-- ai_optimization/keyword_data/search_volume
-- ai_optimization/llm_response ×3 (ChatGPT brand, topic, Perplexity)
-- ai_optimization/llm_mentions/aggregated_metrics
-- ai_optimization/llm_mentions/top_domains
-- ai_optimization/llm_mentions/top_pages
-- ai_optimization/llm_mentions/cross_aggregated_metrics
-```
-
----
-
-# PART 5: MASTER BUILD PLAN - PHASED IMPLEMENTATION
-
-## Phase 0: Stabilization (Current Sprint - 1-2 days)
+## Phase 0: Stabilization (Days 1-2) ✅ MOSTLY DONE
 **Goal:** Ensure data collection works reliably
 
-### Tasks
-- [x] Fix API parameter errors (language_code, item_types, etc.)
+- [x] Fix API parameter errors (language_code, item_types)
 - [x] Fix NoneType errors in collectors and reporters
 - [x] Make non-critical failures non-fatal
-- [ ] Verify all Phase 1-4 endpoints return valid data
-- [ ] Add comprehensive error logging
+- [ ] Add comprehensive logging for debugging
+- [ ] Verify all 45 endpoints return valid data
 
-### Deliverable
-Data collection completes without crashes, returns valid JSON for all phases.
+**Deliverable:** Data collection completes without crashes.
 
 ---
 
-## Phase 1: Agent Architecture Foundation (3-4 days)
-**Goal:** Create the new agent-based architecture
+## Phase 1: Scoring Engine (Days 3-5)
+**Goal:** Implement the three core scoring formulas
 
-### 1.1 Base Agent Framework
+### 1.1 Create Scoring Module
+```
+src/scoring/
+├── __init__.py
+├── opportunity.py      # Opportunity Score calculation
+├── difficulty.py       # Personalized Difficulty calculation
+├── decay.py            # Content Decay Score calculation
+└── helpers.py          # CTR curve, intent weights, etc.
+```
+
+### 1.2 Opportunity Score Implementation
+```python
+# src/scoring/opportunity.py
+import math
+from typing import Dict, Any, List
+
+CTR_CURVE = {
+    1: 0.317, 2: 0.247, 3: 0.187, 4: 0.133, 5: 0.095,
+    6: 0.069, 7: 0.051, 8: 0.038, 9: 0.029, 10: 0.022
+}
+
+INTENT_WEIGHTS = {
+    "transactional": 100,
+    "commercial": 75,
+    "informational": 50,
+    "navigational": 25,
+}
+
+def calculate_opportunity_score(
+    keyword: Dict[str, Any],
+    domain_data: Dict[str, Any],
+    max_volume: int
+) -> float:
+    """Calculate Opportunity Score (0-100) for a keyword."""
+    volume = keyword.get("search_volume", 0)
+    current_pos = keyword.get("position") or 100
+    base_kd = keyword.get("keyword_difficulty", 50)
+    intent = keyword.get("intent", "informational").lower()
+
+    # Volume Score (logarithmic normalization)
+    volume_score = min(100,
+        (math.log10(volume + 1) / math.log10(max_volume + 1)) * 100
+    ) if volume > 0 else 0
+
+    # Calculate personalized difficulty first
+    personal_kd = calculate_personalized_difficulty(keyword, domain_data)
+    difficulty_inverse = 100 - personal_kd
+
+    # Business Intent Score
+    business_intent = INTENT_WEIGHTS.get(intent, 50)
+
+    # Position Gap (traffic opportunity)
+    target_pos = 1 if current_pos > 3 else max(1, current_pos - 2)
+    current_ctr = CTR_CURVE.get(min(current_pos, 10), 0.01)
+    target_ctr = CTR_CURVE.get(target_pos, 0.317)
+    position_gap = min(100, (target_ctr - current_ctr) * volume / 100)
+
+    # Topical Alignment (simplified)
+    topical_alignment = 75  # Default, adjusted based on category match
+
+    # Final score
+    return round(
+        volume_score * 0.20 +
+        difficulty_inverse * 0.20 +
+        business_intent * 0.20 +
+        position_gap * 0.20 +
+        topical_alignment * 0.20
+    )
+```
+
+### 1.3 Personalized Difficulty Implementation
+```python
+# src/scoring/difficulty.py
+def calculate_personalized_difficulty(
+    keyword: Dict[str, Any],
+    domain_data: Dict[str, Any]
+) -> float:
+    """
+    Calculate Personalized Keyword Difficulty (MarketMuse methodology).
+
+    Lower than base KD if you have topical authority advantage.
+    """
+    base_kd = keyword.get("keyword_difficulty", 50)
+    site_dr = domain_data.get("domain_rank", 30)
+
+    # Get topical authority bonus from category data
+    categories = domain_data.get("categories", [])
+    keyword_category = keyword.get("category")
+
+    topical_bonus = 0
+    if keyword_category and categories:
+        matching = [c for c in categories if c.get("code") == keyword_category]
+        if matching:
+            # More keywords ranking in this category = higher authority
+            category_keywords = matching[0].get("keyword_count", 0)
+            topical_bonus = min(0.3, category_keywords / 100)
+
+    # Authority advantage
+    authority_advantage = min(0.5,
+        max(0, (site_dr - 50) / 100) + topical_bonus
+    )
+
+    return round(base_kd * (1 - authority_advantage))
+```
+
+### 1.4 Content Decay Score Implementation
+```python
+# src/scoring/decay.py
+def calculate_decay_score(
+    page: Dict[str, Any],
+    historical_data: List[Dict[str, Any]]
+) -> float:
+    """
+    Calculate Content Decay Score (0-1).
+
+    >0.5: Critical refresh needed
+    0.3-0.5: Major update recommended
+    0.1-0.3: Light refresh
+    <0.1: Monitor only
+    """
+    if not historical_data:
+        return 0.0
+
+    # Find peak metrics
+    peak_traffic = max(h.get("traffic", 0) for h in historical_data)
+    peak_position = min(h.get("position", 100) for h in historical_data)
+
+    # Current metrics
+    current_traffic = page.get("traffic", 0)
+    current_position = page.get("position", 100)
+
+    # Calculate decay components
+    traffic_decay = (peak_traffic - current_traffic) / max(peak_traffic, 1)
+    position_decay = (current_position - peak_position) / 10
+
+    # Age factor (months since last update)
+    months_old = page.get("months_since_update", 12)
+    age_factor = min(1.0, months_old / 24)
+
+    return round(
+        traffic_decay * 0.40 +
+        position_decay * 0.30 +
+        age_factor * 0.30,
+        2
+    )
+```
+
+**Deliverable:** Scoring module with all three formulas, tested with real data.
+
+---
+
+## Phase 2: Agent Architecture Foundation (Days 6-10)
+**Goal:** Create the 9-agent architecture replacing 4 loops
+
+### 2.1 Base Agent Class
 ```python
 # src/agents/base.py
-class BaseAgent:
-    persona: str
-    prompt_template: str
-    output_schema: dict
-    quality_checks: List[QualityCheck]
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional
+import json
 
-    async def analyze(self, data: dict) -> AgentOutput
-    def _prepare_context(self, data: dict) -> str
-    def _parse_output(self, raw: str) -> dict
-    def _run_quality_checks(self, output: dict) -> QualityResult
+@dataclass
+class AgentOutput:
+    """Standardized output from all agents."""
+    agent_name: str
+    findings: List[Dict[str, Any]]
+    recommendations: List[Dict[str, Any]]
+    metrics: Dict[str, float]
+    raw_output: str
+    quality_score: float
+    quality_checks: Dict[str, bool]
+    confidence: float
+
+class BaseAgent(ABC):
+    """Base class for all analysis agents."""
+
+    def __init__(self, client):
+        self.client = client
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Agent identifier."""
+        pass
+
+    @property
+    @abstractmethod
+    def system_prompt(self) -> str:
+        """Full system prompt with persona and constraints."""
+        pass
+
+    @property
+    @abstractmethod
+    def analysis_prompt_template(self) -> str:
+        """Template with {{placeholders}} for data."""
+        pass
+
+    @property
+    @abstractmethod
+    def output_schema(self) -> Dict[str, Any]:
+        """Expected output structure."""
+        pass
+
+    @property
+    @abstractmethod
+    def required_data(self) -> List[str]:
+        """List of required data keys from collection."""
+        pass
+
+    async def analyze(self, collected_data: Dict[str, Any]) -> AgentOutput:
+        """Run analysis and return structured output."""
+        # 1. Validate required data present
+        self._validate_data(collected_data)
+
+        # 2. Prepare prompt with data interpolation
+        prompt = self._prepare_prompt(collected_data)
+
+        # 3. Call Claude
+        raw_output = await self.client.complete(
+            system=self.system_prompt,
+            prompt=prompt,
+            max_tokens=8000,
+            temperature=0.3,
+        )
+
+        # 4. Parse structured output
+        parsed = self._parse_output(raw_output)
+
+        # 5. Run quality checks
+        quality_score, checks = self._run_quality_checks(parsed)
+
+        return AgentOutput(
+            agent_name=self.name,
+            findings=parsed.get("findings", []),
+            recommendations=parsed.get("recommendations", []),
+            metrics=parsed.get("metrics", {}),
+            raw_output=raw_output,
+            quality_score=quality_score,
+            quality_checks=checks,
+            confidence=parsed.get("confidence", 0.5),
+        )
+
+    def _run_quality_checks(self, parsed: Dict) -> tuple:
+        """Run 25 quality checks, return score and individual results."""
+        checks = {}
+
+        # Specificity checks (7)
+        checks["has_specific_numbers"] = self._check_specific_numbers(parsed)
+        checks["has_specific_urls"] = self._check_specific_urls(parsed)
+        checks["has_competitor_comparisons"] = self._check_competitors(parsed)
+        checks["has_measurable_targets"] = self._check_targets(parsed)
+        checks["uses_precise_terminology"] = self._check_terminology(parsed)
+        checks["avoids_weasel_words"] = self._check_weasel_words(parsed)
+        checks["has_timeframes"] = self._check_timeframes(parsed)
+
+        # Actionability checks (6)
+        checks["has_clear_actions"] = self._check_actions(parsed)
+        checks["has_priorities"] = self._check_priorities(parsed)
+        checks["has_effort_estimates"] = self._check_effort(parsed)
+        checks["has_dependencies"] = self._check_dependencies(parsed)
+        checks["has_success_metrics"] = self._check_success_metrics(parsed)
+        checks["has_owners"] = self._check_owners(parsed)
+
+        # Data-grounding checks (6)
+        checks["cites_source_data"] = self._check_citations(parsed)
+        checks["has_benchmarks"] = self._check_benchmarks(parsed)
+        checks["consistent_time_periods"] = True  # Simplified
+        checks["notes_significance"] = True  # Simplified
+        checks["acknowledges_limitations"] = self._check_limitations(parsed)
+        checks["has_confidence_levels"] = self._check_confidence(parsed)
+
+        # Non-generic checks (6)
+        checks["no_placeholder_text"] = self._check_no_placeholders(parsed)
+        checks["customized_advice"] = self._check_customization(parsed)
+        checks["industry_specific"] = True  # Simplified
+        checks["considers_history"] = True  # Simplified
+        checks["reflects_competition"] = self._check_competition_reflection(parsed)
+        checks["unique_opportunities"] = self._check_unique_opps(parsed)
+
+        passed = sum(1 for v in checks.values() if v)
+        score = passed / 25 * 10  # Convert to 0-10 scale
+
+        return score, checks
 ```
 
-### 1.2 Quality Check System
+### 2.2 Quality Checker Module
+```
+src/quality/
+├── __init__.py
+├── checks.py           # Individual check implementations
+├── anti_patterns.py    # Anti-pattern detection
+└── validator.py        # Overall validation orchestration
+```
+
+### 2.3 Create All 9 Agent Files
+```
+src/agents/
+├── __init__.py
+├── base.py
+├── keyword_intelligence.py    # ~400 lines with full v5 prompt
+├── backlink_intelligence.py   # ~350 lines
+├── technical_seo.py           # ~300 lines
+├── content_analysis.py        # ~350 lines
+├── semantic_architecture.py   # ~300 lines
+├── ai_visibility.py           # ~300 lines
+├── serp_analysis.py           # ~250 lines
+├── local_seo.py               # ~200 lines (conditional)
+└── master_strategy.py         # ~400 lines (synthesizer)
+```
+
+**Deliverable:** Complete agent architecture with base class and quality checks.
+
+---
+
+## Phase 3: Implement Core Agents (Days 11-17)
+**Goal:** Implement the 9 specialized agents with v5 prompts
+
+### 3.1 Keyword Intelligence Agent (Days 11-12)
+
+Full implementation with:
+- Expert persona (Senior Keyword Strategist, 15 years experience)
+- Behavioral constraints (NEVER say vague things, ALWAYS cite data)
+- Analysis prompt with data placeholders
+- Few-shot examples (good AND bad)
+- Output schema for structured parsing
+- Scoring formula integration (Opportunity Score, Personalized Difficulty)
+
+### 3.2 Backlink Intelligence Agent (Days 12-13)
+
+Full implementation with:
+- Expert persona (Senior Link Building Strategist)
+- Strategy selection matrix (Digital PR, HARO, Guest Posting, etc.)
+- Link gap analysis with acquisition difficulty
+- Anchor text health assessment
+- 12-month link building roadmap
+
+### 3.3 Technical SEO Agent (Day 13)
+
+Full implementation with:
+- Core Web Vitals analysis (2025 thresholds: LCP 2.5s, INP 200ms, CLS 0.1)
+- Issue prioritization (Critical/High/Medium/Low)
+- Specific fix recommendations with effort estimates
+- Schema markup assessment
+
+### 3.4 Content Analysis Agent (Days 14-15)
+
+Full implementation with:
+- Content inventory analysis
+- Decay detection using formula
+- Keep/Update/Consolidate/Kill recommendations
+- 12-month content calendar
+
+### 3.5 Semantic Architecture Agent (Day 15)
+
+Full implementation with:
+- SERP-validated clustering (5+ URL overlap)
+- Pillar-cluster structure
+- Internal linking plan
+- URL hierarchy recommendations
+
+### 3.6 AI Visibility Agent (Day 16)
+
+Full implementation with:
+- AI Overview presence analysis
+- GEO readiness assessment
+- Citation opportunity identification
+- GEO optimization checklist
+
+### 3.7 SERP Analysis Agent (Day 16)
+
+Full implementation with:
+- SERP feature distribution
+- Content format analysis
+- Featured snippet opportunities
+
+### 3.8 Local SEO Agent (Day 16 - conditional)
+
+Triggered only when local signals detected.
+
+### 3.9 Master Strategy Agent (Day 17)
+
+Full implementation with:
+- Cross-agent pattern identification
+- Conflict resolution
+- Unified priority stack (Top 10)
+- 90-day implementation roadmap
+- Executive summary generation
+
+**Deliverable:** All 9 agents fully implemented with v5 prompts.
+
+---
+
+## Phase 4: Output Parsing & Validation (Days 18-19)
+**Goal:** Parse agent outputs into structured data
+
+### 4.1 XML Output Parser
 ```python
-# src/quality/checks.py
-class QualityChecker:
-    def check_specificity(self, output: dict) -> List[CheckResult]  # 7 checks
-    def check_actionability(self, output: dict) -> List[CheckResult]  # 6 checks
-    def check_data_grounding(self, output: dict) -> List[CheckResult]  # 6 checks
-    def check_non_generic(self, output: dict) -> List[CheckResult]  # 6 checks
+# src/output/parser.py
+import re
+from typing import Dict, Any, List
 
-    def evaluate(self, output: dict) -> QualityResult:
-        # Returns score out of 25, must be >= 23 to pass
+def parse_agent_output(raw_output: str, schema: Dict) -> Dict[str, Any]:
+    """Parse XML-tagged agent output into structured data."""
+    result = {}
+
+    # Extract findings
+    findings_match = re.findall(
+        r'<finding confidence="([^"]+)" priority="(\d+)">(.*?)</finding>',
+        raw_output,
+        re.DOTALL
+    )
+    result["findings"] = [
+        {
+            "confidence": float(m[0]),
+            "priority": int(m[1]),
+            "content": parse_finding_content(m[2])
+        }
+        for m in findings_match
+    ]
+
+    # Extract recommendations
+    recs_match = re.findall(
+        r'<recommendation priority="(\d+)">(.*?)</recommendation>',
+        raw_output,
+        re.DOTALL
+    )
+    result["recommendations"] = [
+        {
+            "priority": int(m[0]),
+            "content": parse_recommendation_content(m[1])
+        }
+        for m in recs_match
+    ]
+
+    # Extract metrics
+    metrics_match = re.findall(
+        r'<metric name="([^"]+)" value="([^"]+)"',
+        raw_output
+    )
+    result["metrics"] = {m[0]: parse_metric_value(m[1]) for m in metrics_match}
+
+    return result
 ```
 
-### 1.3 Output Schema System
+### 4.2 Schema Definitions
 ```python
 # src/output/schemas.py
-KEYWORD_OUTPUT_SCHEMA = {
-    "clusters": [...],
-    "opportunities": [...],
-    "intent_mapping": [...],
-    "priority_keywords": [...]
+KEYWORD_AGENT_SCHEMA = {
+    "portfolio_health": {
+        "total_keywords": "int",
+        "position_distribution": {"top_3": "int", "top_10": "int", ...},
+        "intent_distribution": {"transactional": "int", ...},
+    },
+    "opportunities": [
+        {
+            "keyword": "str",
+            "volume": "int",
+            "current_position": "int|null",
+            "personalized_difficulty": "int",
+            "opportunity_score": "int",
+            "recommendation": "str",
+        }
+    ],
+    "quick_wins": [...],
+    "gaps": [...],
 }
 ```
 
-### Deliverable
-- BaseAgent class with quality check integration
-- 25 quality check implementations
-- Output schema definitions
-- Anti-pattern detector
+**Deliverable:** Parsing system that converts agent outputs to structured data.
 
 ---
 
-## Phase 2: Core Agents Implementation (5-7 days)
-**Goal:** Implement the 9 specialized agents
+## Phase 5: Report Generation Overhaul (Days 20-23)
+**Goal:** Generate data-driven reports from agent outputs
 
-### 2.1 Keyword Intelligence Agent (Day 1)
-- Expert persona: Search demand analyst
-- Inputs: ranked_keywords, keyword_universe, search_intent, suggestions
-- Outputs: Clusters, opportunity scores, intent mapping
-- Scoring: Opportunity Score formula
+### 5.1 Replace Template Placeholders
 
-### 2.2 Backlink Intelligence Agent (Day 2)
-- Expert persona: Link building strategist
-- Inputs: backlinks, referring_domains, anchors, link_velocity
-- Outputs: Link gap analysis, acquisition targets, authority benchmarks
-- Scoring: Link quality metrics
-
-### 2.3 Technical SEO Agent (Day 3)
-- Expert persona: Site architecture expert
-- Inputs: lighthouse audits, technologies, page speed
-- Outputs: CWV issues, crawlability problems, indexation recommendations
-- Scoring: Technical health score
-
-### 2.4 Content Analysis Agent (Day 4)
-- Expert persona: Content strategist
-- Inputs: top_pages, content_analysis, traffic trends
-- Outputs: Content gaps, decay detection, optimization priorities
-- Scoring: Content Decay Score formula
-
-### 2.5 Semantic Architecture Agent (Day 4)
-- Expert persona: Information architect
-- Inputs: site structure, internal links, topic coverage
-- Outputs: Topic clusters, linking recommendations, hierarchy fixes
-
-### 2.6 AI Visibility Agent (Day 5)
-- Expert persona: AI search optimization expert
-- Inputs: llm_mentions, ai_keywords, brand sentiment
-- Outputs: AI SERP opportunities, citation optimization, brand presence
-
-### 2.7 SERP Analysis Agent (Day 5)
-- Expert persona: Search landscape analyst
-- Inputs: serp_competitors, SERP features, rankings
-- Outputs: Feature opportunities, competitive gaps, SERP strategy
-
-### 2.8 Local SEO Agent (Day 6 - conditional)
-- Expert persona: Local search specialist
-- Inputs: local rankings, GMB data (if applicable)
-- Outputs: NAP fixes, local pack strategy
-- Triggered: Only for businesses with local intent
-
-### 2.9 Master Strategy Agent (Day 6-7)
-- Expert persona: Chief strategy synthesizer
-- Inputs: All other agent outputs
-- Outputs: Unified roadmap, priority matrix, executive summary
-- Quality gate: Final 23/25 check on synthesized output
-
-### Deliverable
-- 9 agent classes with specialized prompts
-- Few-shot examples for each agent (good + bad)
-- Output parsers for each schema
-- Agent orchestration in engine.py
-
----
-
-## Phase 3: Scoring Engine (2 days)
-**Goal:** Implement the v4 scoring formulas
-
-### 3.1 Opportunity Score
+**Before (current):**
 ```python
-def calculate_opportunity(keyword_data: dict) -> float:
-    volume = keyword_data['search_volume']
-    ctr_potential = estimate_ctr(keyword_data['current_position'])
-    position_factor = 1 - (keyword_data['current_position'] / 100)
-    difficulty_adjusted = adjust_difficulty(keyword_data['difficulty'], domain_authority)
-
-    return (volume * ctr_potential * position_factor) / difficulty_adjusted
+def _build_executive_summary(self, analysis_result, metadata):
+    return """
+    <div class="finding">
+        <div class="finding-title">1. Current Organic Position</div>
+        <p>Based on comprehensive analysis of your domain's organic visibility.</p>
+    </div>
+    """
 ```
 
-### 3.2 Personalized Difficulty
+**After (v5):**
 ```python
-def calculate_personalized_difficulty(keyword: str, domain_data: dict) -> float:
-    base_difficulty = keyword_data['difficulty']
-    topical_authority_gap = calculate_authority_gap(keyword, domain_data)
-    domain_strength_ratio = domain_data['dr'] / competitor_median_dr
+def _build_executive_summary(self, master_output: AgentOutput, metadata: Dict):
+    findings = master_output.findings[:3]  # Top 3 findings
 
-    return base_difficulty * (1 + topical_authority_gap) * (1 - domain_strength_ratio)
+    findings_html = ""
+    for i, finding in enumerate(findings, 1):
+        findings_html += f"""
+        <div class="finding">
+            <div class="finding-title">{i}. {finding['title']}</div>
+            <p>{finding['description']}</p>
+            <div class="evidence">
+                <strong>Evidence:</strong> {finding['evidence']}
+            </div>
+            <div class="impact">
+                <strong>Impact:</strong> {finding['impact']}
+            </div>
+        </div>
+        """
+
+    return f"""
+    <div class="page">
+        <h1>Executive Summary</h1>
+        <div class="highlight-box">
+            <strong>The Headline:</strong><br>
+            {master_output.metrics.get('headline', 'Key opportunities identified.')}
+        </div>
+        <h2>Key Findings</h2>
+        {findings_html}
+        <h2>Recommended Path Forward</h2>
+        <p>{master_output.recommendations[0]['action']}</p>
+        <p><strong>Expected Impact:</strong> {master_output.recommendations[0]['impact']}</p>
+    </div>
+    """
 ```
 
-### 3.3 Content Decay Score
-```python
-def calculate_decay(page_data: dict) -> float:
-    days_since_update = (now - page_data['last_modified']).days
-    traffic_retention = page_data['current_traffic'] / page_data['peak_traffic']
-    competitive_movement = calculate_serp_volatility(page_data['keyword'])
+### 5.2 New Report Sections
 
-    return days_since_update * (1 - traffic_retention) * competitive_movement
-```
+Each section pulls from specific agent outputs:
 
-### Deliverable
-- Scoring module with 3 formula implementations
-- Integration with Keyword and Content agents
-- Score normalization and explanation
+| Report Section | Agent Source | Key Data |
+|----------------|--------------|----------|
+| Executive Summary | Master Strategy | Top 3 findings, headline metric |
+| Current Position | Technical + Backlink | DR, keywords, CWV scores |
+| Keyword Opportunities | Keyword Intelligence | Top 20 opportunities with scores |
+| Competitive Landscape | SERP + Backlink | Gap analysis, trajectory matrix |
+| Content Strategy | Content Analysis | Decay list, KUCK recommendations |
+| AI Visibility | AI Visibility | GEO score, citation opportunities |
+| Roadmap | Master Strategy | 90-day phased plan |
+
+**Deliverable:** Reports with specific, data-driven content (not templates).
 
 ---
 
-## Phase 4: Prompt Engineering (3-4 days)
-**Goal:** Create specialized prompts following v5 principles
-
-### 4.1 Prompt Structure Template
-```python
-AGENT_PROMPT = """
-## Expert Persona
-{persona_definition}
-
-## Your Task
-Analyze the provided data and generate insights following these principles:
-1. Specificity over generality
-2. Data-grounded assertions
-3. Comparative context
-4. Actionable specificity
-5. Confidence calibration
-6. Chain-of-thought reasoning
-7. Structured XML output
-
-## Output Schema
-{xml_schema}
-
-## Quality Requirements
-Your output must pass 23/25 quality checks:
-- Specificity (7): {specificity_requirements}
-- Actionability (6): {actionability_requirements}
-- Data-grounding (6): {data_grounding_requirements}
-- Non-generic (6): {non_generic_requirements}
-
-## Examples
-
-### Good Example (24/25)
-{good_example}
-
-### Bad Example (12/25) - DO NOT DO THIS
-{bad_example}
-
-## Anti-Patterns to Avoid
-{anti_patterns}
-
-## Data to Analyze
-{data}
-
-## Generate Analysis
-"""
-```
-
-### 4.2 Per-Agent Prompts
-Create specialized prompts for each of the 9 agents with:
-- Unique expert persona
-- Domain-specific few-shot examples
-- Agent-specific quality requirements
-- Relevant anti-patterns
-
-### Deliverable
-- 9 complete prompt files
-- Few-shot examples (good + bad) for each
-- Anti-pattern definitions
-- Prompt testing framework
-
----
-
-## Phase 5: Report Generation Overhaul (4-5 days)
-**Goal:** Generate reports from agent outputs
-
-### 5.1 External Report (Lead Magnet)
-**10-15 pages, executive-focused**
-
-Sections:
-1. Cover Page (1p)
-2. Executive Summary (2p) - From Master Strategy Agent
-3. Current Position Snapshot (2p) - From Technical + Backlink Agents
-4. Competitive Landscape (2p) - From SERP + Content Agents
-5. Top 5 Opportunities (2p) - From Keyword Agent (top Opportunity Scores)
-6. Authority & AI Visibility (1p) - From AI Visibility Agent
-7. 90-Day Quick Wins (2p) - From Master Strategy Agent
-8. Next Steps CTA (1p)
-9. Methodology (1p)
-
-### 5.2 Internal Report (Strategy Guide)
-**40-60 pages, practitioner-focused**
-
-Sections:
-1. Cover + TOC (2p)
-2. Executive Summary (3p)
-3. Domain Authority Analysis (5p) - Full Backlink Agent output
-4. Keyword Universe (8p) - Full Keyword Agent output with clusters
-5. Competitive Intelligence (6p) - Full SERP Agent output
-6. Technical Audit (5p) - Full Technical Agent output
-7. Content Strategy (8p) - Full Content + Semantic Agents
-8. AI Visibility Playbook (4p) - Full AI Visibility Agent output
-9. Implementation Roadmap (5p) - Master Strategy Agent phased plan
-10. Measurement Framework (3p) - KPIs and tracking
-11. Appendices (5p+) - Raw data exports
-
-### 5.3 HTML Templates
-Create professional templates with:
-- Authoricy branding
-- Data visualization (charts from ChartGenerator)
-- Responsive tables
-- Print-optimized CSS
-
-### Deliverable
-- Complete HTML templates for both reports
-- CSS styling
-- Template rendering with Jinja2
-- PDF generation with WeasyPrint
-
----
-
-## Phase 6: Integration & Pipeline (2-3 days)
+## Phase 6: Engine Integration (Days 24-26)
 **Goal:** Wire everything together
 
-### 6.1 Updated Pipeline
-```
-Request → Data Collection → Agent Orchestration → Quality Gate → Report Generation → Delivery
-
-Agent Orchestration:
-1. Run agents 1-7 in parallel (Keyword, Backlink, Technical, Content, Semantic, AI, SERP)
-2. Run Local SEO if applicable
-3. Aggregate outputs
-4. Run Master Strategy Agent
-5. Quality gate (23/25 required)
-6. If fail: Retry with feedback (max 2 retries)
-```
-
-### 6.2 Engine Refactor
+### 6.1 New Analysis Engine
 ```python
-# src/analyzer/engine.py
+# src/analyzer/engine.py (rewritten)
 class AnalysisEngine:
-    def __init__(self):
-        self.agents = [
-            KeywordIntelligenceAgent(),
-            BacklinkIntelligenceAgent(),
-            TechnicalSEOAgent(),
-            ContentAnalysisAgent(),
-            SemanticArchitectureAgent(),
-            AIVisibilityAgent(),
-            SERPAnalysisAgent(),
+    def __init__(self, api_key: str):
+        self.client = ClaudeClient(api_key)
+
+        # Initialize all 9 agents
+        self.agents = {
+            "keyword": KeywordIntelligenceAgent(self.client),
+            "backlink": BacklinkIntelligenceAgent(self.client),
+            "technical": TechnicalSEOAgent(self.client),
+            "content": ContentAnalysisAgent(self.client),
+            "semantic": SemanticArchitectureAgent(self.client),
+            "ai_visibility": AIVisibilityAgent(self.client),
+            "serp": SERPAnalysisAgent(self.client),
+            "local": LocalSEOAgent(self.client),
+            "master": MasterStrategyAgent(self.client),
+        }
+
+    async def analyze(self, collected_data: Dict) -> AnalysisResult:
+        """Run all agents and synthesize results."""
+
+        # Step 1: Run primary agents in parallel
+        primary_tasks = [
+            self.agents["keyword"].analyze(collected_data),
+            self.agents["backlink"].analyze(collected_data),
+            self.agents["technical"].analyze(collected_data),
+            self.agents["content"].analyze(collected_data),
+            self.agents["semantic"].analyze(collected_data),
+            self.agents["ai_visibility"].analyze(collected_data),
+            self.agents["serp"].analyze(collected_data),
         ]
-        self.local_agent = LocalSEOAgent()
-        self.master_agent = MasterStrategyAgent()
 
-    async def analyze(self, data: CollectionResult) -> AnalysisResult:
-        # Run primary agents in parallel
-        agent_outputs = await asyncio.gather(*[
-            agent.analyze(data) for agent in self.agents
-        ])
+        primary_outputs = await asyncio.gather(*primary_tasks)
 
-        # Run local if applicable
-        if self._needs_local_analysis(data):
-            local_output = await self.local_agent.analyze(data)
-            agent_outputs.append(local_output)
+        # Step 2: Run local agent if applicable
+        if self._needs_local(collected_data):
+            local_output = await self.agents["local"].analyze(collected_data)
+            primary_outputs.append(local_output)
 
-        # Run master synthesis
-        master_output = await self.master_agent.synthesize(agent_outputs)
+        # Step 3: Run master synthesis
+        master_output = await self.agents["master"].synthesize(primary_outputs)
 
-        # Quality gate
-        if master_output.quality_score < 23:
-            master_output = await self._retry_with_feedback(master_output)
+        # Step 4: Quality gate
+        if master_output.quality_score < 9.2:  # 23/25 = 92%
+            # Retry with feedback
+            master_output = await self._retry_with_feedback(
+                master_output, primary_outputs
+            )
 
-        return AnalysisResult(agents=agent_outputs, master=master_output)
+        return AnalysisResult(
+            agent_outputs={o.agent_name: o for o in primary_outputs},
+            master_output=master_output,
+            quality_score=master_output.quality_score,
+            passed_quality_gate=master_output.quality_score >= 9.2,
+        )
 ```
 
-### Deliverable
-- Refactored analysis engine
-- Parallel agent execution
-- Quality gate enforcement
-- Retry logic with feedback
+**Deliverable:** Integrated pipeline running all 9 agents.
 
 ---
 
-## Phase 7: Testing & Validation (3-4 days)
+## Phase 7: Testing & Validation (Days 27-30)
 **Goal:** Ensure system produces quality output
 
-### 7.1 Test Domains
-Run full analysis on 10 diverse domains:
-1. Small Swedish SaaS (< 1K keywords)
+### 7.1 Test Domains (10 diverse sites)
+1. Small Swedish SaaS (<1K keywords)
 2. Medium Swedish e-commerce (1K-10K keywords)
 3. Large Swedish brand (10K+ keywords)
 4. English B2B SaaS
@@ -773,202 +904,196 @@ Run full analysis on 10 diverse domains:
 6. News/media site
 7. Manufacturing company
 8. Professional services
-9. E-commerce with strong AI presence
+9. E-commerce with AI presence
 10. Technical/developer tools
 
-### 7.2 Quality Validation
+### 7.2 Quality Validation Checklist
 For each test:
-- Verify 23/25 quality checks pass
-- Human review of insights (are they useful?)
-- Compare to manual SEMrush/Ahrefs analysis
-- Check for anti-patterns
-- Validate scoring accuracy
+- [ ] Quality score ≥9.2/10 (23/25 checks passing)
+- [ ] Report contains specific keywords with scores
+- [ ] Report contains specific URLs and actions
+- [ ] No placeholder text ("Based on comprehensive analysis...")
+- [ ] All recommendations have effort + impact estimates
+- [ ] Execution time <5 minutes
+- [ ] Cost <€3.00 per report
 
-### 7.3 Performance Validation
-- Execution time < 5 minutes
-- Cost per report < $3.00
-- No crashes or unhandled errors
+### 7.3 Comparison Test
+Run same domain through:
+1. Current system
+2. New v4+v5 system
+3. Manual SEMrush analysis
 
-### Deliverable
-- Test results for 10 domains
-- Quality score documentation
-- Performance benchmarks
-- Bug fixes from testing
+Compare quality side-by-side.
 
----
-
-## Phase 8: Production Hardening (2-3 days)
-**Goal:** Production-ready deployment
-
-### 8.1 Persistence
-- Migrate from in-memory to Redis/PostgreSQL
-- Job status persistence
-- Report storage (Supabase/S3)
-
-### 8.2 Monitoring
-- Structured logging with correlation IDs
-- Cost tracking per job
-- Quality score tracking
-- Error alerting
-
-### 8.3 Documentation
-- API documentation
-- Agent documentation
-- Deployment guide
-
-### Deliverable
-- Production-ready system
-- Monitoring dashboard
-- Complete documentation
+**Deliverable:** 10 validated test reports, quality benchmark documentation.
 
 ---
 
-# PART 6: IMPLEMENTATION PRIORITY
+# PART 5: FILE CHANGES SUMMARY
 
-## Critical Path (Must Have)
+## Files to CREATE (32 new files)
 
-| Priority | Component | Days | Dependency |
-|----------|-----------|------|------------|
-| P0 | Phase 0: Stabilization | 1-2 | None |
-| P0 | Phase 1: Agent Foundation | 3-4 | P0 |
-| P0 | Phase 2: Core Agents | 5-7 | P1 |
-| P0 | Phase 4: Prompt Engineering | 3-4 | P2 |
-| P0 | Phase 5: External Report | 2-3 | P4 |
-| P0 | Phase 6: Integration | 2-3 | P5 |
-| P0 | Phase 7: Testing | 3-4 | P6 |
-
-**MVP Total: 19-27 days**
-
-## Important (Should Have)
-
-| Priority | Component | Days | Dependency |
-|----------|-----------|------|------------|
-| P1 | Phase 3: Scoring Engine | 2 | P2 |
-| P1 | Phase 5: Internal Report | 2-3 | External Report |
-| P1 | Phase 8: Persistence | 1-2 | P6 |
-
-**Full v4+v5 Total: 24-34 days**
-
-## Nice to Have (Could Have)
-
-| Priority | Component | Days |
-|----------|-----------|------|
-| P2 | Missing DataForSEO endpoints | 2-3 |
-| P2 | Advanced monitoring | 1-2 |
-| P2 | CRM integration | 1-2 |
-
----
-
-# PART 7: SUCCESS METRICS
-
-## Minimum Viable Product
-- [ ] 9 agents producing structured output
-- [ ] Quality gate passing (23/25)
-- [ ] External report generating with real insights
-- [ ] No placeholder text or generic recommendations
-- [ ] Execution time < 10 minutes
-- [ ] Cost per report < $5.00
-
-## Production Ready
-- [ ] All MVP criteria
-- [ ] Internal report complete
-- [ ] Quality score consistently > 23/25
-- [ ] 10 successful test domain analyses
-- [ ] Execution time < 5 minutes
-- [ ] Cost per report < $3.00
-- [ ] Job persistence working
-
-## World Class Target
-- [ ] Quality score consistently > 24/25
-- [ ] Reports rival boutique SEO agency output
-- [ ] Unique insights not available in standard tools
-- [ ] Customer feedback positive
-- [ ] Cost per report < $2.50
-- [ ] Execution time < 3 minutes
-
----
-
-# PART 8: IMMEDIATE NEXT STEPS
-
-## This Session
-1. Complete Phase 0 stabilization
-2. Begin Phase 1 agent foundation
-
-## Tomorrow
-1. Finish base agent framework
-2. Implement quality check system
-3. Create first agent (Keyword Intelligence)
-
-## This Week
-1. Complete 4-5 core agents
-2. Create specialized prompts with examples
-3. Test individual agent outputs
-
-## Next Week
-1. Complete remaining agents
-2. Implement report generation
-3. Integration testing
-
----
-
-# APPENDIX: FILE CHANGES SUMMARY
-
-## Files to Create (25 new files)
 ```
-src/agents/__init__.py
-src/agents/base.py
-src/agents/keyword.py
-src/agents/backlink.py
-src/agents/technical.py
-src/agents/content.py
-src/agents/semantic.py
-src/agents/ai_visibility.py
-src/agents/serp.py
-src/agents/local.py
-src/agents/master.py
-src/prompts/__init__.py
-src/prompts/personas.py
-src/prompts/keyword_prompt.py
-src/prompts/backlink_prompt.py
-src/prompts/technical_prompt.py
-src/prompts/content_prompt.py
-src/prompts/semantic_prompt.py
-src/prompts/ai_visibility_prompt.py
-src/prompts/serp_prompt.py
-src/prompts/local_prompt.py
-src/prompts/master_prompt.py
-src/scoring/__init__.py
-src/scoring/opportunity.py
-src/scoring/difficulty.py
-src/scoring/decay.py
-src/quality/checks.py
-src/quality/anti_patterns.py
-src/output/__init__.py
-src/output/schemas.py
-src/output/parser.py
+src/agents/
+├── __init__.py
+├── base.py
+├── keyword_intelligence.py
+├── backlink_intelligence.py
+├── technical_seo.py
+├── content_analysis.py
+├── semantic_architecture.py
+├── ai_visibility.py
+├── serp_analysis.py
+├── local_seo.py
+└── master_strategy.py
+
+src/scoring/
+├── __init__.py
+├── opportunity.py
+├── difficulty.py
+├── decay.py
+└── helpers.py
+
+src/output/
+├── __init__.py
+├── schemas.py
+├── parser.py
+└── validator.py
+
+src/prompts/
+├── __init__.py
+├── keyword_prompt.py
+├── backlink_prompt.py
+├── technical_prompt.py
+├── content_prompt.py
+├── semantic_prompt.py
+├── ai_visibility_prompt.py
+├── serp_prompt.py
+├── local_prompt.py
+└── master_prompt.py
+
+src/quality/
+├── checks.py
+└── anti_patterns.py
 ```
 
-## Files to Modify (8 files)
+## Files to REWRITE (5 files)
+
 ```
-src/analyzer/engine.py      # Complete rewrite
-src/analyzer/client.py      # Add structured output
-src/quality/gates.py        # Update for 25-check system
-src/quality/validators.py   # Update validation
-src/reporter/external.py    # Consume agent outputs
-src/reporter/internal.py    # Consume agent outputs
-api/analyze.py              # Update pipeline
-src/collector/orchestrator.py  # Add data prep methods
+src/analyzer/engine.py          # Complete rewrite for 9-agent architecture
+src/reporter/external.py        # Data-driven content instead of templates
+src/reporter/internal.py        # Data-driven content instead of templates
+src/reporter/generator.py       # Consume agent outputs
+src/quality/gates.py            # 25-check system
 ```
 
-## Files to Delete (4 files)
+## Files to DELETE (4 files)
+
 ```
-src/analyzer/loop1.py
+src/analyzer/loop1.py           # Replaced by agents
 src/analyzer/loop2.py
 src/analyzer/loop3.py
 src/analyzer/loop4.py
 ```
 
+## Files to KEEP (unchanged)
+
+```
+src/collector/*                 # Data collection works
+src/auth/*                      # Authentication works
+src/persistence/*               # Storage works
+src/delivery/*                  # Email works
+api/analyze.py                  # API works (minor updates only)
+```
+
 ---
 
-*This master build plan will be updated as implementation progresses.*
+# PART 6: SUCCESS METRICS
+
+## Minimum Viable Product (MVP)
+- [ ] 9 agents producing structured output
+- [ ] Quality gate passing (23/25 checks)
+- [ ] External report with specific recommendations
+- [ ] No placeholder text
+- [ ] Execution time <10 minutes
+- [ ] Cost <€5.00 per report
+
+## Production Ready
+- [ ] All MVP criteria
+- [ ] Internal report complete
+- [ ] Quality score consistently ≥9.2/10
+- [ ] 10 successful test analyses
+- [ ] Execution time <5 minutes
+- [ ] Cost <€3.00 per report
+
+## World Class Target (matches €10,000/month agency)
+- [ ] Quality score consistently ≥9.6/10
+- [ ] Reports rival boutique SEO agency output
+- [ ] Unique insights not in standard tools
+- [ ] Customer feedback positive
+- [ ] Cost <€2.50 per report
+- [ ] Execution time <3 minutes
+
+---
+
+# PART 7: RISK MITIGATION
+
+## Risk 1: Claude Output Quality Varies
+**Mitigation:**
+- Few-shot examples with good AND bad outputs
+- Quality gate with retry logic (max 2 retries)
+- Temperature 0.3 for consistency
+
+## Risk 2: Token Limits Exceeded
+**Mitigation:**
+- Data truncation strategy (keep top N items)
+- Split large analyses across multiple calls
+- Monitor token usage per agent
+
+## Risk 3: DataForSEO API Failures
+**Mitigation:**
+- Already implemented: Retry with exponential backoff
+- Non-critical endpoints fail gracefully
+- Cache successful responses
+
+## Risk 4: Report Still Too Generic
+**Mitigation:**
+- Anti-pattern detection in quality checks
+- "Non-generic checks" in 25-point system
+- Manual review of first 10 reports
+
+---
+
+# APPENDIX A: ANTI-PATTERNS TO DETECT
+
+The quality system must flag these patterns:
+
+1. **Hedge Everything**
+   - Regex: `(might|could|potentially|consider|possibly|perhaps) (want to|need to|should)`
+   - Action: Fail "avoids_weasel_words" check
+
+2. **Generic Best Practice**
+   - Regex: `(follow|implement|use) (SEO )?(best practices|industry standards)`
+   - Action: Fail "customized_advice" check
+
+3. **Data Dump Without Analysis**
+   - Check: >20 items listed without prioritization
+   - Action: Fail "has_priorities" check
+
+4. **Missing "So What"**
+   - Check: Metric stated without interpretation
+   - Example: "Your bounce rate is 65%" (no context)
+   - Action: Fail "has_benchmarks" check
+
+5. **Placeholder Text**
+   - Regex: `(based on|according to) (comprehensive|thorough|detailed) (analysis|review|assessment)`
+   - Action: Fail "no_placeholder_text" check
+
+6. **Contradictory Recommendations**
+   - Check: Cross-reference agent outputs for conflicts
+   - Action: Flag in Master Strategy for resolution
+
+---
+
+*This plan will be updated as implementation progresses.*
 *Last updated: January 2026*
