@@ -44,8 +44,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Domains that should NEVER be considered competitors
-# These are platforms, social media, search engines, etc.
+# =============================================================================
+# NON-COMPETITOR DOMAIN LISTS
+# =============================================================================
+
+# Domains that should NEVER be considered competitors - platforms and social media
 NON_COMPETITOR_DOMAINS = {
     # Social Media
     "facebook.com", "www.facebook.com", "m.facebook.com",
@@ -70,7 +73,7 @@ NON_COMPETITOR_DOMAINS = {
     "baidu.com", "www.baidu.com",
     "yandex.com", "www.yandex.com",
 
-    # E-commerce Platforms (unless client is e-commerce)
+    # E-commerce Platforms
     "amazon.com", "www.amazon.com", "amazon.se", "amazon.co.uk", "amazon.de",
     "ebay.com", "www.ebay.com", "ebay.se", "ebay.co.uk",
     "etsy.com", "www.etsy.com",
@@ -84,16 +87,6 @@ NON_COMPETITOR_DOMAINS = {
     "britannica.com", "www.britannica.com",
     "quora.com", "www.quora.com",
     "medium.com", "www.medium.com",
-
-    # News/Media Aggregators
-    "news.google.com", "news.yahoo.com",
-    "msn.com", "www.msn.com",
-    "cnn.com", "www.cnn.com",
-    "bbc.com", "www.bbc.com", "bbc.co.uk",
-    "nytimes.com", "www.nytimes.com",
-    "theguardian.com", "www.theguardian.com",
-    "forbes.com", "www.forbes.com",
-    "businessinsider.com", "www.businessinsider.com",
 
     # Developer/Tech Platforms
     "github.com", "www.github.com",
@@ -127,6 +120,100 @@ NON_COMPETITOR_DOMAINS = {
     "maps.apple.com",
 }
 
+# Government and official domains - NOT competitors
+GOVERNMENT_DOMAINS = {
+    # Swedish government
+    "krisinformation.se", "www.krisinformation.se",  # Crisis info
+    "msb.se", "www.msb.se",  # Civil contingencies agency
+    "folkhalsomyndigheten.se", "www.folkhalsomyndigheten.se",
+    "regeringen.se", "www.regeringen.se",
+    "riksdagen.se", "www.riksdagen.se",
+    "polisen.se", "www.polisen.se",
+    "forsakringskassan.se", "www.forsakringskassan.se",
+    "skatteverket.se", "www.skatteverket.se",
+    "1177.se", "www.1177.se",
+
+    # International government
+    "gov.uk", "www.gov.uk",
+    "usa.gov", "www.usa.gov",
+    "cdc.gov", "www.cdc.gov",
+    "fema.gov", "www.fema.gov",
+    "ready.gov", "www.ready.gov",
+}
+
+# Media and news organizations - NOT business competitors
+MEDIA_DOMAINS = {
+    # Swedish media
+    "sverigesradio.se", "www.sverigesradio.se",  # Public radio
+    "svt.se", "www.svt.se",  # Public TV
+    "dn.se", "www.dn.se",  # Dagens Nyheter
+    "expressen.se", "www.expressen.se",
+    "aftonbladet.se", "www.aftonbladet.se",
+    "gp.se", "www.gp.se",
+    "sydsvenskan.se", "www.sydsvenskan.se",
+    "tv4.se", "www.tv4.se",
+
+    # International media
+    "news.google.com", "news.yahoo.com",
+    "msn.com", "www.msn.com",
+    "cnn.com", "www.cnn.com",
+    "bbc.com", "www.bbc.com", "bbc.co.uk",
+    "nytimes.com", "www.nytimes.com",
+    "theguardian.com", "www.theguardian.com",
+    "forbes.com", "www.forbes.com",
+    "businessinsider.com", "www.businessinsider.com",
+    "reuters.com", "www.reuters.com",
+    "apnews.com", "www.apnews.com",
+}
+
+# Patterns that indicate non-competitor domains
+GOVERNMENT_PATTERNS = [".gov", ".gov.", ".myndighet", ".kommun."]
+MEDIA_PATTERNS = ["radio", "tv", "news", "nyheter", "tidning", "media"]
+
+
+def _get_root_domain(domain: str) -> str:
+    """Extract root domain from a full domain string."""
+    domain = domain.lower().strip()
+    parts = domain.split(".")
+    if len(parts) >= 2:
+        return parts[-2] + "." + parts[-1]
+    return domain
+
+
+def _is_government_domain(domain: str) -> bool:
+    """Check if domain is a government/official site."""
+    domain_lower = domain.lower()
+    root = _get_root_domain(domain_lower)
+
+    # Check explicit list
+    if domain_lower in GOVERNMENT_DOMAINS or root in GOVERNMENT_DOMAINS:
+        return True
+
+    # Check patterns
+    for pattern in GOVERNMENT_PATTERNS:
+        if pattern in domain_lower:
+            return True
+
+    return False
+
+
+def _is_media_domain(domain: str) -> bool:
+    """Check if domain is a media/news organization."""
+    domain_lower = domain.lower()
+    root = _get_root_domain(domain_lower)
+
+    # Check explicit list
+    if domain_lower in MEDIA_DOMAINS or root in MEDIA_DOMAINS:
+        return True
+
+    # Check patterns in domain name
+    domain_name = root.split(".")[0]
+    for pattern in MEDIA_PATTERNS:
+        if pattern in domain_name:
+            return True
+
+    return False
+
 
 def _is_real_competitor(domain: str, target_domain: str = None) -> bool:
     """
@@ -136,6 +223,8 @@ def _is_real_competitor(domain: str, target_domain: str = None) -> bool:
     - Social media platforms
     - Search engines
     - Generic platforms (Amazon, eBay, Wikipedia, etc.)
+    - Government and official sites
+    - Media and news organizations
     - The target domain itself (if provided)
     - Subdomains of non-competitor domains
 
@@ -150,6 +239,7 @@ def _is_real_competitor(domain: str, target_domain: str = None) -> bool:
         return False
 
     domain_lower = domain.lower().strip()
+    root_domain = _get_root_domain(domain_lower)
 
     # Filter out the target domain itself
     if target_domain:
@@ -157,21 +247,24 @@ def _is_real_competitor(domain: str, target_domain: str = None) -> bool:
         if domain_lower == target_lower or domain_lower.endswith(f".{target_lower}"):
             return False
 
-    # Check against known non-competitor domains
-    if domain_lower in NON_COMPETITOR_DOMAINS:
+    # Check against known non-competitor domains (platforms)
+    if domain_lower in NON_COMPETITOR_DOMAINS or root_domain in NON_COMPETITOR_DOMAINS:
+        return False
+
+    # Check for government domains
+    if _is_government_domain(domain_lower):
+        logger.debug(f"Filtered government domain: {domain}")
+        return False
+
+    # Check for media domains
+    if _is_media_domain(domain_lower):
+        logger.debug(f"Filtered media domain: {domain}")
         return False
 
     # Check if it's a subdomain of a non-competitor
     for non_competitor in NON_COMPETITOR_DOMAINS:
         if domain_lower.endswith(f".{non_competitor}"):
             return False
-        # Also check root domain match (e.g., "m.facebook.com" -> "facebook.com")
-        if domain_lower.count(".") >= 1:
-            parts = domain_lower.split(".")
-            if len(parts) >= 2:
-                root_domain = parts[-2] + "." + parts[-1]
-                if root_domain in NON_COMPETITOR_DOMAINS:
-                    return False
 
     return True
 
@@ -678,7 +771,8 @@ async def fetch_serp_competitors(
     Identify competitors from SERP data.
     Finds domains that rank for similar keywords.
 
-    IMPORTANT: Filters out non-competitors like social media, platforms, etc.
+    IMPORTANT: Filters out non-competitors like social media, platforms,
+    government sites, and media organizations.
     Only returns actual business competitors.
     """
     result = await client.post(
@@ -687,26 +781,54 @@ async def fetch_serp_competitors(
             "keywords": keywords[:200],  # Max 200 keywords
             "location_name": market,
             "language_name": language,
-            "limit": 50,  # Fetch more to allow for filtering
+            "limit": 100,  # Fetch more to allow for thorough filtering
         }]
     )
 
     items = _safe_get_items(result)
 
+    # Track filtering stats
+    filtered_stats = {
+        "platform": 0,
+        "government": 0,
+        "media": 0,
+        "low_overlap": 0,
+        "accepted": 0,
+    }
+
     competitors = []
     for item in items:
         competitor_domain = item.get("domain", "")
+        keywords_count = item.get("keywords_count", 0) or 0
 
-        # Filter out non-competitors (social media, platforms, etc.)
-        if not _is_real_competitor(competitor_domain, target_domain):
-            logger.debug(f"Filtered non-competitor from SERP: {competitor_domain}")
+        # Check domain type
+        if competitor_domain in NON_COMPETITOR_DOMAINS or _get_root_domain(competitor_domain) in NON_COMPETITOR_DOMAINS:
+            filtered_stats["platform"] += 1
             continue
 
-        # Only include if there's meaningful keyword overlap
-        keywords_count = item.get("keywords_count", 0)
-        if keywords_count < 3:  # Must rank for at least 3 of our keywords
+        if _is_government_domain(competitor_domain):
+            filtered_stats["government"] += 1
+            logger.debug(f"Filtered government from SERP: {competitor_domain}")
             continue
 
+        if _is_media_domain(competitor_domain):
+            filtered_stats["media"] += 1
+            logger.debug(f"Filtered media from SERP: {competitor_domain}")
+            continue
+
+        # Filter out target domain
+        if target_domain:
+            target_lower = target_domain.lower().strip()
+            if competitor_domain.lower() == target_lower:
+                continue
+
+        # Very permissive keyword overlap threshold for niche sites
+        min_keywords = 1  # Accept any overlap
+        if keywords_count < min_keywords:
+            filtered_stats["low_overlap"] += 1
+            continue
+
+        filtered_stats["accepted"] += 1
         competitors.append({
             "domain": competitor_domain,
             "visibility": item.get("visibility", 0),
@@ -719,7 +841,14 @@ async def fetch_serp_competitors(
         if len(competitors) >= limit:
             break
 
+    logger.info(f"SERP competitor filtering: {filtered_stats}")
     logger.info(f"Found {len(competitors)} real SERP competitors (filtered from {len(items)} raw results)")
+
+    # Log warning if too few competitors found
+    if len(competitors) < 3 and len(items) > 10:
+        raw_domains = [item.get("domain", "")[:30] for item in items[:10]]
+        logger.warning(f"Very few SERP competitors found. Top raw domains: {raw_domains}")
+
     return competitors
 
 

@@ -576,51 +576,104 @@ async def fetch_trends_data(
     Fetch Google Trends data for keywords.
 
     Returns trend data for past 12 months.
+
+    Note: Google Trends API has specific requirements:
+    - Keywords must have sufficient search volume
+    - Some markets/languages may have limited data
+    - Response structure varies based on data availability
     """
-    result = await client.post(
-        "keywords_data/google_trends/explore/live",
-        [{
-            "keywords": keywords[:5],  # Max 5 per request
-            "location_name": market,
-            "time_range": "past_12_months",
-            "item_types": ["google_trends_graph"],
-        }]
-    )
+    if not keywords:
+        logger.warning("No keywords provided for trends analysis")
+        return []
 
-    items = _safe_get_items(result, get_first=False)
+    try:
+        result = await client.post(
+            "keywords_data/google_trends/explore/live",
+            [{
+                "keywords": keywords[:5],  # Max 5 per request
+                "location_name": market,
+                "time_range": "past_12_months",
+                "item_types": ["google_trends_graph"],
+            }]
+        )
 
-    trend_data = []
+        # Log raw response structure for debugging
+        tasks = result.get("tasks", [])
+        if tasks:
+            task = tasks[0]
+            task_result = task.get("result")
+            status = task.get("status_message", "unknown")
+            logger.info(f"Trends API status: {status}, result type: {type(task_result)}")
 
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") == "google_trends_graph":
-            for line in item.get("lines", []):
-                keyword = line.get("keyword", "")
-                values = line.get("values", [])
+            if task_result is None:
+                logger.warning(f"Trends API returned no result for keywords: {keywords[:5]}")
+                return []
 
-                if values:
-                    # Calculate trend direction
-                    first_half = sum(v.get("value", 0) for v in values[:len(values)//2])
-                    second_half = sum(v.get("value", 0) for v in values[len(values)//2:])
+        items = _safe_get_items(result, get_first=False)
 
-                    if second_half > first_half * 1.1:
-                        direction = "rising"
-                    elif second_half < first_half * 0.9:
-                        direction = "falling"
-                    else:
-                        direction = "stable"
+        # Also try getting items from first result if that fails
+        if not items:
+            items = _safe_get_items(result, get_first=True)
 
-                    avg_interest = sum(v.get("value", 0) for v in values) / len(values)
+        if not items:
+            # Try alternative structure: result might be directly in tasks[0].result
+            if tasks and tasks[0].get("result"):
+                task_result = tasks[0]["result"]
+                if isinstance(task_result, list):
+                    items = task_result
+                elif isinstance(task_result, dict):
+                    items = [task_result]
 
-                    trend_data.append({
-                        "keyword": keyword,
-                        "values": values,
-                        "direction": direction,
-                        "avg_interest": round(avg_interest, 1),
-                    })
+        logger.info(f"Trends: Processing {len(items)} items")
 
-    return trend_data
+        trend_data = []
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            item_type = item.get("type", "")
+            logger.debug(f"Trends item type: {item_type}")
+
+            if item_type == "google_trends_graph" or "lines" in item:
+                lines = item.get("lines", [])
+                logger.debug(f"Found {len(lines)} trend lines")
+
+                for line in lines:
+                    keyword = line.get("keyword", "")
+                    values = line.get("values", [])
+
+                    if values:
+                        # Calculate trend direction
+                        first_half = sum(v.get("value", 0) for v in values[:len(values)//2])
+                        second_half = sum(v.get("value", 0) for v in values[len(values)//2:])
+
+                        if second_half > first_half * 1.1:
+                            direction = "rising"
+                        elif second_half < first_half * 0.9:
+                            direction = "falling"
+                        else:
+                            direction = "stable"
+
+                        avg_interest = sum(v.get("value", 0) for v in values) / len(values) if values else 0
+
+                        trend_data.append({
+                            "keyword": keyword,
+                            "values": values,
+                            "direction": direction,
+                            "avg_interest": round(avg_interest, 1),
+                        })
+
+        if not trend_data:
+            logger.warning(f"No trend data found for keywords: {keywords[:5]}. "
+                          f"This may be due to low search volume or market limitations.")
+
+        logger.info(f"Trends: Found data for {len(trend_data)} keywords")
+        return trend_data
+
+    except Exception as e:
+        logger.error(f"Trends fetch failed: {e}")
+        return []
 
 
 async def fetch_live_serp_ai_overview(
