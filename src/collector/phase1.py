@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 
 # Domains that should NEVER be considered competitors
 # These are platforms, social media, search engines, etc.
+# =============================================================================
+# NON-COMPETITOR DOMAIN LISTS
+# =============================================================================
+
+# Domains that should NEVER be considered competitors - platforms and social media
 NON_COMPETITOR_DOMAINS = {
     # Social Media
     "facebook.com", "www.facebook.com", "m.facebook.com",
@@ -50,7 +55,7 @@ NON_COMPETITOR_DOMAINS = {
     "baidu.com", "www.baidu.com",
     "yandex.com", "www.yandex.com",
 
-    # E-commerce Platforms (unless client is e-commerce)
+    # E-commerce Platforms
     "amazon.com", "www.amazon.com", "amazon.se", "amazon.co.uk", "amazon.de",
     "ebay.com", "www.ebay.com", "ebay.se", "ebay.co.uk",
     "etsy.com", "www.etsy.com",
@@ -64,16 +69,6 @@ NON_COMPETITOR_DOMAINS = {
     "britannica.com", "www.britannica.com",
     "quora.com", "www.quora.com",
     "medium.com", "www.medium.com",
-
-    # News/Media Aggregators
-    "news.google.com", "news.yahoo.com",
-    "msn.com", "www.msn.com",
-    "cnn.com", "www.cnn.com",
-    "bbc.com", "www.bbc.com", "bbc.co.uk",
-    "nytimes.com", "www.nytimes.com",
-    "theguardian.com", "www.theguardian.com",
-    "forbes.com", "www.forbes.com",
-    "businessinsider.com", "www.businessinsider.com",
 
     # Developer/Tech Platforms
     "github.com", "www.github.com",
@@ -107,6 +102,100 @@ NON_COMPETITOR_DOMAINS = {
     "maps.apple.com",
 }
 
+# Government and official domains - NOT competitors
+GOVERNMENT_DOMAINS = {
+    # Swedish government
+    "krisinformation.se", "www.krisinformation.se",  # Crisis info
+    "msb.se", "www.msb.se",  # Civil contingencies agency
+    "folkhalsomyndigheten.se", "www.folkhalsomyndigheten.se",
+    "regeringen.se", "www.regeringen.se",
+    "riksdagen.se", "www.riksdagen.se",
+    "polisen.se", "www.polisen.se",
+    "forsakringskassan.se", "www.forsakringskassan.se",
+    "skatteverket.se", "www.skatteverket.se",
+    "1177.se", "www.1177.se",
+
+    # International government
+    "gov.uk", "www.gov.uk",
+    "usa.gov", "www.usa.gov",
+    "cdc.gov", "www.cdc.gov",
+    "fema.gov", "www.fema.gov",
+    "ready.gov", "www.ready.gov",
+}
+
+# Media and news organizations - NOT business competitors
+MEDIA_DOMAINS = {
+    # Swedish media
+    "sverigesradio.se", "www.sverigesradio.se",  # Public radio
+    "svt.se", "www.svt.se",  # Public TV
+    "dn.se", "www.dn.se",  # Dagens Nyheter
+    "expressen.se", "www.expressen.se",
+    "aftonbladet.se", "www.aftonbladet.se",
+    "gp.se", "www.gp.se",
+    "sydsvenskan.se", "www.sydsvenskan.se",
+    "tv4.se", "www.tv4.se",
+
+    # International media
+    "news.google.com", "news.yahoo.com",
+    "msn.com", "www.msn.com",
+    "cnn.com", "www.cnn.com",
+    "bbc.com", "www.bbc.com", "bbc.co.uk",
+    "nytimes.com", "www.nytimes.com",
+    "theguardian.com", "www.theguardian.com",
+    "forbes.com", "www.forbes.com",
+    "businessinsider.com", "www.businessinsider.com",
+    "reuters.com", "www.reuters.com",
+    "apnews.com", "www.apnews.com",
+}
+
+# Patterns that indicate non-competitor domains
+GOVERNMENT_PATTERNS = [".gov", ".gov.", ".myndighet", ".kommun."]
+MEDIA_PATTERNS = ["radio", "tv", "news", "nyheter", "tidning", "media"]
+
+
+def _get_root_domain(domain: str) -> str:
+    """Extract root domain from a full domain string."""
+    domain = domain.lower().strip()
+    parts = domain.split(".")
+    if len(parts) >= 2:
+        return parts[-2] + "." + parts[-1]
+    return domain
+
+
+def _is_government_domain(domain: str) -> bool:
+    """Check if domain is a government/official site."""
+    domain_lower = domain.lower()
+    root = _get_root_domain(domain_lower)
+
+    # Check explicit list
+    if domain_lower in GOVERNMENT_DOMAINS or root in GOVERNMENT_DOMAINS:
+        return True
+
+    # Check patterns
+    for pattern in GOVERNMENT_PATTERNS:
+        if pattern in domain_lower:
+            return True
+
+    return False
+
+
+def _is_media_domain(domain: str) -> bool:
+    """Check if domain is a media/news organization."""
+    domain_lower = domain.lower()
+    root = _get_root_domain(domain_lower)
+
+    # Check explicit list
+    if domain_lower in MEDIA_DOMAINS or root in MEDIA_DOMAINS:
+        return True
+
+    # Check patterns in domain name (but be careful not to match legitimate competitors)
+    domain_name = root.split(".")[0]  # e.g., "sverigesradio" from "sverigesradio.se"
+    for pattern in MEDIA_PATTERNS:
+        if pattern in domain_name:
+            return True
+
+    return False
+
 
 def _is_real_competitor(domain: str, target_domain: str) -> bool:
     """
@@ -116,6 +205,8 @@ def _is_real_competitor(domain: str, target_domain: str) -> bool:
     - Social media platforms
     - Search engines
     - Generic platforms (Amazon, eBay, Wikipedia, etc.)
+    - Government and official sites
+    - Media and news organizations
     - The target domain itself
     - Subdomains of non-competitor domains
 
@@ -131,25 +222,63 @@ def _is_real_competitor(domain: str, target_domain: str) -> bool:
 
     domain_lower = domain.lower().strip()
     target_lower = target_domain.lower().strip()
+    root_domain = _get_root_domain(domain_lower)
 
     # Filter out the target domain itself
     if domain_lower == target_lower or domain_lower.endswith(f".{target_lower}"):
         return False
 
-    # Check against known non-competitor domains
-    if domain_lower in NON_COMPETITOR_DOMAINS:
+    # Check against known non-competitor domains (platforms)
+    if domain_lower in NON_COMPETITOR_DOMAINS or root_domain in NON_COMPETITOR_DOMAINS:
+        return False
+
+    # Check for government domains
+    if _is_government_domain(domain_lower):
+        logger.debug(f"Filtered government domain: {domain}")
+        return False
+
+    # Check for media domains
+    if _is_media_domain(domain_lower):
+        logger.debug(f"Filtered media domain: {domain}")
         return False
 
     # Check if it's a subdomain of a non-competitor
     for non_competitor in NON_COMPETITOR_DOMAINS:
         if domain_lower.endswith(f".{non_competitor}"):
             return False
-        # Also check root domain match (e.g., "m.facebook.com" -> "facebook.com")
-        root_domain = domain_lower.split(".")[-2] + "." + domain_lower.split(".")[-1] if domain_lower.count(".") >= 1 else domain_lower
-        if root_domain in NON_COMPETITOR_DOMAINS:
-            return False
 
     return True
+
+
+def classify_competitor_type(domain: str, links_to_target: bool = False) -> str:
+    """
+    Classify what type of "competitor" a domain is.
+
+    Returns one of:
+    - "true_competitor": Actually competes for the same customers
+    - "affiliate": Links to target, likely promoting them
+    - "media": News/media organization
+    - "government": Government/official site
+    - "platform": Generic platform (social, e-commerce, etc.)
+    - "unknown": Can't determine
+    """
+    domain_lower = domain.lower().strip()
+    root = _get_root_domain(domain_lower)
+
+    if domain_lower in NON_COMPETITOR_DOMAINS or root in NON_COMPETITOR_DOMAINS:
+        return "platform"
+
+    if _is_government_domain(domain_lower):
+        return "government"
+
+    if _is_media_domain(domain_lower):
+        return "media"
+
+    # If the site links TO our target, it's likely an affiliate
+    if links_to_target:
+        return "affiliate"
+
+    return "true_competitor"
 
 
 def _safe_get_items(result: Dict, get_first: bool = True) -> List[Dict]:
@@ -398,38 +527,63 @@ async def fetch_competitors(client, domain: str, market: str, language: str) -> 
                 "target": domain,
                 "location_name": market,
                 "language_name": language,
-                "limit": 50  # Fetch more to allow for filtering
+                "limit": 100  # Fetch more to allow for filtering
             }]
         )
 
         items = _safe_get_items(result)
 
+        # Track filtering stats for debugging
+        filtered_stats = {
+            "platform": 0,
+            "government": 0,
+            "media": 0,
+            "low_overlap": 0,
+            "accepted": 0,
+        }
+
         competitors = []
         for item in items:
             competitor_domain = item.get("domain", "")
+            common_keywords = item.get("se_keywords", 0) or 0
 
-            # Filter out non-competitors (social media, platforms, etc.)
-            if not _is_real_competitor(competitor_domain, domain):
-                logger.debug(f"Filtered non-competitor: {competitor_domain}")
+            # Classify the competitor type
+            comp_type = classify_competitor_type(competitor_domain)
+
+            if comp_type != "true_competitor" and comp_type != "unknown":
+                filtered_stats[comp_type] = filtered_stats.get(comp_type, 0) + 1
+                logger.debug(f"Filtered {comp_type}: {competitor_domain}")
                 continue
 
-            # Only include if there are meaningful common keywords
-            common_keywords = item.get("se_keywords", 0)
-            if common_keywords < 5:  # Must share at least 5 keywords
+            # Use adaptive threshold based on target site size
+            # For smaller/niche sites, lower the threshold
+            min_keywords = 1 if len(items) < 20 else 2  # Very permissive for niche sites
+
+            if common_keywords < min_keywords:
+                filtered_stats["low_overlap"] += 1
                 continue
 
+            filtered_stats["accepted"] += 1
             competitors.append({
                 "domain": competitor_domain,
                 "relevance": item.get("avg_position"),
                 "common_keywords": common_keywords,
                 "organic_traffic": (item.get("metrics") or {}).get("organic", {}).get("etv", 0),
+                "competitor_type": "true_competitor",
             })
 
             # Stop after getting 20 real competitors
             if len(competitors) >= 20:
                 break
 
+        logger.info(f"Competitor filtering: {filtered_stats}")
         logger.info(f"Found {len(competitors)} real competitors (filtered from {len(items)} raw results)")
+
+        # If we got 0 competitors, log a warning with the raw domains for debugging
+        if len(competitors) == 0 and len(items) > 0:
+            raw_domains = [item.get("domain", "")[:30] for item in items[:10]]
+            logger.warning(f"All competitors filtered out! Top raw domains: {raw_domains}")
+
         return competitors
     except Exception as e:
         logger.error(f"Competitors failed: {e}")
@@ -494,8 +648,9 @@ async def fetch_lighthouse(client, url: str) -> Dict:
 async def fetch_technologies(client, domain: str) -> List[Dict]:
     """Fetch detected technologies.
 
-    Note: Technologies endpoint returns result[0].technologies array,
-    not result[0].items.
+    Note: Technologies endpoint returns result[0].technologies as a DICT
+    with category names as keys, each containing a list of technology objects.
+    Example: {"cms": [{"name": "WordPress", ...}], "analytics": [{"name": "Google Analytics", ...}]}
     """
     try:
         result = await client.post(
@@ -506,22 +661,48 @@ async def fetch_technologies(client, domain: str) -> List[Dict]:
         first_result = _safe_get_first_result(result)
         technologies_data = first_result.get("technologies")
 
-        # Ensure we have a list before processing
-        if not isinstance(technologies_data, list):
-            logger.warning(f"Technologies data is not a list: {type(technologies_data)}")
+        if technologies_data is None:
+            logger.warning("Technologies data is None")
             return []
 
-        # Safely slice and process
-        items = technologies_data[:20] if len(technologies_data) > 20 else technologies_data
+        # Handle dict structure: {"category": [tech1, tech2, ...], ...}
+        if isinstance(technologies_data, dict):
+            flattened = []
+            for category, tech_list in technologies_data.items():
+                if isinstance(tech_list, list):
+                    for tech in tech_list:
+                        if isinstance(tech, dict):
+                            flattened.append({
+                                "name": tech.get("name", "Unknown"),
+                                "category": category,
+                                "version": tech.get("version"),
+                            })
+                        elif isinstance(tech, str):
+                            flattened.append({
+                                "name": tech,
+                                "category": category,
+                                "version": None,
+                            })
+            logger.info(f"Found {len(flattened)} technologies across {len(technologies_data)} categories")
+            return flattened[:30]  # Limit to top 30
 
-        return [
-            {
-                "name": item.get("name") if isinstance(item, dict) else str(item),
-                "category": item.get("category") if isinstance(item, dict) else "unknown",
-            }
-            for item in items
-            if item is not None
-        ]
+        # Handle list structure (legacy/alternative format)
+        elif isinstance(technologies_data, list):
+            items = technologies_data[:30]
+            return [
+                {
+                    "name": item.get("name") if isinstance(item, dict) else str(item),
+                    "category": item.get("category") if isinstance(item, dict) else "unknown",
+                    "version": item.get("version") if isinstance(item, dict) else None,
+                }
+                for item in items
+                if item is not None
+            ]
+
+        else:
+            logger.warning(f"Technologies data has unexpected type: {type(technologies_data)}")
+            return []
+
     except Exception as e:
         logger.error(f"Technologies failed: {e}")
         return []
