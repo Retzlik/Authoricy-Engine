@@ -641,11 +641,16 @@ async def fetch_backlink_domain_intersection(
         [{
             "targets": targets_dict,  # FIXED: was array, now dict
             "limit": limit,
-            "order_by": ["1.rank,desc"],  # Sort by domain rank
+            # Note: order_by removed - was causing issues with some domain combinations
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    # Safe parsing - handle None values in API response
+    tasks = result.get("tasks") or [{}]
+    task_result = tasks[0].get("result") if tasks else None
+    items = []
+    if task_result and len(task_result) > 0:
+        items = task_result[0].get("items") or []
 
     # Filter: domains that link to at least one competitor but not to us
     # The API returns intersection data - we need to filter
@@ -862,14 +867,16 @@ async def fetch_bulk_referring_domains(
     result = await client.post(
         "backlinks/bulk_referring_domains/live",
         [{
-            "targets": domains[:100],  # Max 100 domains
+            "targets": domains[:100],  # Max 100 domains - correct for backlinks API
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    # Safe parsing - handle None values
+    tasks = result.get("tasks") or [{}]
+    items = tasks[0].get("result") or []
 
     domain_data = {}
-    for item in items:
+    for item in items or []:
         target = item.get("target", "")
         domain_data[target] = {
             "referring_domains": item.get("referring_domains", 0),

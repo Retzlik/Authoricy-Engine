@@ -221,6 +221,30 @@ async def fetch_relevant_pages(client, domain: str, market: str, language: str) 
 
 async def fetch_competitors(client, domain: str, market: str, language: str) -> List[Dict]:
     """Fetch organic competitors."""
+    # Domains that are never real SEO competitors
+    EXCLUDED_DOMAINS = {
+        # Social media
+        "facebook.com", "twitter.com", "x.com", "instagram.com", "linkedin.com",
+        "tiktok.com", "pinterest.com", "reddit.com", "tumblr.com",
+        # Video/media platforms
+        "youtube.com", "vimeo.com", "dailymotion.com", "twitch.tv",
+        # Tech giants (general purpose)
+        "google.com", "apple.com", "microsoft.com", "amazon.com",
+        # Reference sites
+        "wikipedia.org", "wikimedia.org", "wiktionary.org",
+        # Government/official
+        "gov", ".gov.",
+    }
+
+    def is_excluded(domain_name: str) -> bool:
+        if not domain_name:
+            return True
+        domain_lower = domain_name.lower()
+        for excluded in EXCLUDED_DOMAINS:
+            if excluded in domain_lower:
+                return True
+        return False
+
     try:
         result = await client.post(
             "dataforseo_labs/google/competitors_domain/live",
@@ -228,21 +252,27 @@ async def fetch_competitors(client, domain: str, market: str, language: str) -> 
                 "target": domain,
                 "location_name": market,
                 "language_name": language,  # FIXED: was language_code
-                "limit": 20
+                "limit": 50  # Fetch more to filter
             }]
         )
 
         items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
-        return [
-            {
-                "domain": item.get("domain"),
+        competitors = []
+        for item in items:
+            comp_domain = item.get("domain", "")
+            if is_excluded(comp_domain):
+                continue
+            competitors.append({
+                "domain": comp_domain,
                 "relevance": item.get("avg_position"),
                 "common_keywords": item.get("se_keywords"),
                 "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
-            }
-            for item in items
-        ]
+            })
+            if len(competitors) >= 20:
+                break
+
+        return competitors
     except Exception as e:
         logger.error(f"Competitors failed: {e}")
         return []
