@@ -108,11 +108,20 @@ from .repository import (
     fail_run,
     # API logging
     log_api_call,
-    # Data storage
+    # Data storage - Core
     store_keywords,
     store_competitors,
     store_backlinks,
     store_technical_metrics,
+    # Data storage - Intelligence (NEW)
+    store_serp_features,
+    store_keyword_gaps,
+    store_referring_domains,
+    store_ranking_history,
+    store_content_clusters,
+    store_ai_visibility,
+    store_local_rankings,
+    store_serp_competitors,
     # AI outputs
     store_agent_output,
     store_report,
@@ -182,7 +191,7 @@ __all__ = [
     "validate_keyword",
     "validate_competitor",
     "validate_backlink",
-    # Repository
+    # Repository - Core
     "create_analysis_run",
     "update_run_status",
     "complete_run",
@@ -197,6 +206,15 @@ __all__ = [
     "mark_report_delivered",
     "get_run_data",
     "get_run_stats",
+    # Repository - Intelligence (NEW)
+    "store_serp_features",
+    "store_keyword_gaps",
+    "store_referring_domains",
+    "store_ranking_history",
+    "store_content_clusters",
+    "store_ai_visibility",
+    "store_local_rankings",
+    "store_serp_competitors",
     # Pipeline
     "run_analysis_with_db",
     "get_quality_summary",
