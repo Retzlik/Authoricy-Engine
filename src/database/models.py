@@ -639,3 +639,445 @@ class DomainMetricsHistory(Base):
     __table_args__ = (
         Index("idx_metrics_history", "domain_id", "recorded_at"),
     )
+
+
+# =============================================================================
+# SERP FEATURES - Track featured snippets, PAA, local packs, etc.
+# =============================================================================
+
+class SERPFeatureType(enum.Enum):
+    """Types of SERP features"""
+    FEATURED_SNIPPET = "featured_snippet"
+    PEOPLE_ALSO_ASK = "people_also_ask"
+    LOCAL_PACK = "local_pack"
+    KNOWLEDGE_PANEL = "knowledge_panel"
+    IMAGE_PACK = "image_pack"
+    VIDEO_CAROUSEL = "video_carousel"
+    TOP_STORIES = "top_stories"
+    SHOPPING_RESULTS = "shopping_results"
+    SITELINKS = "sitelinks"
+    FAQ_SCHEMA = "faq_schema"
+    REVIEWS = "reviews"
+    AI_OVERVIEW = "ai_overview"  # Google AI Overviews
+    DISCUSSION_FORUMS = "discussion_forums"
+    RELATED_SEARCHES = "related_searches"
+
+
+class SERPFeature(Base):
+    """SERP features for keywords - know where the opportunities are"""
+    __tablename__ = "serp_features"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+    keyword_id = Column(UUID(as_uuid=True), ForeignKey("keywords.id"), nullable=True)
+
+    # Keyword info (denormalized for query performance)
+    keyword = Column(String(500), nullable=False)
+
+    # Feature type
+    feature_type = Column(Enum(SERPFeatureType), nullable=False)
+
+    # Position in SERP
+    position = Column(Integer)  # Where the feature appears
+
+    # Ownership
+    owned_by_target = Column(Boolean, default=False)  # Does target domain own this?
+    owned_by_domain = Column(String(255))  # Which domain owns it?
+
+    # Feature-specific data
+    feature_data = Column(JSONB, default={})  # Snippet text, PAA questions, etc.
+
+    # Opportunity assessment
+    can_target = Column(Boolean, default=True)  # Is this feature targetable?
+    opportunity_score = Column(Float)  # 0-100, how valuable is this opportunity
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_serp_feature_keyword", "domain_id", "keyword"),
+        Index("idx_serp_feature_type", "domain_id", "feature_type"),
+        Index("idx_serp_feature_owned", "domain_id", "owned_by_target"),
+    )
+
+
+# =============================================================================
+# KEYWORD GAPS - Where competitors rank but you don't
+# =============================================================================
+
+class KeywordGap(Base):
+    """Keyword gaps - THE core of competitive intelligence"""
+    __tablename__ = "keyword_gaps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+
+    # The keyword
+    keyword = Column(String(500), nullable=False)
+    keyword_normalized = Column(String(500))
+
+    # Search metrics
+    search_volume = Column(Integer)
+    keyword_difficulty = Column(Integer)
+    cpc = Column(Float)
+    search_intent = Column(Enum(SearchIntent))
+
+    # Gap analysis
+    target_position = Column(Integer)  # Your position (null if not ranking)
+    target_url = Column(String(2000))  # Your ranking URL if any
+
+    # Competitor positions (JSONB for flexibility)
+    competitor_positions = Column(JSONB, default={})  # {domain: position, ...}
+    best_competitor = Column(String(255))  # Who ranks best?
+    best_competitor_position = Column(Integer)
+
+    # Gap metrics
+    competitor_count = Column(Integer)  # How many competitors rank?
+    avg_competitor_position = Column(Float)
+    position_gap = Column(Integer)  # Difference to best competitor
+
+    # Opportunity scoring
+    opportunity_score = Column(Float)  # 0-100
+    priority = Column(String(20))  # high, medium, low
+    difficulty_adjusted_score = Column(Float)  # Score adjusted for your domain strength
+
+    # Content opportunity
+    suggested_content_type = Column(String(50))  # blog, landing_page, product, etc.
+    estimated_traffic_potential = Column(Integer)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_gap_opportunity", "domain_id", "opportunity_score"),
+        Index("idx_gap_priority", "domain_id", "priority"),
+        Index("idx_gap_volume", "domain_id", "search_volume"),
+    )
+
+
+# =============================================================================
+# REFERRING DOMAINS - Domain-level backlink analysis
+# =============================================================================
+
+class ReferringDomain(Base):
+    """Referring domains - aggregate backlink source analysis"""
+    __tablename__ = "referring_domains"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+
+    # Source domain
+    referring_domain = Column(String(255), nullable=False)
+
+    # Domain metrics
+    domain_rating = Column(Float)
+    organic_traffic = Column(Integer)
+    organic_keywords = Column(Integer)
+
+    # Link profile from this domain
+    backlink_count = Column(Integer)  # Total links from this domain
+    dofollow_count = Column(Integer)
+    nofollow_count = Column(Integer)
+
+    # Link types
+    text_links = Column(Integer)
+    image_links = Column(Integer)
+    redirect_links = Column(Integer)
+
+    # Target pages
+    linked_pages = Column(JSONB, default=[])  # List of pages on your domain they link to
+    unique_pages_linked = Column(Integer)
+
+    # Anchor text distribution
+    anchor_distribution = Column(JSONB, default={})  # {anchor: count, ...}
+    primary_anchor = Column(String(500))
+
+    # Quality assessment
+    quality_score = Column(Float)  # 0-100
+    spam_score = Column(Float)
+    relevance_score = Column(Float)  # How relevant is this domain to your niche
+
+    # Classification
+    domain_type = Column(String(50))  # news, blog, directory, forum, etc.
+    is_competitor = Column(Boolean, default=False)
+
+    # Temporal
+    first_seen = Column(DateTime)
+    last_seen = Column(DateTime)
+    is_lost = Column(Boolean, default=False)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("analysis_run_id", "referring_domain", name="uq_run_referring_domain"),
+        Index("idx_ref_domain_quality", "domain_id", "quality_score"),
+        Index("idx_ref_domain_dr", "domain_id", "domain_rating"),
+    )
+
+
+# =============================================================================
+# RANKING HISTORY - Track position changes over time
+# =============================================================================
+
+class RankingHistory(Base):
+    """Ranking history - track keyword positions over time"""
+    __tablename__ = "ranking_history"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+
+    # Keyword
+    keyword = Column(String(500), nullable=False)
+    keyword_normalized = Column(String(500))
+
+    # Position data
+    position = Column(Integer)
+    previous_position = Column(Integer)
+    position_change = Column(Integer)  # Positive = improved, Negative = dropped
+
+    # Ranking URL
+    ranking_url = Column(String(2000))
+    previous_url = Column(String(2000))  # Track URL changes
+
+    # Traffic impact
+    estimated_traffic = Column(Integer)
+    traffic_change = Column(Integer)
+
+    # SERP volatility
+    serp_volatility = Column(Float)  # How much did this SERP change?
+
+    # Snapshot date
+    recorded_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_ranking_history_keyword", "domain_id", "keyword_normalized", "recorded_at"),
+        Index("idx_ranking_history_change", "domain_id", "position_change"),
+    )
+
+
+# =============================================================================
+# CONTENT CLUSTERS - Topic clusters and pillar pages
+# =============================================================================
+
+class ContentCluster(Base):
+    """Content clusters - topical authority mapping"""
+    __tablename__ = "content_clusters"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+
+    # Cluster identification
+    cluster_name = Column(String(255), nullable=False)
+    cluster_slug = Column(String(255))
+
+    # Pillar content
+    pillar_keyword = Column(String(500))
+    pillar_url = Column(String(2000))  # Existing pillar page if any
+    pillar_position = Column(Integer)
+
+    # Cluster metrics
+    total_keywords = Column(Integer)
+    ranking_keywords = Column(Integer)
+    avg_position = Column(Float)
+    total_search_volume = Column(Integer)
+    total_traffic = Column(Integer)
+
+    # Cluster keywords (JSONB for flexibility)
+    keywords = Column(JSONB, default=[])  # [{keyword, volume, position, url}, ...]
+
+    # Content gaps in cluster
+    missing_subtopics = Column(JSONB, default=[])  # Keywords in cluster we don't rank for
+    content_gap_count = Column(Integer)
+
+    # Competitive assessment
+    cluster_difficulty = Column(Float)  # Average difficulty
+    top_competitor = Column(String(255))
+    competitor_coverage = Column(JSONB, default={})  # {competitor: keyword_count, ...}
+
+    # Authority assessment
+    topical_authority_score = Column(Float)  # 0-100, our authority in this topic
+    content_completeness = Column(Float)  # 0-100, how complete is our coverage
+
+    # Recommendations
+    recommended_content = Column(JSONB, default=[])  # Suggested new content
+    priority = Column(String(20))  # high, medium, low
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_cluster_authority", "domain_id", "topical_authority_score"),
+        Index("idx_cluster_priority", "domain_id", "priority"),
+    )
+
+
+# =============================================================================
+# AI VISIBILITY - Track presence in AI search (GEO)
+# =============================================================================
+
+class AIVisibilitySource(enum.Enum):
+    """AI search sources"""
+    GOOGLE_AI_OVERVIEW = "google_ai_overview"
+    CHATGPT = "chatgpt"
+    PERPLEXITY = "perplexity"
+    CLAUDE = "claude"
+    BING_COPILOT = "bing_copilot"
+    GOOGLE_SGE = "google_sge"
+
+
+class AIVisibility(Base):
+    """AI visibility tracking - the future of search"""
+    __tablename__ = "ai_visibility"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+
+    # Query/Topic
+    query = Column(String(500), nullable=False)
+    topic_category = Column(String(100))
+
+    # Source
+    ai_source = Column(Enum(AIVisibilitySource), nullable=False)
+
+    # Visibility
+    is_mentioned = Column(Boolean, default=False)
+    is_cited = Column(Boolean, default=False)  # Actually linked/cited
+    is_recommended = Column(Boolean, default=False)  # Recommended as a resource
+
+    # Citation details
+    citation_url = Column(String(2000))
+    citation_context = Column(Text)  # The text around the citation
+    citation_position = Column(Integer)  # Position in the response (1st, 2nd, etc.)
+
+    # Competitor visibility
+    competitors_mentioned = Column(JSONB, default=[])  # Other domains mentioned
+    total_citations = Column(Integer)  # Total citations in this response
+
+    # Content that got cited
+    cited_content_type = Column(String(50))  # blog, product, homepage, etc.
+    cited_content_topic = Column(String(255))
+
+    # Quality signals
+    sentiment = Column(String(20))  # positive, neutral, negative
+    authority_signal = Column(Boolean)  # Was domain presented as authoritative?
+
+    # Timestamps
+    checked_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_ai_visibility_source", "domain_id", "ai_source"),
+        Index("idx_ai_visibility_mentioned", "domain_id", "is_mentioned"),
+    )
+
+
+# =============================================================================
+# LOCAL RANKINGS - Google Business Profile and local pack
+# =============================================================================
+
+class LocalRanking(Base):
+    """Local rankings - for businesses with physical presence"""
+    __tablename__ = "local_rankings"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+
+    # Location
+    location_name = Column(String(255))  # Business location name
+    address = Column(String(500))
+    city = Column(String(100))
+    region = Column(String(100))
+    country = Column(String(100))
+    postal_code = Column(String(20))
+    latitude = Column(Float)
+    longitude = Column(Float)
+
+    # Google Business Profile
+    gbp_name = Column(String(255))
+    gbp_category = Column(String(100))
+    gbp_rating = Column(Float)
+    gbp_review_count = Column(Integer)
+    gbp_url = Column(String(2000))
+
+    # Local keyword
+    keyword = Column(String(500), nullable=False)
+    search_volume = Column(Integer)
+
+    # Rankings
+    local_pack_position = Column(Integer)  # Position in local 3-pack (1-3, null if not in pack)
+    organic_position = Column(Integer)  # Organic position for same keyword
+    maps_position = Column(Integer)  # Position in Google Maps results
+
+    # Competitor local pack
+    local_pack_competitors = Column(JSONB, default=[])  # [{name, position, rating, reviews}, ...]
+
+    # Local signals
+    distance_from_centroid = Column(Float)  # Distance from search location centroid
+    prominence_score = Column(Float)  # Google's prominence calculation estimate
+
+    # Timestamps
+    recorded_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_local_ranking_keyword", "domain_id", "keyword"),
+        Index("idx_local_ranking_position", "domain_id", "local_pack_position"),
+    )
+
+
+# =============================================================================
+# SERP COMPETITORS - Per-keyword competitors (different from domain competitors)
+# =============================================================================
+
+class SERPCompetitor(Base):
+    """SERP competitors - who you're actually competing against per keyword"""
+    __tablename__ = "serp_competitors"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+    keyword_id = Column(UUID(as_uuid=True), ForeignKey("keywords.id"), nullable=True)
+
+    # Keyword
+    keyword = Column(String(500), nullable=False)
+
+    # Competitor
+    competitor_domain = Column(String(255), nullable=False)
+    competitor_url = Column(String(2000))
+
+    # Position data
+    position = Column(Integer, nullable=False)
+
+    # Page metrics
+    page_title = Column(String(500))
+    page_backlinks = Column(Integer)
+    page_referring_domains = Column(Integer)
+    page_domain_rating = Column(Float)
+
+    # Content analysis
+    content_type = Column(String(50))  # blog, product, category, homepage
+    word_count = Column(Integer)
+    has_schema = Column(Boolean)
+    schema_types = Column(JSONB, default=[])  # Types of schema markup
+
+    # SERP features owned by this competitor
+    serp_features_owned = Column(JSONB, default=[])  # [featured_snippet, paa, etc.]
+
+    # Competitive gap
+    is_beatable = Column(Boolean)  # Our assessment if we can outrank
+    difficulty_to_outrank = Column(Float)  # 0-100
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_serp_competitor_keyword", "domain_id", "keyword"),
+        Index("idx_serp_competitor_domain", "domain_id", "competitor_domain"),
+    )

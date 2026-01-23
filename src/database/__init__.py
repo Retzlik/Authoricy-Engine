@@ -40,23 +40,38 @@ Usage:
 # Models
 from .models import (
     Base,
+    # Core entities
     Client,
     Domain,
     AnalysisRun,
     APICall,
+    # SEO data
     Keyword,
     Competitor,
     Backlink,
     Page,
     TechnicalMetrics,
+    # AI & Reports
     AgentOutput,
     Report,
+    # History & Trends
     DomainMetricsHistory,
+    RankingHistory,
+    # NEW: Advanced Intelligence Tables
+    SERPFeature,
+    KeywordGap,
+    ReferringDomain,
+    ContentCluster,
+    AIVisibility,
+    LocalRanking,
+    SERPCompetitor,
     # Enums
     CompetitorType,
     AnalysisStatus,
     DataQualityLevel,
     SearchIntent,
+    SERPFeatureType,
+    AIVisibilitySource,
 )
 
 # Session management
@@ -115,25 +130,39 @@ from .pipeline import (
 )
 
 __all__ = [
-    # Models
+    # Models - Core
     "Base",
     "Client",
     "Domain",
     "AnalysisRun",
     "APICall",
+    # Models - SEO Data
     "Keyword",
     "Competitor",
     "Backlink",
     "Page",
     "TechnicalMetrics",
+    # Models - AI & Reports
     "AgentOutput",
     "Report",
+    # Models - History & Trends
     "DomainMetricsHistory",
+    "RankingHistory",
+    # Models - Advanced Intelligence (NEW)
+    "SERPFeature",
+    "KeywordGap",
+    "ReferringDomain",
+    "ContentCluster",
+    "AIVisibility",
+    "LocalRanking",
+    "SERPCompetitor",
     # Enums
     "CompetitorType",
     "AnalysisStatus",
     "DataQualityLevel",
     "SearchIntent",
+    "SERPFeatureType",
+    "AIVisibilitySource",
     # Session
     "get_db",
     "get_db_context",
