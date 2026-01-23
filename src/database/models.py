@@ -1081,3 +1081,232 @@ class SERPCompetitor(Base):
         Index("idx_serp_competitor_keyword", "domain_id", "keyword"),
         Index("idx_serp_competitor_domain", "domain_id", "competitor_domain"),
     )
+
+
+# =============================================================================
+# CONTEXT INTELLIGENCE - Pre-collection business understanding
+# =============================================================================
+
+class BusinessModelType(enum.Enum):
+    """Business model classification"""
+    B2B_SAAS = "b2b_saas"
+    B2B_SERVICE = "b2b_service"
+    B2C_ECOMMERCE = "b2c_ecommerce"
+    B2C_SUBSCRIPTION = "b2c_subscription"
+    MARKETPLACE = "marketplace"
+    PUBLISHER = "publisher"
+    LOCAL_SERVICE = "local_service"
+    NONPROFIT = "nonprofit"
+    UNKNOWN = "unknown"
+
+
+class PrimaryGoalType(enum.Enum):
+    """User's primary SEO goal"""
+    TRAFFIC = "traffic"
+    LEADS = "leads"
+    AUTHORITY = "authority"
+    BALANCED = "balanced"
+
+
+class ValidatedCompetitorType(enum.Enum):
+    """Validated competitor classification"""
+    DIRECT = "direct"
+    SEO = "seo"
+    CONTENT = "content"
+    EMERGING = "emerging"
+    ASPIRATIONAL = "aspirational"
+    NOT_COMPETITOR = "not_competitor"
+
+
+class ContextIntelligence(Base):
+    """
+    Context Intelligence results - stored for reuse and learning.
+
+    This is the output of the Context Intelligence phase that runs
+    BEFORE data collection to understand the business.
+    """
+    __tablename__ = "context_intelligence"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=True)
+
+    # User inputs
+    declared_market = Column(String(50))
+    declared_language = Column(String(10))
+    declared_goal = Column(Enum(PrimaryGoalType))
+    user_provided_competitors = Column(JSONB, default=[])
+
+    # Website analysis results
+    detected_business_model = Column(Enum(BusinessModelType))
+    detected_company_stage = Column(String(50))
+    detected_languages = Column(JSONB, default=[])
+    detected_offerings = Column(JSONB, default=[])  # [{name, type, pricing_model}, ...]
+    value_proposition = Column(Text)
+    target_audience = Column(JSONB, default={})
+
+    # Site features detected
+    has_blog = Column(Boolean, default=False)
+    has_pricing_page = Column(Boolean, default=False)
+    has_demo_form = Column(Boolean, default=False)
+    has_contact_form = Column(Boolean, default=False)
+    has_ecommerce = Column(Boolean, default=False)
+    content_maturity = Column(String(50))
+    technical_sophistication = Column(String(50))
+
+    # Goal validation
+    goal_fits_business = Column(Boolean, default=True)
+    goal_validation_confidence = Column(Float)
+    suggested_goal = Column(Enum(PrimaryGoalType), nullable=True)
+    goal_suggestion_reason = Column(Text)
+
+    # Market validation
+    primary_market_validated = Column(Boolean, default=True)
+    market_validation_notes = Column(Text)
+    discovered_markets = Column(JSONB, default=[])  # [{region, language, opportunity_score, ...}, ...]
+    should_expand_markets = Column(Boolean, default=False)
+    suggested_markets = Column(JSONB, default=[])
+
+    # Competitor validation
+    validated_competitors = Column(JSONB, default=[])  # [{domain, type, threat_level, ...}, ...]
+    discovered_competitors = Column(JSONB, default=[])
+    rejected_competitors = Column(JSONB, default=[])  # Domains incorrectly suggested
+
+    # Business context synthesis
+    buyer_journey_type = Column(String(50))
+    buyer_journey_stages = Column(JSONB, default=[])
+    success_definition = Column(JSONB, default={})  # {10x, realistic, minimum, metrics}
+    recommended_focus_areas = Column(JSONB, default=[])
+    seo_fit = Column(String(50))
+    quick_wins_potential = Column(String(50))
+
+    # Collection configuration generated
+    collection_config = Column(JSONB, default={})  # The IntelligentCollectionConfig
+
+    # Quality metrics
+    overall_confidence = Column(Float)
+    website_analysis_confidence = Column(Float)
+    execution_time_seconds = Column(Float)
+    errors = Column(JSONB, default=[])
+    warnings = Column(JSONB, default=[])
+
+    # Validation by user (for learning)
+    user_validated = Column(Boolean, default=False)
+    user_corrections = Column(JSONB, default={})  # What the user corrected
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_context_domain", "domain_id", "created_at"),
+        Index("idx_context_goal", "domain_id", "declared_goal"),
+    )
+
+
+class ValidatedCompetitorRecord(Base):
+    """
+    Validated competitor relationships.
+
+    Stores the validated and classified competitor relationships
+    discovered by Context Intelligence for a domain.
+    """
+    __tablename__ = "validated_competitors"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+    context_intelligence_id = Column(UUID(as_uuid=True), ForeignKey("context_intelligence.id"), nullable=True)
+
+    # Competitor identification
+    competitor_domain = Column(String(255), nullable=False)
+    competitor_name = Column(String(255))
+
+    # Classification
+    competitor_type = Column(Enum(ValidatedCompetitorType), nullable=False)
+    threat_level = Column(String(20))  # critical, high, medium, low, none
+
+    # Discovery
+    discovery_method = Column(String(50))  # user_provided, serp_analysis, dataforseo_suggested
+    user_provided = Column(Boolean, default=False)
+
+    # Validation
+    validation_status = Column(String(50))  # confirmed, reclassified, rejected
+    validation_notes = Column(Text)
+
+    # Evidence
+    keyword_overlap_percentage = Column(Float)
+    traffic_ratio = Column(Float)
+    business_similarity_score = Column(Float)
+
+    # Analysis insights
+    strengths = Column(JSONB, default=[])
+    weaknesses = Column(JSONB, default=[])
+
+    # Metrics (populated during collection)
+    organic_traffic = Column(Integer)
+    organic_keywords = Column(Integer)
+    domain_rating = Column(Float)
+    traffic_trend = Column(String(20))
+
+    # Confidence
+    confidence_score = Column(Float)
+
+    # Status
+    is_active = Column(Boolean, default=True)
+    user_validated = Column(Boolean, default=False)
+
+    # Timestamps
+    discovered_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("domain_id", "competitor_domain", name="uq_domain_competitor"),
+        Index("idx_validated_competitor_type", "domain_id", "competitor_type"),
+        Index("idx_validated_competitor_threat", "domain_id", "threat_level"),
+    )
+
+
+class MarketOpportunityRecord(Base):
+    """
+    Discovered market opportunities.
+
+    Stores market/region opportunities discovered by Context Intelligence.
+    """
+    __tablename__ = "market_opportunities"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+    context_intelligence_id = Column(UUID(as_uuid=True), ForeignKey("context_intelligence.id"), nullable=True)
+
+    # Market identification
+    region = Column(String(100), nullable=False)
+    language = Column(String(50), nullable=False)
+    region_name = Column(String(255))
+
+    # Opportunity assessment
+    opportunity_score = Column(Float)  # 0-100
+    competition_level = Column(String(20))  # low, medium, high, very_high
+    search_volume_potential = Column(Integer)
+    keyword_count_estimate = Column(Integer)
+
+    # Competitive landscape
+    top_competitors_in_market = Column(JSONB, default=[])
+    our_current_visibility = Column(Float)
+
+    # Status
+    is_primary = Column(Boolean, default=False)
+    is_recommended = Column(Boolean, default=False)
+    priority_rank = Column(Integer)
+    recommendation_reason = Column(Text)
+
+    # Discovery
+    discovery_method = Column(String(50))
+
+    # Timestamps
+    discovered_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("domain_id", "region", "language", name="uq_domain_market"),
+        Index("idx_market_opportunity_score", "domain_id", "opportunity_score"),
+        Index("idx_market_recommended", "domain_id", "is_recommended"),
+    )

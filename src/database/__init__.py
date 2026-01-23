@@ -57,7 +57,7 @@ from .models import (
     # History & Trends
     DomainMetricsHistory,
     RankingHistory,
-    # NEW: Advanced Intelligence Tables
+    # Advanced Intelligence Tables
     SERPFeature,
     KeywordGap,
     ReferringDomain,
@@ -65,6 +65,10 @@ from .models import (
     AIVisibility,
     LocalRanking,
     SERPCompetitor,
+    # Context Intelligence Tables (NEW)
+    ContextIntelligence,
+    ValidatedCompetitorRecord,
+    MarketOpportunityRecord,
     # Enums
     CompetitorType,
     AnalysisStatus,
@@ -72,6 +76,9 @@ from .models import (
     SearchIntent,
     SERPFeatureType,
     AIVisibilitySource,
+    BusinessModelType,
+    PrimaryGoalType,
+    ValidatedCompetitorType,
 )
 
 # Session management
@@ -157,7 +164,7 @@ __all__ = [
     # Models - History & Trends
     "DomainMetricsHistory",
     "RankingHistory",
-    # Models - Advanced Intelligence (NEW)
+    # Models - Advanced Intelligence
     "SERPFeature",
     "KeywordGap",
     "ReferringDomain",
@@ -165,6 +172,10 @@ __all__ = [
     "AIVisibility",
     "LocalRanking",
     "SERPCompetitor",
+    # Models - Context Intelligence (NEW)
+    "ContextIntelligence",
+    "ValidatedCompetitorRecord",
+    "MarketOpportunityRecord",
     # Enums
     "CompetitorType",
     "AnalysisStatus",
@@ -172,6 +183,9 @@ __all__ = [
     "SearchIntent",
     "SERPFeatureType",
     "AIVisibilitySource",
+    "BusinessModelType",
+    "PrimaryGoalType",
+    "ValidatedCompetitorType",
     # Session
     "get_db",
     "get_db_context",

@@ -91,6 +91,11 @@ USER_PROMPT_TEMPLATE = """# INPUT DATA
 
 ---
 
+## BUSINESS CONTEXT (from Context Intelligence)
+{business_context}
+
+---
+
 ## DATA DICTIONARY (Reference for field interpretation)
 ```json
 {data_dictionary_summary}
@@ -340,6 +345,10 @@ class DataInterpreter:
             "competitor_type_rules": data_dictionary.get("competitors", {}).get("competitor_type", {}).get("classification_rules", {}),
         }
 
+        # Format business context from Context Intelligence
+        context_intelligence = analysis_data.get("context_intelligence", {})
+        business_context_text = self._format_business_context(context_intelligence)
+
         # Format prompt
         prompt = USER_PROMPT_TEMPLATE.format(
             domain=metadata.get("domain", "unknown"),
@@ -361,6 +370,7 @@ class DataInterpreter:
             error_count=len(metadata.get("errors", [])),
             confidence_indicators=confidence_text,
             data_limitations=limitations_text,
+            business_context=business_context_text,
             data_dictionary_summary=json.dumps(dictionary_summary, indent=2),
             # Phase data
             foundation_data=foundation_data,
@@ -479,3 +489,147 @@ Use the same data and format as before, but improve the areas mentioned.
             return data
         else:
             return data
+
+    def _format_business_context(self, context: Dict[str, Any]) -> str:
+        """
+        Format Context Intelligence data for the prompt.
+
+        Args:
+            context: Context intelligence data from pre-collection phase
+
+        Returns:
+            Formatted business context string
+        """
+        if not context:
+            return "No business context available. Analyze based on data only."
+
+        parts = []
+
+        # Business context
+        bc = context.get("business_context", {})
+        if bc:
+            parts.append("### Business Understanding")
+            if bc.get("business_model"):
+                parts.append(f"- **Business Model:** {bc['business_model']}")
+            if bc.get("company_stage"):
+                parts.append(f"- **Company Stage:** {bc['company_stage']}")
+            if bc.get("industry"):
+                parts.append(f"- **Industry:** {bc['industry']}")
+            if bc.get("primary_goal"):
+                parts.append(f"- **Primary Goal:** {bc['primary_goal']}")
+            if bc.get("target_audience"):
+                audience = bc["target_audience"]
+                if isinstance(audience, dict):
+                    parts.append(f"- **Target Audience:** {audience.get('primary', 'Unknown')}")
+            if bc.get("seo_fit"):
+                parts.append(f"- **SEO Fit:** {bc['seo_fit']}")
+            if bc.get("recommended_focus"):
+                parts.append(f"- **Recommended Focus:** {', '.join(bc['recommended_focus'][:3])}")
+
+            # Goal validation
+            gv = bc.get("goal_validation", {})
+            if gv:
+                if not gv.get("goal_fits_business", True):
+                    parts.append("")
+                    parts.append("### ⚠️ Goal Mismatch Detected")
+                    parts.append(f"The stated goal '{gv.get('stated_goal')}' may not align with this business.")
+                    if gv.get("suggested_goal"):
+                        parts.append(f"**Suggested goal:** {gv['suggested_goal']}")
+                    if gv.get("suggestion_reason"):
+                        parts.append(f"**Reason:** {gv['suggestion_reason']}")
+
+            # Buyer journey
+            bj = bc.get("buyer_journey", {})
+            if bj:
+                parts.append("")
+                parts.append("### Buyer Journey")
+                if bj.get("type"):
+                    parts.append(f"- **Type:** {bj['type']}")
+                if bj.get("cycle_length"):
+                    parts.append(f"- **Cycle Length:** {bj['cycle_length']}")
+                if bj.get("stages"):
+                    parts.append(f"- **Stages:** {' → '.join(bj['stages'])}")
+
+            # Success definition
+            sd = bc.get("success_definition", {})
+            if sd:
+                parts.append("")
+                parts.append("### Success Definition")
+                if sd.get("10x_scenario"):
+                    parts.append(f"- **10x Success:** {sd['10x_scenario']}")
+                if sd.get("realistic_12m"):
+                    parts.append(f"- **Realistic 12-Month:** {sd['realistic_12m']}")
+                if sd.get("primary_metric"):
+                    parts.append(f"- **Primary Metric:** {sd['primary_metric']}")
+
+        # Competitor context
+        cc = context.get("competitor_context", {})
+        if cc:
+            parts.append("")
+            parts.append("### Validated Competitors")
+
+            direct = cc.get("direct_competitors", [])
+            if direct:
+                parts.append("**Direct Business Competitors** (validated):")
+                for comp in direct[:5]:
+                    if isinstance(comp, dict):
+                        parts.append(f"- {comp.get('domain', 'unknown')} - Threat: {comp.get('threat_level', 'unknown')}")
+                    else:
+                        parts.append(f"- {comp}")
+
+            discovered = cc.get("discovered_competitors", [])
+            if discovered:
+                parts.append("")
+                parts.append("**Discovered Competitors:**")
+                for comp in discovered[:3]:
+                    if isinstance(comp, dict):
+                        parts.append(f"- {comp.get('domain', 'unknown')} ({comp.get('type', 'unknown')}) - via {comp.get('discovery_method', 'unknown')}")
+
+            reclassified = cc.get("reclassified", [])
+            if reclassified:
+                parts.append("")
+                parts.append("**Reclassified (NOT real competitors):**")
+                for comp in reclassified[:3]:
+                    if isinstance(comp, dict):
+                        parts.append(f"- {comp.get('domain', 'unknown')}: {comp.get('actual_type', 'unknown')} - {comp.get('reason', '')}")
+
+        # Market context
+        mc = context.get("market_context", {})
+        if mc:
+            parts.append("")
+            parts.append("### Market Validation")
+            if mc.get("declared_market"):
+                parts.append(f"- **Primary Market:** {mc['declared_market']} (validated: {mc.get('primary_validated', False)})")
+            if mc.get("validation_notes"):
+                parts.append(f"- **Notes:** {mc['validation_notes']}")
+
+            opps = mc.get("discovered_opportunities", [])
+            if opps:
+                parts.append("")
+                parts.append("**Discovered Market Opportunities:**")
+                for opp in opps[:3]:
+                    if isinstance(opp, dict):
+                        parts.append(
+                            f"- {opp.get('region', 'unknown')} ({opp.get('language', 'unknown')}): "
+                            f"Opportunity score {opp.get('opportunity_score', 0):.0f}/100, "
+                            f"Competition: {opp.get('competition_level', 'unknown')}"
+                        )
+                        if opp.get("recommendation"):
+                            parts.append(f"  → {opp['recommendation']}")
+
+        # Collection focus
+        cf = context.get("collection_focus", {})
+        if cf:
+            parts.append("")
+            parts.append("### Analysis Focus (based on goal)")
+            if cf.get("primary_goal"):
+                parts.append(f"- **Goal:** {cf['primary_goal']}")
+            if cf.get("priority_intents"):
+                parts.append(f"- **Priority Intents:** {', '.join(cf['priority_intents'])}")
+            if cf.get("content_type_focus"):
+                parts.append(f"- **Content Focus:** {', '.join(cf['content_type_focus'])}")
+
+        if not parts:
+            return "No business context available. Analyze based on data only."
+
+        return "\n".join(parts)
