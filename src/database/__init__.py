@@ -105,6 +105,13 @@ from .repository import (
     get_run_stats,
 )
 
+# Pipeline integration
+from .pipeline import (
+    run_analysis_with_db,
+    get_quality_summary,
+    QUALITY_GATE,
+)
+
 __all__ = [
     # Models
     "Base",
@@ -157,4 +164,8 @@ __all__ = [
     "mark_report_delivered",
     "get_run_data",
     "get_run_stats",
+    # Pipeline
+    "run_analysis_with_db",
+    "get_quality_summary",
+    "QUALITY_GATE",
 ]

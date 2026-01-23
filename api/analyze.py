@@ -4,7 +4,8 @@ API Endpoint for SEO Analysis
 FastAPI webhook handler that:
 1. Receives analysis requests (from Tally form or direct API call)
 2. Triggers data collection in background
-3. Sends results via email when complete
+3. Validates data quality before AI analysis
+4. Sends results via email when complete
 """
 
 import asyncio
@@ -27,6 +28,12 @@ from src.collector import (
 from src.analyzer import AnalysisEngine
 from src.reporter import ReportGenerator
 from src.delivery import EmailDelivery
+from src.database import (
+    init_db,
+    check_db_connection,
+    run_analysis_with_db,
+    get_quality_summary,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -39,8 +46,27 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Authoricy SEO Analyzer",
     description="Automated SEO analysis powered by DataForSEO and Claude AI",
-    version="0.1.0",
+    version="0.2.0",
 )
+
+
+# ============================================================================
+# STARTUP - Initialize Database
+# ============================================================================
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup."""
+    logger.info("Initializing database...")
+    try:
+        init_db()
+        if check_db_connection():
+            logger.info("Database connection verified")
+        else:
+            logger.warning("Database connection check failed - continuing anyway")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        # Don't fail startup - the app can still work without DB
 
 
 # ============================================================================
@@ -98,12 +124,19 @@ async def root():
 
 @app.get("/api/health")
 async def health():
-    """Detailed health check."""
+    """Detailed health check including database status."""
+    db_connected = False
+    try:
+        db_connected = check_db_connection()
+    except:
+        pass
+
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "0.1.0",
+        "version": "0.2.0",
         "jobs_in_queue": len([j for j in jobs.values() if j.status == "running"]),
+        "database": "connected" if db_connected else "disconnected",
     }
 
 
@@ -188,10 +221,12 @@ async def run_analysis(
     Steps:
     1. Update job status to running
     2. Collect data from DataForSEO (60 endpoints)
-    3. Analyze with Claude (4 analysis loops)
-    4. Generate PDF reports (external + internal)
-    5. Send email via Resend
-    6. Update job status to completed
+    3. Store data in database and validate quality
+    4. Quality gate check - skip AI if data is poor
+    5. Analyze with Claude (4 analysis loops)
+    6. Generate PDF reports (external + internal)
+    7. Send email via Resend
+    8. Update job status to completed
     """
 
     # Update status
@@ -233,6 +268,21 @@ async def run_analysis(
             for warning in result.warnings:
                 logger.warning(f"[{job_id}] {warning}")
 
+            # ================================================================
+            # DATA QUALITY CHECK (NEW - validates before AI)
+            # ================================================================
+            quality_summary = get_quality_summary(result)
+            logger.info(
+                f"[{job_id}] Data quality: {quality_summary['quality_level']} "
+                f"({quality_summary['quality_score']:.1f}%), "
+                f"critical={quality_summary['critical_issues']}, "
+                f"warnings={quality_summary['warnings']}"
+            )
+
+            if quality_summary['recommendations']:
+                for rec in quality_summary['recommendations']:
+                    logger.info(f"[{job_id}] Quality recommendation: {rec}")
+
             # Compile data for analysis
             analysis_data = compile_analysis_data(result)
 
@@ -243,11 +293,24 @@ async def run_analysis(
             )
 
             # ================================================================
-            # ANALYSIS ENGINE (Claude AI - 4 Loops)
+            # QUALITY GATE - Skip AI if data is insufficient
             # ================================================================
+            should_run_ai = quality_summary['is_sufficient'] and not skip_ai_analysis
             anthropic_key = os.getenv("ANTHROPIC_API_KEY")
 
-            if anthropic_key and not skip_ai_analysis:
+            if not should_run_ai:
+                logger.warning(
+                    f"[{job_id}] QUALITY GATE BLOCKED AI: "
+                    f"Data quality insufficient ({quality_summary['quality_score']:.1f}%). "
+                    f"AI analysis would produce unreliable results."
+                )
+
+            # ================================================================
+            # ANALYSIS ENGINE (Claude AI - 4 Loops)
+            # ================================================================
+            analysis_result = None
+
+            if anthropic_key and should_run_ai:
                 logger.info(f"[{job_id}] Starting Claude AI analysis (4 loops)...")
                 try:
                     engine = AnalysisEngine(api_key=anthropic_key)
@@ -264,7 +327,7 @@ async def run_analysis(
 
                     if not analysis_result.passed_quality_gate:
                         logger.warning(
-                            f"[{job_id}] Quality gate not passed "
+                            f"[{job_id}] AI quality gate not passed "
                             f"(score: {analysis_result.quality_score}/10)"
                         )
 
@@ -272,9 +335,10 @@ async def run_analysis(
                     logger.error(f"[{job_id}] AI analysis failed: {e}")
                     # Continue without AI analysis
                     analysis_result = None
+            elif not anthropic_key:
+                logger.info(f"[{job_id}] AI analysis skipped (no API key)")
             else:
-                logger.info(f"[{job_id}] AI analysis skipped")
-                analysis_result = None
+                logger.info(f"[{job_id}] AI analysis skipped (quality gate)")
 
             # ================================================================
             # REPORT GENERATION
