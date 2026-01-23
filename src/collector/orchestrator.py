@@ -80,6 +80,12 @@ class CollectionResult:
     questions_data: List[Dict] = field(default_factory=list)
     top_searches: List[Dict] = field(default_factory=list)
     traffic_estimation: Dict[str, Any] = field(default_factory=dict)
+    # Phase 2 summary metrics
+    total_ranking_keywords: int = 0
+    total_search_volume: int = 0
+    position_distribution: Dict[str, int] = field(default_factory=dict)
+    cluster_metrics: Dict[str, Any] = field(default_factory=dict)
+    gap_metrics: Dict[str, Any] = field(default_factory=dict)
 
     # Phase 3: Competitive (15 endpoints)
     competitor_analysis: List[Dict] = field(default_factory=list)
@@ -99,6 +105,11 @@ class CollectionResult:
     backlink_history: List[Dict] = field(default_factory=list)
     bulk_ref_domains: Dict[str, Any] = field(default_factory=dict)
     backlink_competitors: List[Dict] = field(default_factory=list)
+    # Phase 3 summary metrics
+    total_backlinks: int = 0
+    total_referring_domains: int = 0
+    dofollow_percentage: float = 0.0
+    avg_competitor_traffic: int = 0
 
     # Phase 4: AI & Technical (15 endpoints)
     ai_visibility: Dict[str, Any] = field(default_factory=dict)
