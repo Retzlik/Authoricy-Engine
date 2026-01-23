@@ -31,6 +31,7 @@ from src.delivery import EmailDelivery
 from src.database import (
     init_db,
     check_db_connection,
+    get_db_info,
     run_analysis_with_db,
     get_quality_summary,
 )
@@ -138,6 +139,39 @@ async def health():
         "jobs_in_queue": len([j for j in jobs.values() if j.status == "running"]),
         "database": "connected" if db_connected else "disconnected",
     }
+
+
+@app.get("/api/database")
+async def database_status():
+    """
+    Get detailed database status.
+
+    Returns:
+        - Database type (postgresql/sqlite)
+        - Connection status
+        - Tables created
+        - PostgreSQL extensions installed
+
+    Use this to debug Railway deployment issues.
+    """
+    try:
+        db_info = get_db_info()
+        return {
+            "status": "ok" if db_info["connected"] else "error",
+            "database_type": db_info["database_type"],
+            "connected": db_info["connected"],
+            "table_count": db_info["table_count"],
+            "tables": db_info["tables"],
+            "extensions": db_info.get("extensions", []),
+            "recommended_extensions": ["uuid-ossp", "pg_trgm", "btree_gin"],
+            "connection_url": db_info["connection_url"],
+            "error": db_info.get("error"),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+        }
 
 
 @app.post("/api/analyze", response_model=AnalysisResponse)

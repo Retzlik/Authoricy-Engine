@@ -195,12 +195,30 @@ def get_db_session() -> Session:
 
 def init_db(drop_all: bool = False) -> None:
     """
-    Initialize database - create all tables.
+    Initialize database - create extensions and all tables.
 
     Args:
         drop_all: If True, drop all tables first (USE WITH CAUTION!)
     """
     engine = get_engine()
+    url = get_database_url()
+    is_postgres = url.startswith("postgresql://")
+
+    # Create PostgreSQL extensions first
+    if is_postgres:
+        logger.info("Creating PostgreSQL extensions...")
+        try:
+            with engine.connect() as conn:
+                # uuid-ossp: Required for UUID generation
+                conn.execute(text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"'))
+                # pg_trgm: For fuzzy text search on keywords
+                conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pg_trgm"'))
+                # btree_gin: For GIN indexes on regular columns
+                conn.execute(text('CREATE EXTENSION IF NOT EXISTS "btree_gin"'))
+                conn.commit()
+            logger.info("PostgreSQL extensions created/verified")
+        except Exception as e:
+            logger.warning(f"Could not create extensions (might need superuser): {e}")
 
     if drop_all:
         logger.warning("Dropping all database tables!")
@@ -209,6 +227,86 @@ def init_db(drop_all: bool = False) -> None:
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created successfully")
+
+
+def get_table_count() -> int:
+    """Get count of tables in database."""
+    engine = get_engine()
+    url = get_database_url()
+    is_postgres = url.startswith("postgresql://")
+
+    try:
+        with engine.connect() as conn:
+            if is_postgres:
+                result = conn.execute(text("""
+                    SELECT COUNT(*) FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                """))
+            else:
+                result = conn.execute(text("""
+                    SELECT COUNT(*) FROM sqlite_master WHERE type='table'
+                """))
+            return result.scalar() or 0
+    except Exception as e:
+        logger.error(f"Error counting tables: {e}")
+        return -1
+
+
+def get_db_info() -> dict:
+    """
+    Get comprehensive database information.
+
+    Returns diagnostic info for debugging Railway deployment.
+    """
+    url = get_database_url()
+    is_postgres = url.startswith("postgresql://")
+
+    # Mask password in URL for logging
+    safe_url = url
+    if "@" in url:
+        parts = url.split("@")
+        safe_url = parts[0].rsplit(":", 1)[0] + ":***@" + parts[1]
+
+    info = {
+        "database_type": "postgresql" if is_postgres else "sqlite",
+        "connection_url": safe_url,
+        "connected": False,
+        "table_count": 0,
+        "extensions": [],
+        "tables": [],
+    }
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+            info["connected"] = True
+
+            if is_postgres:
+                # Get extensions
+                result = conn.execute(text("""
+                    SELECT extname FROM pg_extension WHERE extname != 'plpgsql'
+                """))
+                info["extensions"] = [row[0] for row in result]
+
+                # Get tables
+                result = conn.execute(text("""
+                    SELECT table_name FROM information_schema.tables
+                    WHERE table_schema = 'public' ORDER BY table_name
+                """))
+                info["tables"] = [row[0] for row in result]
+            else:
+                result = conn.execute(text("""
+                    SELECT name FROM sqlite_master WHERE type='table' ORDER BY name
+                """))
+                info["tables"] = [row[0] for row in result]
+
+            info["table_count"] = len(info["tables"])
+
+    except Exception as e:
+        info["error"] = str(e)
+
+    return info
 
 
 def check_db_connection() -> bool:
