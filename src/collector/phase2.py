@@ -772,14 +772,26 @@ async def fetch_bulk_traffic_estimation(
     """
     Estimate traffic potential for keywords at different positions.
     Useful for opportunity sizing.
+
+    NOTE: DataForSEO's bulk_traffic_estimation API is for DOMAINS, not keywords.
+    This function calculates traffic estimates using keyword search volumes
+    and industry-standard CTR curves (Position 1: ~28%, Position 3: ~12%, Position 10: ~2.5%).
+    We fetch search volumes via historical_search_volume or use existing keyword data.
     """
-    # Note: bulk_traffic_estimation uses 'keywords', not 'targets'
+    # Industry-standard CTR by position (Google organic)
+    CTR_BY_POSITION = {
+        1: 0.28,   # Position 1: ~28% CTR
+        3: 0.12,   # Position 3: ~12% CTR
+        10: 0.025, # Position 10: ~2.5% CTR
+    }
+
+    # Fetch keyword data with search volumes
     result = await client.post(
-        "dataforseo_labs/google/bulk_traffic_estimation/live",
+        "dataforseo_labs/google/historical_search_volume/live",
         [{
-            "keywords": keywords[:200],  # Max 200 keywords - FIXED: was 'targets'
+            "keywords": keywords[:200],  # API accepts max 1000, we limit to 200
             "location_name": market,
-            "language_name": language  # FIXED: was language_code
+            "language_name": language
         }]
     )
 
@@ -792,10 +804,15 @@ async def fetch_bulk_traffic_estimation(
 
     for item in items or []:
         keyword = item.get("keyword", "")
+        kw_info = item.get("keyword_info") or {}
+        search_volume = kw_info.get("search_volume") or 0
+
+        # Calculate estimated traffic at different positions
         estimate = {
-            "traffic_at_pos_1": item.get("metrics", {}).get("pos_1", {}).get("etv", 0),
-            "traffic_at_pos_3": item.get("metrics", {}).get("pos_3", {}).get("etv", 0),
-            "traffic_at_pos_10": item.get("metrics", {}).get("pos_10", {}).get("etv", 0),
+            "search_volume": search_volume,
+            "traffic_at_pos_1": int(search_volume * CTR_BY_POSITION[1]),
+            "traffic_at_pos_3": int(search_volume * CTR_BY_POSITION[3]),
+            "traffic_at_pos_10": int(search_volume * CTR_BY_POSITION[10]),
         }
         traffic_estimates[keyword] = estimate
         total_potential += estimate["traffic_at_pos_1"]
