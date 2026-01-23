@@ -303,14 +303,19 @@ async def fetch_technologies(client, domain: str) -> List[Dict]:
             [{"target": domain}]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("technologies", [])
+        # Safe parsing - handle None values
+        tasks = result.get("tasks") or [{}]
+        task_result = tasks[0].get("result") if tasks else None
+        items = []
+        if task_result and len(task_result) > 0:
+            items = task_result[0].get("technologies") or []
 
         return [
             {
                 "name": item.get("name"),
                 "category": item.get("category"),
             }
-            for item in items[:20]  # Limit to top 20
+            for item in (items or [])[:20]  # Limit to top 20
         ]
     except Exception as e:
         logger.error(f"Technologies failed: {e}")

@@ -1409,7 +1409,7 @@ def store_context_intelligence(
             )
 
             for market in all_markets:
-                from src.context.models import MARKET_CONFIG
+                from src.context.market_validator import MARKET_CONFIG
                 market_config = MARKET_CONFIG.get(market.region, {})
 
                 market_record = MarketOpportunityRecord(

@@ -291,8 +291,15 @@ class DataCollectionOrchestrator:
         # Merge all data
         all_data = {**foundation, **keywords_data, **competitive_data, **ai_tech_data}
 
-        # Determine success (critical failure if Phase 1 failed completely)
-        success = bool(foundation.get("domain_overview"))
+        # Determine success - we need at least SOME data to analyze
+        # Success if we have domain_overview metrics OR ranked keywords OR backlinks
+        has_overview = bool(foundation.get("domain_overview"))
+        has_keywords = bool(keywords_data.get("ranked_keywords"))
+        has_backlinks = bool(foundation.get("backlink_summary"))
+        success = has_overview or has_keywords or has_backlinks
+
+        if not success:
+            logger.warning("No usable data collected - all sources empty")
 
         return CollectionResult(
             domain=config.domain,

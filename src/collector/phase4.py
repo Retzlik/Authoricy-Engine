@@ -381,12 +381,18 @@ async def fetch_llm_mentions(
             }]
         )
 
-        task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+        # Safe parsing - handle None values
+        tasks = result.get("tasks") or [{}]
+        task_result_list = tasks[0].get("result") if tasks else None
+        task_result = {}
+        if task_result_list and len(task_result_list) > 0:
+            task_result = task_result_list[0] or {}
 
+        items = task_result.get("items") or []
         return {
             "platform": platform,
             "total_mentions": task_result.get("total_count", 0),
-            "items": task_result.get("items", [])[:20],  # Top 20
+            "items": items[:20],  # Top 20
             "metrics": task_result.get("metrics", {}),
         }
     except Exception as e:
