@@ -493,9 +493,19 @@ async def run_analysis(
                 market_full = market_names.get(collection_market, "Sweden")
                 language_full = language_names.get(collection_language, "Swedish")
             else:
-                # Fallback to provided values
-                market_full = market or "Sweden"
-                language_full = language or "Swedish"
+                # Fallback to provided values - use primary_market if legacy market not set
+                market_names_fallback = {
+                    "se": "Sweden", "us": "United States", "de": "Germany",
+                    "uk": "United Kingdom", "no": "Norway", "dk": "Denmark",
+                    "fi": "Finland", "fr": "France", "nl": "Netherlands",
+                }
+                language_names_fallback = {
+                    "sv": "Swedish", "en": "English", "de": "German",
+                    "no": "Norwegian", "da": "Danish", "fi": "Finnish",
+                    "fr": "French", "nl": "Dutch",
+                }
+                market_full = market or market_names_fallback.get(primary_market, "Sweden")
+                language_full = language or language_names_fallback.get(primary_language or "sv", "Swedish")
 
             # Run data collection (Phase 1-4: 60 endpoints)
             logger.info(f"[{job_id}] Phase 1-4: Collecting data from DataForSEO...")
