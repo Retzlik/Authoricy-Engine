@@ -7,6 +7,10 @@ uvicorn[standard]>=0.24.0
 # Async HTTP client
 httpx>=0.25.0
 
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0  # PostgreSQL driver
+
 # Data validation
 pydantic[email]>=2.5.0
 pydantic-settings>=2.1.0
