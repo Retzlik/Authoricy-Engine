@@ -422,13 +422,13 @@ async def test_client():
         return
     
     async with DataForSEOClient(login=login, password=password) as client:
-        # Test with a simple endpoint
+        # Test with a simple endpoint (Labs API uses language_name, not language_code)
         result = await client.post(
             "dataforseo_labs/google/domain_rank_overview/live",
             [{
                 "target": "example.com",
                 "location_name": "United States",
-                "language_code": "en",
+                "language_name": "English",  # FIXED: was language_code
             }]
         )
         

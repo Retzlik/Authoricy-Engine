@@ -245,10 +245,17 @@ class ContextIntelligenceOrchestrator:
         result: ContextIntelligenceResult,
     ) -> IntelligentCollectionConfig:
         """Generate the intelligent collection configuration."""
+        # Derive default language from market if not specified
+        market_languages = {
+            "se": "sv", "us": "en", "uk": "en", "de": "de",
+            "no": "no", "dk": "da", "fi": "fi", "fr": "fr", "nl": "nl",
+        }
+        default_language = market_languages.get(request.primary_market.lower(), "en")
+
         config = IntelligentCollectionConfig(
             domain=request.domain,
             primary_market=request.primary_market,
-            primary_language=request.primary_language or "en",
+            primary_language=request.primary_language or default_language,
             primary_goal=request.primary_goal,
             business_context=result.business_context,
         )
