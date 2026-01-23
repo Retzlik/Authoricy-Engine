@@ -188,8 +188,18 @@ class DataCollectionOrchestrator:
 
         # Check for minimal domain
         if self._should_abbreviate(foundation):
-            logger.info("Domain has minimal data - abbreviated analysis")
-            warnings.append("Domain has minimal data - abbreviated analysis performed")
+            # Log what data was actually collected
+            domain_keywords = foundation.get("domain_overview", {}).get("organic_keywords", 0)
+            domain_backlinks = foundation.get("backlink_summary", {}).get("total_backlinks", 0)
+            logger.warning(
+                f"Domain has minimal data - abbreviated analysis. "
+                f"Keywords: {domain_keywords}, Backlinks: {domain_backlinks}. "
+                f"This may indicate: (1) new/small domain, (2) API errors, or (3) wrong market/language."
+            )
+            warnings.append(
+                f"Domain has minimal SEO data (keywords: {domain_keywords}, backlinks: {domain_backlinks}). "
+                f"Analysis was abbreviated. This may be normal for new or small websites."
+            )
             duration = (datetime.utcnow() - start_time).total_seconds()
             return CollectionResult(
                 domain=config.domain,

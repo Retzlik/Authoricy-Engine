@@ -140,7 +140,7 @@ class DataForSEOClient:
             )
         
         result = response.json()
-        
+
         # Check for API-level errors
         if result.get("status_code") != 20000:
             error_msg = result.get("status_message", "Unknown error")
@@ -149,14 +149,19 @@ class DataForSEOClient:
                 status_code=result.get("status_code"),
                 response=result,
             )
-        
-        # Check task-level errors
+
+        # Check task-level errors and log them clearly
         tasks = result.get("tasks", [])
         for task in tasks:
-            if task.get("status_code") not in [20000, 20100]:
+            task_status = task.get("status_code")
+            if task_status not in [20000, 20100]:
                 error_msg = task.get("status_message", "Task error")
-                logger.warning(f"Task error in {url}: {error_msg}")
-        
+                # Log at ERROR level with full details for debugging
+                logger.error(
+                    f"DataForSEO task error in {url}: {error_msg} (status: {task_status}). "
+                    f"This may cause empty data in the report."
+                )
+
         return result
     
     async def _request_with_retry(self, url: str, data: List[Dict]) -> Dict[str, Any]:
