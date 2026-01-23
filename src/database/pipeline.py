@@ -79,43 +79,58 @@ MIN_COMPETITORS_FOR_AI = 1
 # DATA EXTRACTION HELPERS
 # =============================================================================
 
+def _safe_get(item, key, default=None):
+    """Safely get a value from an item that should be a dict."""
+    if isinstance(item, dict):
+        return item.get(key, default)
+    return default
+
+
 def extract_keywords_from_result(result: CollectionResult) -> list:
     """Extract all keywords from collection result for DB storage."""
     keywords = []
 
     # Ranked keywords (primary source)
-    for kw in result.ranked_keywords:
+    for kw in result.ranked_keywords or []:
+        if not isinstance(kw, dict):
+            continue
         keywords.append({
-            "keyword": kw.get("keyword"),
-            "search_volume": kw.get("search_volume"),
-            "cpc": kw.get("cpc"),
-            "competition": kw.get("competition"),
-            "position": kw.get("position") or kw.get("rank_absolute"),
-            "url": kw.get("url") or kw.get("page"),
-            "etv": kw.get("etv"),
-            "intent": kw.get("intent"),
-            "keyword_difficulty": kw.get("keyword_difficulty"),
+            "keyword": _safe_get(kw, "keyword"),
+            "search_volume": _safe_get(kw, "search_volume"),
+            "cpc": _safe_get(kw, "cpc"),
+            "competition": _safe_get(kw, "competition"),
+            "position": _safe_get(kw, "position") or _safe_get(kw, "rank_absolute"),
+            "url": _safe_get(kw, "url") or _safe_get(kw, "page"),
+            "etv": _safe_get(kw, "etv"),
+            "intent": _safe_get(kw, "intent"),
+            "keyword_difficulty": _safe_get(kw, "keyword_difficulty"),
         })
 
     # Keyword universe (additional opportunities)
-    for kw in result.keyword_universe:
+    for kw in result.keyword_universe or []:
+        if not isinstance(kw, dict):
+            continue
+        kw_name = _safe_get(kw, "keyword")
         # Avoid duplicates
-        if not any(k.get("keyword") == kw.get("keyword") for k in keywords):
+        if not any(_safe_get(k, "keyword") == kw_name for k in keywords):
             keywords.append({
-                "keyword": kw.get("keyword"),
-                "search_volume": kw.get("search_volume"),
-                "cpc": kw.get("cpc"),
-                "competition": kw.get("competition"),
-                "keyword_difficulty": kw.get("keyword_difficulty"),
+                "keyword": kw_name,
+                "search_volume": _safe_get(kw, "search_volume"),
+                "cpc": _safe_get(kw, "cpc"),
+                "competition": _safe_get(kw, "competition"),
+                "keyword_difficulty": _safe_get(kw, "keyword_difficulty"),
             })
 
     # Keyword gaps (competitor keywords we don't rank for)
-    for kw in result.keyword_gaps:
-        if not any(k.get("keyword") == kw.get("keyword") for k in keywords):
+    for kw in result.keyword_gaps or []:
+        if not isinstance(kw, dict):
+            continue
+        kw_name = _safe_get(kw, "keyword")
+        if not any(_safe_get(k, "keyword") == kw_name for k in keywords):
             keywords.append({
-                "keyword": kw.get("keyword"),
-                "search_volume": kw.get("search_volume"),
-                "cpc": kw.get("cpc"),
+                "keyword": kw_name,
+                "search_volume": _safe_get(kw, "search_volume"),
+                "cpc": _safe_get(kw, "cpc"),
                 "source": "gap",
             })
 
@@ -126,25 +141,30 @@ def extract_competitors_from_result(result: CollectionResult) -> list:
     """Extract competitors from collection result for DB storage."""
     competitors = []
 
-    for comp in result.competitors:
+    for comp in result.competitors or []:
+        if not isinstance(comp, dict):
+            continue
         competitors.append({
-            "domain": comp.get("domain"),
-            "competitor_type": comp.get("competitor_type", "unknown"),
-            "common_keywords": comp.get("common_keywords") or comp.get("se_keywords"),
-            "organic_traffic": comp.get("etv") or comp.get("organic_traffic"),
-            "domain_rating": comp.get("rank") or comp.get("domain_rating"),
+            "domain": _safe_get(comp, "domain"),
+            "competitor_type": _safe_get(comp, "competitor_type", "unknown"),
+            "common_keywords": _safe_get(comp, "common_keywords") or _safe_get(comp, "se_keywords"),
+            "organic_traffic": _safe_get(comp, "etv") or _safe_get(comp, "organic_traffic"),
+            "domain_rating": _safe_get(comp, "rank") or _safe_get(comp, "domain_rating"),
             "detection_method": "organic_competitors",
-            "confidence": comp.get("confidence", 0.5),
+            "confidence": _safe_get(comp, "confidence", 0.5),
         })
 
     # Also from competitor analysis (Phase 3)
-    for comp in result.competitor_analysis:
-        if not any(c.get("domain") == comp.get("domain") for c in competitors):
+    for comp in result.competitor_analysis or []:
+        if not isinstance(comp, dict):
+            continue
+        comp_domain = _safe_get(comp, "domain")
+        if not any(_safe_get(c, "domain") == comp_domain for c in competitors):
             competitors.append({
-                "domain": comp.get("domain"),
-                "competitor_type": comp.get("competitor_type", "unknown"),
-                "organic_traffic": comp.get("organic_traffic"),
-                "organic_keywords": comp.get("organic_keywords"),
+                "domain": comp_domain,
+                "competitor_type": _safe_get(comp, "competitor_type", "unknown"),
+                "organic_traffic": _safe_get(comp, "organic_traffic"),
+                "organic_keywords": _safe_get(comp, "organic_keywords"),
                 "detection_method": "serp_analysis",
             })
 
@@ -155,27 +175,32 @@ def extract_backlinks_from_result(result: CollectionResult) -> list:
     """Extract backlinks from collection result for DB storage."""
     backlinks = []
 
-    for bl in result.backlinks:
+    for bl in result.backlinks or []:
+        if not isinstance(bl, dict):
+            continue
         backlinks.append({
-            "url_from": bl.get("url_from"),
-            "domain_from": bl.get("domain_from"),
-            "url_to": bl.get("url_to"),
-            "anchor": bl.get("anchor"),
-            "dofollow": bl.get("dofollow"),
-            "domain_from_rank": bl.get("domain_from_rank"),
-            "first_seen": bl.get("first_seen"),
-            "last_seen": bl.get("last_seen"),
+            "url_from": _safe_get(bl, "url_from"),
+            "domain_from": _safe_get(bl, "domain_from"),
+            "url_to": _safe_get(bl, "url_to"),
+            "anchor": _safe_get(bl, "anchor"),
+            "dofollow": _safe_get(bl, "dofollow"),
+            "domain_from_rank": _safe_get(bl, "domain_from_rank"),
+            "first_seen": _safe_get(bl, "first_seen"),
+            "last_seen": _safe_get(bl, "last_seen"),
         })
 
     # Also from top_backlinks
-    for bl in result.top_backlinks:
-        if not any(b.get("url_from") == bl.get("url_from") for b in backlinks):
+    for bl in result.top_backlinks or []:
+        if not isinstance(bl, dict):
+            continue
+        url_from = _safe_get(bl, "url_from")
+        if not any(_safe_get(b, "url_from") == url_from for b in backlinks):
             backlinks.append({
-                "url_from": bl.get("url_from"),
-                "domain_from": bl.get("domain_from"),
-                "anchor": bl.get("anchor"),
-                "dofollow": bl.get("dofollow"),
-                "domain_from_rank": bl.get("rank") or bl.get("domain_from_rank"),
+                "url_from": url_from,
+                "domain_from": _safe_get(bl, "domain_from"),
+                "anchor": _safe_get(bl, "anchor"),
+                "dofollow": _safe_get(bl, "dofollow"),
+                "domain_from_rank": _safe_get(bl, "rank") or _safe_get(bl, "domain_from_rank"),
             })
 
     return backlinks
@@ -275,13 +300,13 @@ def extract_local_data_from_result(result: CollectionResult) -> tuple:
 
     # Extract from live_serp_data if local pack present
     for item in getattr(result, 'live_serp_data', []) or []:
-        if item.get('local_pack') or item.get('local_pack_position'):
+        if isinstance(item, dict) and (_safe_get(item, 'local_pack') or _safe_get(item, 'local_pack_position')):
             local_data.append(item)
 
     # GBP data if available
     gbp_data = None
-    domain_overview = getattr(result, 'domain_overview', {}) or {}
-    if domain_overview.get('google_business_profile'):
+    domain_overview = getattr(result, 'domain_overview', None) or {}
+    if isinstance(domain_overview, dict) and domain_overview.get('google_business_profile'):
         gbp_data = domain_overview['google_business_profile']
 
     return local_data, gbp_data
@@ -294,7 +319,9 @@ def extract_serp_competitors_from_result(result: CollectionResult) -> tuple:
     # Build competitor metrics lookup
     comp_metrics = {}
     for comp in getattr(result, 'competitor_analysis', []) or []:
-        domain = comp.get('domain', '')
+        if not isinstance(comp, dict):
+            continue
+        domain = _safe_get(comp, 'domain', '')
         if domain:
             comp_metrics[domain] = comp
 
@@ -303,15 +330,18 @@ def extract_serp_competitors_from_result(result: CollectionResult) -> tuple:
 
 def prepare_validation_data(result: CollectionResult) -> dict:
     """Prepare data structure for validation."""
+    domain_overview = result.domain_overview if isinstance(result.domain_overview, dict) else {}
+    backlink_summary = result.backlink_summary if isinstance(result.backlink_summary, dict) else {}
+
     return {
         "keywords": extract_keywords_from_result(result),
         "competitors": extract_competitors_from_result(result),
         "backlinks": extract_backlinks_from_result(result),
         "domain_info": {
-            "domain_rating": result.domain_overview.get("domain_rank") or result.backlink_summary.get("domain_rank"),
-            "organic_traffic": result.domain_overview.get("organic_traffic"),
-            "organic_keywords": result.domain_overview.get("organic_keywords"),
-            "referring_domains": result.backlink_summary.get("referring_domains"),
+            "domain_rating": domain_overview.get("domain_rank") or backlink_summary.get("domain_rank"),
+            "organic_traffic": domain_overview.get("organic_traffic"),
+            "organic_keywords": domain_overview.get("organic_keywords"),
+            "referring_domains": backlink_summary.get("referring_domains"),
             "technologies": result.technologies,
         },
         "technical": extract_technical_from_result(result),
