@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import logging
 
+from src.collector.client import safe_get_result
+
 logger = logging.getLogger(__name__)
 
 

@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import logging
 
+from src.collector.client import safe_get_result
+
 logger = logging.getLogger(__name__)
 
 
@@ -530,12 +532,12 @@ async def fetch_backlinks(
         [{
             "target": domain,
             "limit": limit,
-            "order_by": ["rank,desc"],  # Best links first
             "mode": "as_is",  # All links, not one per domain
+            # Note: order_by removed for consistency
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     backlinks = []
     for item in items:

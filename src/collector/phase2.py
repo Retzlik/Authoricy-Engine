@@ -31,6 +31,8 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 import logging
 
+from src.collector.client import safe_get_result
+
 logger = logging.getLogger(__name__)
 
 
@@ -332,23 +334,23 @@ async def fetch_ranked_keywords(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     keywords = []
     for item in items:
-        kw_data = item.get("keyword_data", {})
-        kw_info = kw_data.get("keyword_info", {})
-        serp_item = item.get("ranked_serp_element", {}).get("serp_item", {})
+        kw_data = item.get("keyword_data") or {}
+        kw_info = kw_data.get("keyword_info") or {}
+        serp_item = (item.get("ranked_serp_element") or {}).get("serp_item") or {}
 
         keywords.append({
             "keyword": kw_data.get("keyword", ""),
             "position": serp_item.get("rank_group", 0),
-            "search_volume": kw_info.get("search_volume", 0),
-            "cpc": kw_info.get("cpc", 0),
-            "competition": kw_info.get("competition", 0),
+            "search_volume": kw_info.get("search_volume") or 0,
+            "cpc": kw_info.get("cpc") or 0,
+            "competition": kw_info.get("competition") or 0,
             "url": serp_item.get("url", ""),
-            "traffic": item.get("ranked_serp_element", {}).get("etv", 0),
-            "traffic_value": item.get("ranked_serp_element", {}).get("estimated_paid_traffic_cost", 0),
+            "traffic": (item.get("ranked_serp_element") or {}).get("etv") or 0,
+            "traffic_value": (item.get("ranked_serp_element") or {}).get("estimated_paid_traffic_cost") or 0,
         })
 
     return keywords
@@ -376,17 +378,17 @@ async def fetch_keywords_for_site(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     keywords = []
     for item in items:
-        kw_info = item.get("keyword_info", {})
+        kw_info = item.get("keyword_info") or {}
 
         keywords.append({
             "keyword": item.get("keyword", ""),
-            "search_volume": kw_info.get("search_volume", 0),
-            "cpc": kw_info.get("cpc", 0),
-            "competition": kw_info.get("competition", 0),
+            "search_volume": kw_info.get("search_volume") or 0,
+            "cpc": kw_info.get("cpc") or 0,
+            "competition": kw_info.get("competition") or 0,
             "competition_level": kw_info.get("competition_level", ""),
         })
 
