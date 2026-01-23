@@ -1,7 +1,9 @@
 """
 Report Generator - Main orchestrator for PDF generation.
 
-Generates both external (lead magnet) and internal (strategy guide) reports.
+v7: Single report - ONE REPORT, ONE ROUTE.
+
+Makes missing data VISIBLE with confidence tracking.
 """
 
 import logging
@@ -9,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from weasyprint import HTML, CSS
 
@@ -21,94 +23,70 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 @dataclass
 class GeneratedReport:
-    """A generated PDF report."""
+    """A generated PDF report with confidence tracking."""
     filename: str
     pdf_bytes: bytes
     page_count: int
-    report_type: str  # "external" or "internal"
     generated_at: datetime
+    # Confidence tracking
+    confidence_score: float = 0.0
+    confidence_level: str = "UNKNOWN"
+    missing_data: list = field(default_factory=list)
 
 
 class ReportGenerator:
     """
     Main report generator coordinating PDF creation.
 
-    Generates:
-    - External Report: 10-15 pages, executive-focused, sales-enabling
-    - Internal Report: 40-60 pages, tactical playbook
+    v7: ONE REPORT - comprehensive 40-60 page strategy guide.
+    No more external vs internal split.
     """
 
     def __init__(self):
         self.template_dir = TEMPLATE_DIR
 
-    async def generate_external(
+    async def generate(
         self,
         analysis_result: Any,  # AnalysisResult from engine
         analysis_data: Dict[str, Any],
     ) -> GeneratedReport:
         """
-        Generate external report (lead magnet).
+        Generate THE report - comprehensive strategy guide.
 
         Args:
             analysis_result: Complete analysis result from engine
             analysis_data: Original compiled data
 
         Returns:
-            GeneratedReport with PDF bytes
+            GeneratedReport with PDF bytes and confidence info
         """
-        from .external import ExternalReportBuilder
+        from .report import ReportBuilder
 
-        builder = ExternalReportBuilder(self.template_dir)
-        html_content = builder.build(analysis_result, analysis_data)
+        builder = ReportBuilder(self.template_dir)
+        html_content, confidence = builder.build(analysis_result, analysis_data)
 
         # Generate PDF
         pdf_bytes = self._html_to_pdf(html_content)
 
         domain = analysis_data.get("metadata", {}).get("domain", "report")
         timestamp = datetime.now().strftime("%Y%m%d")
-        filename = f"{domain}_seo_analysis_{timestamp}.pdf"
+        filename = f"{domain}_seo_strategy_{timestamp}.pdf"
+
+        # Log confidence warning if low
+        if confidence.confidence_score < 50:
+            logger.warning(
+                f"Report confidence LOW: {confidence.confidence_score:.0f}% "
+                f"Missing: {confidence.missing_required[:3]}"
+            )
 
         return GeneratedReport(
             filename=filename,
             pdf_bytes=pdf_bytes,
             page_count=self._estimate_pages(len(pdf_bytes)),
-            report_type="external",
             generated_at=datetime.now(),
-        )
-
-    async def generate_internal(
-        self,
-        analysis_result: Any,
-        analysis_data: Dict[str, Any],
-    ) -> GeneratedReport:
-        """
-        Generate internal report (strategy guide).
-
-        Args:
-            analysis_result: Complete analysis result from engine
-            analysis_data: Original compiled data
-
-        Returns:
-            GeneratedReport with PDF bytes
-        """
-        from .internal import InternalReportBuilder
-
-        builder = InternalReportBuilder(self.template_dir)
-        html_content = builder.build(analysis_result, analysis_data)
-
-        # Generate PDF
-        pdf_bytes = self._html_to_pdf(html_content)
-
-        domain = analysis_data.get("metadata", {}).get("domain", "report")
-        timestamp = datetime.now().strftime("%Y%m%d")
-        filename = f"{domain}_strategy_guide_{timestamp}.pdf"
-
-        return GeneratedReport(
-            filename=filename,
-            pdf_bytes=pdf_bytes,
-            page_count=self._estimate_pages(len(pdf_bytes)),
-            report_type="internal",
-            generated_at=datetime.now(),
+            confidence_score=confidence.confidence_score,
+            confidence_level=confidence.confidence_level,
+            missing_data=confidence.missing_required[:10],
         )
 
     def _html_to_pdf(self, html_content: str) -> bytes:

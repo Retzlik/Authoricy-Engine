@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Authoricy SEO Analyzer",
     description="Automated SEO analysis powered by DataForSEO and Claude AI",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 
@@ -134,7 +134,7 @@ async def health():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "0.2.0",
+        "version": "0.3.0",
         "jobs_in_queue": len([j for j in jobs.values() if j.status == "running"]),
         "database": "connected" if db_connected else "disconnected",
     }
@@ -341,41 +341,37 @@ async def run_analysis(
                 logger.info(f"[{job_id}] AI analysis skipped (quality gate)")
 
             # ================================================================
-            # REPORT GENERATION
+            # REPORT GENERATION - ONE REPORT
             # ================================================================
-            logger.info(f"[{job_id}] Generating PDF reports...")
+            logger.info(f"[{job_id}] Generating PDF report...")
+            report = None
             try:
                 generator = ReportGenerator()
 
-                # External Report (Lead Magnet): 10-15 pages
-                external_report = await generator.generate_external(
+                # Generate THE report (40-60 page strategy guide)
+                report = await generator.generate(
                     analysis_result,
                     analysis_data,
                 )
                 logger.info(
-                    f"[{job_id}] External report generated: "
-                    f"{len(external_report.pdf_bytes)} bytes"
+                    f"[{job_id}] Report generated: "
+                    f"{len(report.pdf_bytes)} bytes, "
+                    f"confidence={report.confidence_level} ({report.confidence_score:.0f}%)"
                 )
 
-                # Internal Report (Strategy Guide): 40-60 pages
-                internal_report = await generator.generate_internal(
-                    analysis_result,
-                    analysis_data,
-                )
-                logger.info(
-                    f"[{job_id}] Internal report generated: "
-                    f"{len(internal_report.pdf_bytes)} bytes"
-                )
+                if report.missing_data:
+                    logger.warning(
+                        f"[{job_id}] Report missing data: {report.missing_data[:5]}"
+                    )
 
             except Exception as e:
                 logger.error(f"[{job_id}] PDF generation failed: {e}")
-                external_report = None
-                internal_report = None
+                report = None
 
             # ================================================================
             # EMAIL DELIVERY
             # ================================================================
-            if external_report and os.getenv("RESEND_API_KEY"):
+            if report and os.getenv("RESEND_API_KEY"):
                 logger.info(f"[{job_id}] Sending report via email...")
                 try:
                     delivery = EmailDelivery()
@@ -383,8 +379,8 @@ async def run_analysis(
                         to_email=email,
                         domain=domain,
                         company_name=company_name,
-                        pdf_bytes=external_report.pdf_bytes,
-                        pdf_filename=external_report.filename,
+                        pdf_bytes=report.pdf_bytes,
+                        pdf_filename=report.filename,
                     )
 
                     if email_result.success:

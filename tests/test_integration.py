@@ -211,9 +211,14 @@ class TestPipelineComponents:
     def test_reporter_module_imports(self):
         """Reporter module should import correctly."""
         from src.reporter import (
+            ReportBuilder,
+            ReportConfidence,
+            # Legacy (deprecated)
             ExternalReportBuilder,
             InternalReportBuilder,
         )
+        assert ReportBuilder is not None
+        assert ReportConfidence is not None
         assert ExternalReportBuilder is not None
         assert InternalReportBuilder is not None
 
@@ -259,9 +264,12 @@ class TestEndToEndComponents:
 
     def test_report_builder_class_exists(self):
         """Report builder class should exist and have build method."""
-        from src.reporter import ExternalReportBuilder
+        from src.reporter import ReportBuilder, ExternalReportBuilder
 
-        # Class should be importable and have build method
+        # New unified class
+        assert ReportBuilder is not None
+        assert hasattr(ReportBuilder, 'build')
+        # Legacy class (backwards compatibility)
         assert ExternalReportBuilder is not None
         assert hasattr(ExternalReportBuilder, 'build')
 

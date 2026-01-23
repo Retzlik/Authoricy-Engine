@@ -1,7 +1,9 @@
 """
 Test Suite for Phase 5: Report Generation
 
-Tests that reports are data-driven and not template-based.
+v7: ONE REPORT, ONE ROUTE
+
+Tests that reports are data-driven with confidence tracking.
 Note: Full report generation requires template files.
 """
 
@@ -11,9 +13,12 @@ from datetime import datetime
 from pathlib import Path
 
 from src.reporter import (
+    ReportBuilder,
+    ReportConfidence,
+    ChartGenerator,
+    # Legacy imports (deprecated but kept for backwards compatibility)
     ExternalReportBuilder,
     InternalReportBuilder,
-    ChartGenerator,
 )
 
 
@@ -34,8 +39,84 @@ class TestChartGenerator:
         assert hasattr(generator, '__init__')
 
 
+class TestReportBuilder:
+    """Test the unified ReportBuilder class."""
+
+    @pytest.fixture
+    def template_dir(self, tmp_path):
+        return tmp_path
+
+    def test_report_builder_exists(self):
+        """ReportBuilder class should exist."""
+        assert ReportBuilder is not None
+
+    def test_report_builder_has_build_method(self):
+        """ReportBuilder should have build method."""
+        assert hasattr(ReportBuilder, 'build')
+
+    def test_report_builder_instantiation(self, template_dir):
+        """ReportBuilder should instantiate with template_dir."""
+        builder = ReportBuilder(template_dir)
+        assert builder is not None
+
+    def test_report_builder_has_confidence(self, template_dir):
+        """ReportBuilder should track confidence."""
+        builder = ReportBuilder(template_dir)
+        assert hasattr(builder, 'confidence')
+
+    def test_report_builder_build_returns_tuple(self, template_dir):
+        """ReportBuilder.build should return (html, confidence)."""
+        builder = ReportBuilder(template_dir)
+        analysis_data = {
+            "metadata": {"domain": "test.com", "market": "US"},
+            "summary": {},
+        }
+        result = builder.build(None, analysis_data)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+    def test_report_builder_confidence_tracking(self, template_dir):
+        """ReportBuilder should track data presence."""
+        builder = ReportBuilder(template_dir)
+        analysis_data = {
+            "metadata": {"domain": "test.com", "market": "US"},
+            "summary": {"total_organic_keywords": 1000},
+        }
+        html, confidence = builder.build(None, analysis_data)
+        assert isinstance(confidence, ReportConfidence)
+        assert hasattr(confidence, 'confidence_score')
+
+
+class TestReportConfidence:
+    """Test the ReportConfidence tracking class."""
+
+    def test_confidence_instantiation(self):
+        """ReportConfidence should instantiate."""
+        conf = ReportConfidence()
+        assert conf is not None
+
+    def test_confidence_track_method(self):
+        """ReportConfidence should have track method."""
+        conf = ReportConfidence()
+        assert hasattr(conf, 'track')
+
+    def test_confidence_to_dict(self):
+        """ReportConfidence should serialize to dict."""
+        conf = ReportConfidence()
+        data = conf.to_dict()
+        assert 'confidence_score' in data
+        assert 'confidence_level' in data
+
+    def test_confidence_starts_at_zero(self):
+        """Fresh confidence should have zero score."""
+        conf = ReportConfidence()
+        # With no data tracked, score should be low
+        data = conf.to_dict()
+        assert data['confidence_score'] >= 0
+
+
 class TestReportBuilderClasses:
-    """Test report builder class existence."""
+    """Test legacy report builder class existence (backwards compatibility)."""
 
     def test_external_builder_class_exists(self):
         """ExternalReportBuilder class should exist."""

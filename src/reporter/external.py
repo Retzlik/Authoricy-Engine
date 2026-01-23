@@ -4,23 +4,28 @@ External Report Builder - Lead Magnet (10-15 pages)
 Generates executive-focused, sales-enabling PDF report.
 Now uses REAL DATA from agent outputs, not placeholders.
 
+v6: CONFIDENCE TRACKING - Makes missing data VISIBLE instead of silent fallbacks.
+
 Structure:
 1. Cover
-2. Executive Summary (2 pages) - From Master Strategy Agent
-3. Current Position (2 pages) - From Technical + Backlink Agents
-4. Competitive Landscape (2 pages) - From SERP + Backlink Agents
-5. The Opportunity (2 pages) - From Keyword Intelligence Agent
-6. Authority & AI Visibility (1 page) - From AI Visibility Agent
-7. 90-Day Roadmap (2 pages) - From Master Strategy Agent
-8. Next Steps (1 page)
-9. Methodology (1 page)
+2. Data Confidence Banner (if score < 80%)
+3. Executive Summary (2 pages) - From Master Strategy Agent
+4. Current Position (2 pages) - From Technical + Backlink Agents
+5. Competitive Landscape (2 pages) - From SERP + Backlink Agents
+6. The Opportunity (2 pages) - From Keyword Intelligence Agent
+7. Authority & AI Visibility (1 page) - From AI Visibility Agent
+8. 90-Day Roadmap (2 pages) - From Master Strategy Agent
+9. Next Steps (1 page)
+10. Methodology (1 page)
 """
 
 import logging
 from pathlib import Path
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
 from datetime import datetime
 import html
+
+from .confidence import ReportConfidence, data_missing_html
 
 # Type hints for agent outputs (actual import would cause circular dependency issues)
 if TYPE_CHECKING:
@@ -33,17 +38,18 @@ class ExternalReportBuilder:
     """
     Builds external report HTML for PDF generation.
 
-    v5: Uses real agent outputs for data-driven content.
+    v6: Confidence tracking - makes missing data VISIBLE.
     """
 
     def __init__(self, template_dir: Path):
         self.template_dir = template_dir
+        self.confidence = ReportConfidence()
 
     def build(
         self,
         analysis_result: Any,
         analysis_data: Dict[str, Any],
-    ) -> str:
+    ) -> Tuple[str, ReportConfidence]:
         """
         Build complete HTML for external report.
 
@@ -52,14 +58,20 @@ class ExternalReportBuilder:
             analysis_data: Original compiled data
 
         Returns:
-            Complete HTML document
+            Tuple of (HTML document, ReportConfidence)
         """
+        # Reset confidence tracking for this build
+        self.confidence = ReportConfidence()
+
         metadata = analysis_data.get("metadata", {})
         domain = metadata.get("domain", "Unknown")
         market = metadata.get("market", "Unknown")
 
         # Extract agent outputs from analysis result
         agent_outputs = self._extract_agent_outputs(analysis_result)
+
+        # Track if we have agent outputs at all
+        self.confidence.track("agent_outputs", "global", "agent", bool(agent_outputs), required=True)
 
         # Build sections with real agent data
         sections = [
@@ -74,8 +86,22 @@ class ExternalReportBuilder:
             self._build_methodology(),
         ]
 
+        # Add confidence warning banner after cover if score is low
+        confidence_warning = self.confidence.generate_warning_html()
+        if confidence_warning:
+            sections.insert(1, f'<div class="page">{confidence_warning}</div>')
+
+        # Log confidence report
+        conf_data = self.confidence.to_dict()
+        logger.info(
+            f"Report confidence: {conf_data['confidence_level']} ({conf_data['confidence_score']:.0f}%), "
+            f"fallbacks: {conf_data['fallback_count']}, missing: {len(conf_data['missing_required'])}"
+        )
+        if conf_data['missing_required']:
+            logger.warning(f"Missing data: {conf_data['missing_required'][:5]}")
+
         # Combine into full document
-        return self._wrap_html(sections, domain)
+        return self._wrap_html(sections, domain), self.confidence
 
     def _extract_agent_outputs(self, analysis_result: Any) -> Dict[str, Any]:
         """Extract agent outputs from analysis result."""
@@ -376,24 +402,51 @@ class ExternalReportBuilder:
         """
         Build executive summary from Master Strategy Agent output.
 
-        Uses real findings, not placeholders.
+        v6: Tracks confidence and shows explicit warnings for missing data.
         """
         master = self._get_agent(agent_outputs, "master_strategy")
 
-        # Get headline metric
-        headline = "Key opportunities identified for organic growth."
-        if master and master.metrics:
+        # Track master agent presence
+        has_master = self.confidence.track(
+            "master_strategy_agent", "executive_summary", "agent", master
+        )
+
+        # Get headline metric - NO SILENT FALLBACK
+        headline = None
+        if master and hasattr(master, 'metrics') and master.metrics:
             if "headline_metric" in master.metrics:
                 headline = master.metrics["headline_metric"]
             elif "total_opportunity_value" in master.metrics:
                 value = master.metrics["total_opportunity_value"]
                 headline = f"Estimated ${value:,.0f} annual opportunity in untapped organic traffic."
 
+        # Track headline
+        has_headline = self.confidence.track(
+            "headline_metric", "executive_summary", "agent", headline
+        )
+
+        if not headline:
+            # Show explicit warning instead of generic text
+            self.confidence.track_fallback("headline_metric", "executive_summary", "generic")
+            headline_html = data_missing_html("Headline Metric", "Executive Summary")
+        else:
+            headline_html = f"""
+            <div class="highlight-box">
+                <strong>The Headline:</strong><br>
+                {html.escape(headline)}
+            </div>
+            """
+
         # Get top 3 findings from master agent
         findings_html = ""
         findings = []
-        if master and master.findings:
+        if master and hasattr(master, 'findings') and master.findings:
             findings = master.findings[:3]
+
+        # Track findings
+        has_findings = self.confidence.track(
+            "key_findings", "executive_summary", "agent", findings
+        )
 
         if findings:
             for i, finding in enumerate(findings, 1):
@@ -411,33 +464,42 @@ class ExternalReportBuilder:
                 </div>
                 """
         else:
-            # Fallback if no master agent findings - use other agents
+            # Try fallback to other agents
             findings_html = self._build_fallback_findings(agent_outputs)
+            if "DATA UNAVAILABLE" in findings_html or not findings_html.strip():
+                self.confidence.track_fallback("key_findings", "executive_summary", "no findings")
 
-        # Get top recommendation
+        # Get top recommendation - NO SILENT FALLBACK
         recommendation_html = ""
-        if master and master.recommendations:
+        has_recommendation = False
+        if master and hasattr(master, 'recommendations') and master.recommendations:
             rec = master.recommendations[0]
             action = self._get_rec_attr(rec, "action", "")
             impact = self._get_rec_attr(rec, "impact", "")
             timeline = self._get_rec_attr(rec, "timeline", "")
 
-            recommendation_html = f"""
-            <p><strong>Primary Action:</strong> {html.escape(action)}</p>
-            <p><strong>Expected Impact:</strong> {html.escape(impact)}</p>
-            {f'<p><strong>Timeline:</strong> {html.escape(timeline)}</p>' if timeline else ''}
-            """
-        else:
-            recommendation_html = "<p>Schedule a strategy session to review the prioritized roadmap.</p>"
+            if action:
+                has_recommendation = True
+                recommendation_html = f"""
+                <p><strong>Primary Action:</strong> {html.escape(action)}</p>
+                <p><strong>Expected Impact:</strong> {html.escape(impact)}</p>
+                {f'<p><strong>Timeline:</strong> {html.escape(timeline)}</p>' if timeline else ''}
+                """
+
+        # Track recommendation
+        self.confidence.track(
+            "primary_recommendation", "executive_summary", "agent", has_recommendation
+        )
+
+        if not recommendation_html:
+            self.confidence.track_fallback("primary_recommendation", "executive_summary", "generic")
+            recommendation_html = data_missing_html("Primary Recommendation", "Executive Summary")
 
         return f"""
         <div class="page">
             <h1>Executive Summary</h1>
 
-            <div class="highlight-box">
-                <strong>The Headline:</strong><br>
-                {html.escape(headline)}
-            </div>
+            {headline_html}
 
             <h2>Key Findings</h2>
             {findings_html}
@@ -454,52 +516,51 @@ class ExternalReportBuilder:
 
         # Technical SEO findings
         tech = self._get_agent(agent_outputs, "technical_seo")
-        if tech and tech.findings:
+        if tech and hasattr(tech, 'findings') and tech.findings:
             finding = tech.findings[0]
             title = self._get_finding_attr(finding, "title", "Technical Health")
             desc = self._get_finding_attr(finding, "description", "")
-            findings_html += f"""
-            <div class="finding">
-                <div class="finding-title">{finding_num}. {html.escape(title)}</div>
-                <p>{html.escape(desc[:250])}</p>
-            </div>
-            """
-            finding_num += 1
+            if desc:  # Only add if we have actual content
+                findings_html += f"""
+                <div class="finding">
+                    <div class="finding-title">{finding_num}. {html.escape(title)}</div>
+                    <p>{html.escape(desc[:250])}</p>
+                </div>
+                """
+                finding_num += 1
 
         # Keyword findings
         kw = self._get_agent(agent_outputs, "keyword_intelligence")
-        if kw and kw.findings:
+        if kw and hasattr(kw, 'findings') and kw.findings:
             finding = kw.findings[0]
             title = self._get_finding_attr(finding, "title", "Keyword Opportunity")
             desc = self._get_finding_attr(finding, "description", "")
-            findings_html += f"""
-            <div class="finding">
-                <div class="finding-title">{finding_num}. {html.escape(title)}</div>
-                <p>{html.escape(desc[:250])}</p>
+            if desc:  # Only add if we have actual content
+                findings_html += f"""
+                <div class="finding">
+                    <div class="finding-title">{finding_num}. {html.escape(title)}</div>
+                    <p>{html.escape(desc[:250])}</p>
             </div>
             """
             finding_num += 1
 
         # Backlink findings
         bl = self._get_agent(agent_outputs, "backlink_intelligence")
-        if bl and bl.findings:
+        if bl and hasattr(bl, 'findings') and bl.findings:
             finding = bl.findings[0]
             title = self._get_finding_attr(finding, "title", "Link Profile")
             desc = self._get_finding_attr(finding, "description", "")
-            findings_html += f"""
-            <div class="finding">
-                <div class="finding-title">{finding_num}. {html.escape(title)}</div>
-                <p>{html.escape(desc[:250])}</p>
-            </div>
-            """
+            if desc:  # Only add if we have actual content
+                findings_html += f"""
+                <div class="finding">
+                    <div class="finding-title">{finding_num}. {html.escape(title)}</div>
+                    <p>{html.escape(desc[:250])}</p>
+                </div>
+                """
 
+        # NO GENERIC FALLBACK - show explicit data missing warning
         if not findings_html:
-            findings_html = """
-            <div class="finding">
-                <div class="finding-title">1. Analysis Complete</div>
-                <p>Comprehensive analysis has been completed. Key opportunities have been identified.</p>
-            </div>
-            """
+            findings_html = data_missing_html("Agent Findings", "Key Findings")
 
         return findings_html
 
@@ -820,33 +881,51 @@ class ExternalReportBuilder:
     def _build_ai_visibility(self, agent_outputs: Dict[str, Any], analysis_data: Dict) -> str:
         """
         Build AI visibility section from AI Visibility agent.
+
+        v6: Tracks confidence and shows explicit warnings for missing data.
         """
         ai_agent = self._get_agent(agent_outputs, "ai_visibility")
+
+        # Track agent presence
+        has_ai_agent = self.confidence.track(
+            "ai_visibility_agent", "ai_visibility", "agent", ai_agent
+        )
 
         # Get metrics
         ai_score = "N/A"
         presence_rate = "N/A"
         geo_readiness = "N/A"
+        has_metrics = False
 
-        if ai_agent and ai_agent.metrics:
+        if ai_agent and hasattr(ai_agent, 'metrics') and ai_agent.metrics:
             score = ai_agent.metrics.get("ai_visibility_score", 0)
             presence = ai_agent.metrics.get("ai_overview_presence", 0)
             geo = ai_agent.metrics.get("geo_readiness_score", 0)
 
-            if isinstance(score, (int, float)):
+            if isinstance(score, (int, float)) and score > 0:
                 ai_score = f"{score:.0f}/100"
-            if isinstance(presence, (int, float)):
+                has_metrics = True
+            if isinstance(presence, (int, float)) and presence > 0:
                 presence_rate = f"{presence:.0f}%"
-            if isinstance(geo, (int, float)):
+                has_metrics = True
+            if isinstance(geo, (int, float)) and geo > 0:
                 geo_readiness = f"{geo:.0f}/100"
+                has_metrics = True
+
+        # Track metrics
+        self.confidence.track(
+            "ai_visibility_metrics", "ai_visibility", "agent", has_metrics
+        )
 
         # Get AI visibility finding
         ai_finding = ""
-        if ai_agent and ai_agent.findings:
+        has_finding = False
+        if ai_agent and hasattr(ai_agent, 'findings') and ai_agent.findings:
             finding = ai_agent.findings[0]
             title = self._get_finding_attr(finding, "title", "")
             desc = self._get_finding_attr(finding, "description", "")
-            if title:
+            if title and desc:
+                has_finding = True
                 ai_finding = f"""
                 <div class="finding">
                     <div class="finding-title">{html.escape(title)}</div>
@@ -854,14 +933,25 @@ class ExternalReportBuilder:
                 </div>
                 """
 
-        # Get recommendations
+        # Track finding
+        self.confidence.track(
+            "ai_visibility_finding", "ai_visibility", "agent", has_finding
+        )
+
+        if not ai_finding:
+            self.confidence.track_fallback("ai_visibility_finding", "ai_visibility", "generic")
+            ai_finding = data_missing_html("AI Visibility Analysis", "AI Visibility")
+
+        # Get recommendations - NO GENERIC FALLBACK
         ai_recs = ""
-        if ai_agent and ai_agent.recommendations:
+        has_recs = False
+        if ai_agent and hasattr(ai_agent, 'recommendations') and ai_agent.recommendations:
             rec_items = ""
             for rec in ai_agent.recommendations[:3]:
                 action = self._get_rec_attr(rec, "action", "")
                 if action:
                     rec_items += f"<li>{html.escape(action[:100])}</li>"
+                    has_recs = True
 
             if rec_items:
                 ai_recs = f"""
@@ -870,6 +960,15 @@ class ExternalReportBuilder:
                     {rec_items}
                 </ul>
                 """
+
+        # Track recommendations
+        self.confidence.track(
+            "ai_visibility_recommendations", "ai_visibility", "agent", has_recs
+        )
+
+        if not ai_recs:
+            self.confidence.track_fallback("ai_visibility_recommendations", "ai_visibility", "generic")
+            ai_recs = data_missing_html("AI Visibility Recommendations", "AI Visibility")
 
         return f"""
         <div class="page">
@@ -893,21 +992,9 @@ class ExternalReportBuilder:
                 </div>
             </div>
 
-            {ai_finding if ai_finding else '''
-            <div class="highlight-box">
-                <p>AI visibility analysis examines how your brand appears in AI-generated responses and identifies optimization opportunities.</p>
-            </div>
-            '''}
+            {ai_finding}
 
-            {ai_recs if ai_recs else '''
-            <h2>Key Optimization Areas</h2>
-            <ul>
-                <li>Structure content for AI comprehension (clear headings, FAQ sections)</li>
-                <li>Build authoritative, citation-worthy content</li>
-                <li>Improve entity recognition through structured data</li>
-                <li>Target question-based queries that trigger AI responses</li>
-            </ul>
-            '''}
+            {ai_recs}
         </div>
         """
 
@@ -979,7 +1066,7 @@ class ExternalReportBuilder:
         p3_items = []
 
         for agent_name, agent in agent_outputs.items():
-            if agent and agent.recommendations:
+            if agent and hasattr(agent, 'recommendations') and agent.recommendations:
                 for rec in agent.recommendations[:2]:
                     priority = self._get_rec_attr(rec, "priority", 2)
                     action = self._get_rec_attr(rec, "action", "")
@@ -996,27 +1083,27 @@ class ExternalReportBuilder:
         phase2_items = "".join(f'<div class="roadmap-item">{html.escape(item)}</div>' for item in p2_items[:4])
         phase3_items = "".join(f'<div class="roadmap-item">{html.escape(item)}</div>' for item in p3_items[:4])
 
-        # Fallback content if no recommendations
+        # Track confidence for each phase - NO GENERIC FALLBACKS
+        has_p1 = bool(phase1_items)
+        has_p2 = bool(phase2_items)
+        has_p3 = bool(phase3_items)
+
+        self.confidence.track("phase1_recommendations", "roadmap", "agent", has_p1)
+        self.confidence.track("phase2_recommendations", "roadmap", "agent", has_p2)
+        self.confidence.track("phase3_recommendations", "roadmap", "agent", has_p3)
+
+        # Show explicit data missing instead of generic content
         if not phase1_items:
-            phase1_items = """
-            <div class="roadmap-item">Address critical technical issues</div>
-            <div class="roadmap-item">Optimize high-potential existing pages</div>
-            <div class="roadmap-item">Implement tracking improvements</div>
-            """
+            self.confidence.track_fallback("phase1_recommendations", "roadmap", "generic")
+            phase1_items = data_missing_html("Phase 1 Recommendations", "Roadmap")
 
         if not phase2_items:
-            phase2_items = """
-            <div class="roadmap-item">Create priority content pieces</div>
-            <div class="roadmap-item">Launch link acquisition campaign</div>
-            <div class="roadmap-item">Expand keyword coverage</div>
-            """
+            self.confidence.track_fallback("phase2_recommendations", "roadmap", "generic")
+            phase2_items = data_missing_html("Phase 2 Recommendations", "Roadmap")
 
         if not phase3_items:
-            phase3_items = """
-            <div class="roadmap-item">Scale successful strategies</div>
-            <div class="roadmap-item">Enter new keyword territories</div>
-            <div class="roadmap-item">Build competitive moats</div>
-            """
+            self.confidence.track_fallback("phase3_recommendations", "roadmap", "generic")
+            phase3_items = data_missing_html("Phase 3 Recommendations", "Roadmap")
 
         return f"""
         <div class="roadmap-phase">
