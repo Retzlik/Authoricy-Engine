@@ -57,7 +57,7 @@ from .models import (
     # History & Trends
     DomainMetricsHistory,
     RankingHistory,
-    # NEW: Advanced Intelligence Tables
+    # Advanced Intelligence Tables
     SERPFeature,
     KeywordGap,
     ReferringDomain,
@@ -65,6 +65,10 @@ from .models import (
     AIVisibility,
     LocalRanking,
     SERPCompetitor,
+    # Context Intelligence Tables (NEW)
+    ContextIntelligence,
+    ValidatedCompetitorRecord,
+    MarketOpportunityRecord,
     # Enums
     CompetitorType,
     AnalysisStatus,
@@ -72,6 +76,9 @@ from .models import (
     SearchIntent,
     SERPFeatureType,
     AIVisibilitySource,
+    BusinessModelType,
+    PrimaryGoalType,
+    ValidatedCompetitorType,
 )
 
 # Session management
@@ -122,6 +129,9 @@ from .repository import (
     store_ai_visibility,
     store_local_rankings,
     store_serp_competitors,
+    # Data storage - Context Intelligence (NEW)
+    store_context_intelligence,
+    get_context_intelligence,
     # AI outputs
     store_agent_output,
     store_report,
@@ -157,7 +167,7 @@ __all__ = [
     # Models - History & Trends
     "DomainMetricsHistory",
     "RankingHistory",
-    # Models - Advanced Intelligence (NEW)
+    # Models - Advanced Intelligence
     "SERPFeature",
     "KeywordGap",
     "ReferringDomain",
@@ -165,6 +175,10 @@ __all__ = [
     "AIVisibility",
     "LocalRanking",
     "SERPCompetitor",
+    # Models - Context Intelligence (NEW)
+    "ContextIntelligence",
+    "ValidatedCompetitorRecord",
+    "MarketOpportunityRecord",
     # Enums
     "CompetitorType",
     "AnalysisStatus",
@@ -172,6 +186,9 @@ __all__ = [
     "SearchIntent",
     "SERPFeatureType",
     "AIVisibilitySource",
+    "BusinessModelType",
+    "PrimaryGoalType",
+    "ValidatedCompetitorType",
     # Session
     "get_db",
     "get_db_context",
@@ -215,6 +232,9 @@ __all__ = [
     "store_ai_visibility",
     "store_local_rankings",
     "store_serp_competitors",
+    # Repository - Context Intelligence (NEW)
+    "store_context_intelligence",
+    "get_context_intelligence",
     # Pipeline
     "run_analysis_with_db",
     "get_quality_summary",

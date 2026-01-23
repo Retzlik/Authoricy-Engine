@@ -220,12 +220,178 @@ class DataForSEOClient:
         if not self._closed:
             await self._client.aclose()
             self._closed = True
-    
+
     async def __aenter__(self):
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
+
+    # ========================================================================
+    # CONTEXT INTELLIGENCE HELPER METHODS
+    # ========================================================================
+
+    async def get_serp_results(
+        self,
+        keyword: str,
+        location_code: int = 2840,
+        language_code: str = "en",
+        depth: int = 20,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get SERP results for a keyword.
+
+        Used by Context Intelligence for competitor discovery.
+
+        Args:
+            keyword: Search query
+            location_code: DataForSEO location code (default: 2840 = US)
+            language_code: Language code (default: "en")
+            depth: Number of results to return (default: 20)
+
+        Returns:
+            SERP results with items list, or None on error
+        """
+        try:
+            result = await self.post(
+                "serp/google/organic/live/regular",
+                [{
+                    "keyword": keyword,
+                    "location_code": location_code,
+                    "language_code": language_code,
+                    "depth": depth,
+                }]
+            )
+
+            tasks = result.get("tasks", [])
+            if tasks and tasks[0].get("result"):
+                task_result = tasks[0]["result"]
+                if task_result and len(task_result) > 0:
+                    return task_result[0]
+
+            return None
+
+        except DataForSEOError as e:
+            logger.warning(f"SERP query failed for '{keyword}': {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in SERP query: {e}")
+            return None
+
+    async def get_keywords_data(
+        self,
+        keywords: List[str],
+        location_code: int = 2840,
+        language_code: str = "en",
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get search volume and competition data for keywords.
+
+        Used by Context Intelligence for market validation.
+
+        Args:
+            keywords: List of keywords to analyze
+            location_code: DataForSEO location code
+            language_code: Language code
+
+        Returns:
+            List of keyword data dicts with search_volume, competition, etc.
+            Returns None on error.
+        """
+        if not keywords:
+            return None
+
+        try:
+            result = await self.post(
+                "dataforseo_labs/google/bulk_keyword_difficulty/live",
+                [{
+                    "keywords": keywords[:1000],  # API limit
+                    "location_code": location_code,
+                    "language_code": language_code,
+                }]
+            )
+
+            tasks = result.get("tasks", [])
+            if tasks and tasks[0].get("result"):
+                task_result = tasks[0]["result"]
+                if task_result:
+                    # Return normalized keyword data
+                    return [
+                        {
+                            "keyword": item.get("keyword", ""),
+                            "search_volume": item.get("search_volume", 0),
+                            "competition": item.get("keyword_difficulty", 50) / 100,  # Normalize to 0-1
+                            "cpc": item.get("cpc", 0),
+                        }
+                        for item in task_result
+                        if item
+                    ]
+
+            return None
+
+        except DataForSEOError as e:
+            logger.warning(f"Keywords data query failed: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in keywords data query: {e}")
+            return None
+
+    async def get_domain_competitors(
+        self,
+        domain: str,
+        location_code: int = 2840,
+        language_code: str = "en",
+        limit: int = 20,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get competitor domains for a target domain.
+
+        Used by Context Intelligence for competitor discovery.
+
+        Args:
+            domain: Target domain
+            location_code: DataForSEO location code
+            language_code: Language code
+            limit: Max competitors to return
+
+        Returns:
+            List of competitor dicts with domain, metrics, etc.
+        """
+        try:
+            result = await self.post(
+                "dataforseo_labs/google/competitors_domain/live",
+                [{
+                    "target": domain,
+                    "location_code": location_code,
+                    "language_code": language_code,
+                    "limit": limit,
+                }]
+            )
+
+            tasks = result.get("tasks", [])
+            if tasks and tasks[0].get("result"):
+                task_result = tasks[0]["result"]
+                if task_result and len(task_result) > 0:
+                    items = task_result[0].get("items", [])
+                    return [
+                        {
+                            "domain": item.get("domain", ""),
+                            "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+                            "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
+                            "domain_rank": item.get("avg_position", 0),
+                            "intersection_count": item.get("full_domain_metrics", {}).get("organic", {}).get("intersections", 0),
+                        }
+                        for item in items
+                    ]
+
+            return None
+
+        except DataForSEOError as e:
+            logger.warning(f"Competitors query failed for '{domain}': {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in competitors query: {e}")
+            return None
 
 
 # ============================================================================

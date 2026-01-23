@@ -3,9 +3,10 @@ API Endpoint for SEO Analysis
 
 FastAPI webhook handler that:
 1. Receives analysis requests (from Tally form or direct API call)
-2. Triggers data collection in background
-3. Validates data quality before AI analysis
-4. Sends results via email when complete
+2. Runs Context Intelligence to understand the business
+3. Triggers focused data collection in background
+4. Validates data quality before AI analysis
+5. Sends results via email when complete
 """
 
 import asyncio
@@ -13,10 +14,10 @@ import logging
 import os
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import List, Literal, Optional
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 from src.collector import (
     DataForSEOClient,
@@ -34,6 +35,16 @@ from src.database import (
     get_db_info,
     run_analysis_with_db,
     get_quality_summary,
+    store_context_intelligence,
+    create_analysis_run,
+    update_run_status,
+    complete_run,
+    AnalysisStatus,
+)
+from src.context import (
+    PrimaryGoal,
+    gather_context_intelligence,
+    ContextIntelligenceResult,
 )
 
 # Configure logging
@@ -75,15 +86,55 @@ async def startup_event():
 # ============================================================================
 
 class AnalysisRequest(BaseModel):
-    """Request to trigger an SEO analysis."""
+    """
+    Request to trigger an SEO analysis.
+
+    Enhanced with Context Intelligence inputs for:
+    - Goal alignment (traffic, leads, authority, balanced)
+    - Market validation and discovery
+    - Competitor validation and classification
+    """
     domain: str
     email: EmailStr
     company_name: Optional[str] = None
-    market: str = "Sweden"
-    language: str = "Swedish"  # Must be full language name, not code (e.g., "Swedish" not "sv")
+
+    # REQUIRED: Primary market and goal
+    primary_market: str = Field(
+        default="se",
+        description="Primary market code (e.g., 'se', 'us', 'de', 'uk')"
+    )
+    primary_goal: Literal["traffic", "leads", "authority", "balanced"] = Field(
+        default="balanced",
+        description="Primary SEO goal: traffic (visitors), leads (inquiries), authority (backlinks), balanced (all)"
+    )
+
+    # OPTIONAL: Enhanced inputs
+    primary_language: Optional[str] = Field(
+        default=None,
+        description="Primary language code (e.g., 'sv', 'en', 'de'). Auto-detected from market if not provided."
+    )
+    secondary_markets: Optional[List[str]] = Field(
+        default=None,
+        description="Additional market codes to analyze (e.g., ['de', 'no'])"
+    )
+    known_competitors: Optional[List[str]] = Field(
+        default=None,
+        description="Known competitor domains (e.g., ['competitor1.com', 'competitor2.com'])"
+    )
+
+    # Legacy fields (for backwards compatibility)
+    market: Optional[str] = Field(
+        default=None,
+        description="[DEPRECATED] Use primary_market instead. Full market name for legacy support."
+    )
+    language: Optional[str] = Field(
+        default=None,
+        description="[DEPRECATED] Use primary_language instead. Full language name for legacy support."
+    )
 
     # Options
     skip_ai_analysis: bool = False
+    skip_context_intelligence: bool = False  # Skip the context gathering phase
     priority: str = "normal"  # normal, high
 
 
@@ -204,8 +255,11 @@ async def trigger_analysis(
         status="pending",
     )
     
-    logger.info(f"Analysis requested: {domain} -> {request.email} (job: {job_id})")
-    
+    logger.info(
+        f"Analysis requested: {domain} -> {request.email} (job: {job_id}), "
+        f"goal={request.primary_goal}, market={request.primary_market}"
+    )
+
     # Add background task
     background_tasks.add_task(
         run_analysis,
@@ -213,9 +267,16 @@ async def trigger_analysis(
         domain=domain,
         email=request.email,
         company_name=request.company_name or domain.split(".")[0],
+        primary_market=request.primary_market,
+        primary_goal=request.primary_goal,
+        primary_language=request.primary_language,
+        secondary_markets=request.secondary_markets,
+        known_competitors=request.known_competitors,
+        skip_ai_analysis=request.skip_ai_analysis,
+        skip_context_intelligence=request.skip_context_intelligence,
+        # Legacy support
         market=request.market,
         language=request.language,
-        skip_ai_analysis=request.skip_ai_analysis,
     )
     
     return AnalysisResponse(
@@ -245,22 +306,30 @@ async def run_analysis(
     domain: str,
     email: str,
     company_name: str,
-    market: str,
-    language: str,
+    primary_market: str,
+    primary_goal: str,
+    primary_language: Optional[str],
+    secondary_markets: Optional[List[str]],
+    known_competitors: Optional[List[str]],
     skip_ai_analysis: bool,
+    skip_context_intelligence: bool,
+    # Legacy support
+    market: Optional[str] = None,
+    language: Optional[str] = None,
 ):
     """
     Run the full analysis pipeline in background.
 
     Steps:
     1. Update job status to running
-    2. Collect data from DataForSEO (60 endpoints)
-    3. Store data in database and validate quality
-    4. Quality gate check - skip AI if data is poor
-    5. Analyze with Claude (4 analysis loops)
-    6. Generate PDF reports (external + internal)
-    7. Send email via Resend
-    8. Update job status to completed
+    2. Run Context Intelligence (understand the business)
+    3. Collect data from DataForSEO (focused by context)
+    4. Store data in database and validate quality
+    5. Quality gate check - skip AI if data is poor
+    6. Analyze with Claude (4 loops, enhanced with context)
+    7. Generate PDF report
+    8. Send email via Resend
+    9. Update job status to completed
     """
 
     # Update status
@@ -269,13 +338,130 @@ async def run_analysis(
 
     logger.info(f"[{job_id}] Starting analysis for {domain}")
 
+    # Convert primary_goal string to PrimaryGoal enum
+    goal_mapping = {
+        "traffic": PrimaryGoal.TRAFFIC,
+        "leads": PrimaryGoal.LEADS,
+        "authority": PrimaryGoal.AUTHORITY,
+        "balanced": PrimaryGoal.BALANCED,
+    }
+    goal = goal_mapping.get(primary_goal, PrimaryGoal.BALANCED)
+
+    # Handle legacy market/language parameters
+    if market and not primary_language:
+        # Legacy: market was full name like "Sweden"
+        legacy_market_map = {
+            "Sweden": ("se", "sv"),
+            "United States": ("us", "en"),
+            "Germany": ("de", "de"),
+            "United Kingdom": ("uk", "en"),
+            "Norway": ("no", "no"),
+            "Denmark": ("dk", "da"),
+            "Finland": ("fi", "fi"),
+        }
+        if market in legacy_market_map:
+            primary_market, primary_language = legacy_market_map[market]
+
+    context_result: Optional[ContextIntelligenceResult] = None
+
     try:
         # Get credentials from environment
         dataforseo_login = os.getenv("DATAFORSEO_LOGIN")
         dataforseo_password = os.getenv("DATAFORSEO_PASSWORD")
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
 
         if not dataforseo_login or not dataforseo_password:
             raise ValueError("Missing DataForSEO credentials")
+
+        # Create Claude client for Context Intelligence (if available)
+        claude_client = None
+        if anthropic_key and not skip_context_intelligence:
+            from src.analyzer.client import ClaudeClient
+            claude_client = ClaudeClient(api_key=anthropic_key)
+
+        # ================================================================
+        # PHASE 0: CONTEXT INTELLIGENCE (NEW)
+        # ================================================================
+        if not skip_context_intelligence:
+            logger.info(f"[{job_id}] Phase 0: Running Context Intelligence...")
+            try:
+                context_result = await gather_context_intelligence(
+                    domain=domain,
+                    primary_market=primary_market,
+                    primary_goal=goal,
+                    primary_language=primary_language,
+                    secondary_markets=secondary_markets,
+                    known_competitors=known_competitors,
+                    claude_client=claude_client,
+                )
+
+                logger.info(
+                    f"[{job_id}] Context Intelligence complete in {context_result.execution_time_seconds:.1f}s. "
+                    f"Confidence: {context_result.overall_confidence:.2f}"
+                )
+
+                # Log key discoveries
+                if context_result.competitor_validation:
+                    cv = context_result.competitor_validation
+                    logger.info(
+                        f"[{job_id}] Competitors: {cv.total_direct_competitors} direct, "
+                        f"{len(cv.discovered)} discovered, {len(cv.reclassified)} reclassified"
+                    )
+
+                if context_result.market_validation:
+                    mv = context_result.market_validation
+                    if mv.discovered_opportunities:
+                        logger.info(
+                            f"[{job_id}] Market opportunities: {len(mv.discovered_opportunities)} discovered"
+                        )
+
+                if context_result.business_context and context_result.business_context.goal_validation:
+                    gv = context_result.business_context.goal_validation
+                    if not gv.goal_fits_business:
+                        logger.warning(
+                            f"[{job_id}] Goal mismatch: '{goal.value}' may not fit business. "
+                            f"Suggested: {gv.suggested_goal.value if gv.suggested_goal else 'N/A'}"
+                        )
+
+                # Store context intelligence in database
+                try:
+                    db_run_id = create_analysis_run(
+                        domain=domain,
+                        config={
+                            "market": primary_market,
+                            "language": primary_language,
+                            "goal": primary_goal,
+                            "email": email,
+                            "company_name": company_name,
+                        },
+                        client_email=email,
+                    )
+
+                    # Get domain_id from run
+                    from src.database.session import get_db_context
+                    from src.database.models import AnalysisRun
+                    with get_db_context() as db:
+                        run = db.query(AnalysisRun).get(db_run_id)
+                        domain_id = run.domain_id
+
+                    # Store context intelligence
+                    context_id = store_context_intelligence(
+                        run_id=db_run_id,
+                        domain_id=domain_id,
+                        context_result=context_result,
+                    )
+                    logger.info(f"[{job_id}] Context Intelligence stored (context_id={context_id})")
+
+                except Exception as db_error:
+                    logger.warning(f"[{job_id}] Failed to store context intelligence: {db_error}")
+                    # Continue without DB storage
+
+            except Exception as e:
+                logger.error(f"[{job_id}] Context Intelligence failed: {e}")
+                # Continue without context - fallback to original behavior
+                context_result = None
+        else:
+            logger.info(f"[{job_id}] Context Intelligence skipped (disabled)")
 
         # Create client and orchestrator
         async with DataForSEOClient(
@@ -285,12 +471,38 @@ async def run_analysis(
 
             orchestrator = DataCollectionOrchestrator(client)
 
+            # Determine collection config based on context
+            if context_result and context_result.collection_config:
+                # Use intelligent collection config
+                config = context_result.collection_config
+                collection_market = config.primary_market
+                collection_language = config.primary_language
+
+                # Map market code to full name for DataForSEO
+                market_names = {
+                    "se": "Sweden", "us": "United States", "de": "Germany",
+                    "uk": "United Kingdom", "no": "Norway", "dk": "Denmark",
+                    "fi": "Finland", "fr": "France", "nl": "Netherlands",
+                }
+                language_names = {
+                    "sv": "Swedish", "en": "English", "de": "German",
+                    "no": "Norwegian", "da": "Danish", "fi": "Finnish",
+                    "fr": "French", "nl": "Dutch",
+                }
+
+                market_full = market_names.get(collection_market, "Sweden")
+                language_full = language_names.get(collection_language, "Swedish")
+            else:
+                # Fallback to provided values
+                market_full = market or "Sweden"
+                language_full = language or "Swedish"
+
             # Run data collection (Phase 1-4: 60 endpoints)
             logger.info(f"[{job_id}] Phase 1-4: Collecting data from DataForSEO...")
             result = await orchestrator.collect(CollectionConfig(
                 domain=domain,
-                market=market,
-                language=language,
+                market=market_full,
+                language=language_full,
                 brand_name=company_name,
                 skip_ai_analysis=skip_ai_analysis,
             ))
@@ -348,6 +560,12 @@ async def run_analysis(
                 logger.info(f"[{job_id}] Starting Claude AI analysis (4 loops)...")
                 try:
                     engine = AnalysisEngine(api_key=anthropic_key)
+
+                    # Add context intelligence to analysis data if available
+                    if context_result:
+                        analysis_data["context_intelligence"] = context_result.to_analysis_context()
+                        logger.info(f"[{job_id}] Context Intelligence injected into analysis")
+
                     analysis_result = await engine.analyze(
                         analysis_data,
                         skip_enrichment=False,  # Include Loop 3
