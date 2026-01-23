@@ -254,6 +254,16 @@ async def run_migration():
     # Enum migrations - PostgreSQL enum ADD VALUE can't be in transaction
     enum_migrations = [
         "ALTER TYPE primarygoaltype ADD VALUE IF NOT EXISTS 'balanced'",
+        # BusinessModelType values
+        "ALTER TYPE businessmodeltype ADD VALUE IF NOT EXISTS 'b2b_saas'",
+        "ALTER TYPE businessmodeltype ADD VALUE IF NOT EXISTS 'b2b_service'",
+        "ALTER TYPE businessmodeltype ADD VALUE IF NOT EXISTS 'b2c_ecommerce'",
+        "ALTER TYPE businessmodeltype ADD VALUE IF NOT EXISTS 'b2c_subscription'",
+        "ALTER TYPE businessmodeltype ADD VALUE IF NOT EXISTS 'marketplace'",
+        "ALTER TYPE businessmodeltype ADD VALUE IF NOT EXISTS 'publisher'",
+        "ALTER TYPE businessmodeltype ADD VALUE IF NOT EXISTS 'local_service'",
+        "ALTER TYPE businessmodeltype ADD VALUE IF NOT EXISTS 'nonprofit'",
+        "ALTER TYPE businessmodeltype ADD VALUE IF NOT EXISTS 'unknown'",
     ]
 
     results = []
