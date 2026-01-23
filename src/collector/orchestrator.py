@@ -84,6 +84,7 @@ class CollectionResult:
     total_ranking_keywords: int = 0
     total_search_volume: int = 0
     position_distribution: Dict[str, int] = field(default_factory=dict)
+    intent_distribution: Dict[str, int] = field(default_factory=dict)
     cluster_metrics: Dict[str, Any] = field(default_factory=dict)
     gap_metrics: Dict[str, Any] = field(default_factory=dict)
 

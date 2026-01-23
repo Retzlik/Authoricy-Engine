@@ -251,8 +251,14 @@ async def run_migration():
         "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS context_confidence FLOAT",
     ]
 
+    # Enum migrations - PostgreSQL enum ADD VALUE can't be in transaction
+    enum_migrations = [
+        "ALTER TYPE primarygoaltype ADD VALUE IF NOT EXISTS 'balanced'",
+    ]
+
     results = []
     try:
+        # Run column migrations in transaction
         with get_db_context() as db:
             for migration in migrations:
                 try:
@@ -261,6 +267,24 @@ async def run_migration():
                 except Exception as e:
                     results.append({"sql": migration, "status": "error", "error": str(e)})
             db.commit()
+
+        # Run enum migrations with autocommit (required for ADD VALUE)
+        from sqlalchemy import create_engine
+        import os
+        db_url = os.getenv("DATABASE_URL", "")
+        if db_url:
+            engine = create_engine(db_url, isolation_level="AUTOCOMMIT")
+            with engine.connect() as conn:
+                for migration in enum_migrations:
+                    try:
+                        conn.execute(text(migration))
+                        results.append({"sql": migration, "status": "success"})
+                    except Exception as e:
+                        # "already exists" is not an error
+                        if "already exists" in str(e).lower():
+                            results.append({"sql": migration, "status": "already_exists"})
+                        else:
+                            results.append({"sql": migration, "status": "error", "error": str(e)})
 
         return {
             "status": "ok",
