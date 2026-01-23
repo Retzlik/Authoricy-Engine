@@ -232,6 +232,48 @@ async def database_status():
         }
 
 
+@app.post("/api/migrate")
+async def run_migration():
+    """
+    Run database migrations to add missing columns.
+    Call this once after deploying new model changes.
+    """
+    from src.database.session import get_db_context
+    from sqlalchemy import text
+
+    migrations = [
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS should_adjust_market BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS suggested_market VARCHAR(50)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS language_mismatch BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS direct_competitors_count INTEGER DEFAULT 0",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS seo_competitors_count INTEGER DEFAULT 0",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS emerging_threats_count INTEGER DEFAULT 0",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS context_confidence FLOAT",
+    ]
+
+    results = []
+    try:
+        with get_db_context() as db:
+            for migration in migrations:
+                try:
+                    db.execute(text(migration))
+                    results.append({"sql": migration, "status": "success"})
+                except Exception as e:
+                    results.append({"sql": migration, "status": "error", "error": str(e)})
+            db.commit()
+
+        return {
+            "status": "ok",
+            "message": "Migrations completed",
+            "results": results,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+        }
+
+
 @app.post("/api/analyze", response_model=AnalysisResponse)
 async def trigger_analysis(
     request: AnalysisRequest,
