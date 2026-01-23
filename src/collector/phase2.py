@@ -321,6 +321,7 @@ async def fetch_ranked_keywords(
     Fetch all keywords the domain currently ranks for.
     Returns keywords with: position, volume, CPC, URL, traffic
     """
+    # Note: order_by removed - not supported by this endpoint
     result = await client.post(
         "dataforseo_labs/google/ranked_keywords/live",
         [{
@@ -328,7 +329,6 @@ async def fetch_ranked_keywords(
             "location_name": market,
             "language_name": language,  # FIXED: was language_code
             "limit": limit,
-            "order_by": ["keyword_data.keyword_info.search_volume,desc"]
         }]
     )
 
@@ -724,6 +724,7 @@ async def fetch_top_searches(
     Fetch top performing search queries for the domain.
     Returns highest traffic keywords.
     """
+    # Note: order_by removed - not supported by this endpoint
     result = await client.post(
         "dataforseo_labs/google/ranked_keywords/live",
         [{
@@ -731,11 +732,15 @@ async def fetch_top_searches(
             "location_name": market,
             "language_name": language,  # FIXED: was language_code
             "limit": limit,
-            "order_by": ["ranked_serp_element.etv,desc"]  # Sort by estimated traffic
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    # Safe parsing - handle None values in API response
+    tasks = result.get("tasks") or [{}]
+    task_result = tasks[0].get("result") if tasks else None
+    items = []
+    if task_result and len(task_result) > 0:
+        items = task_result[0].get("items") or []
 
     return [
         {
@@ -770,12 +775,14 @@ async def fetch_bulk_traffic_estimation(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    # Safe parsing - handle None values in API response
+    tasks = result.get("tasks") or [{}]
+    items = tasks[0].get("result") or []
 
     traffic_estimates = {}
     total_potential = 0
 
-    for item in items:
+    for item in items or []:
         keyword = item.get("keyword", "")
         estimate = {
             "traffic_at_pos_1": item.get("metrics", {}).get("pos_1", {}).get("etv", 0),
@@ -837,9 +844,9 @@ async def expand_keyword(
     # Convert to list
     keywords_list = list(all_keywords.values())
 
-    # Calculate cluster metrics
-    total_volume = sum(kw.get("search_volume", 0) for kw in keywords_list)
-    competitions = [kw.get("competition", 0) for kw in keywords_list if kw.get("competition")]
+    # Calculate cluster metrics (handle None values)
+    total_volume = sum(kw.get("search_volume") or 0 for kw in keywords_list)
+    competitions = [kw.get("competition") or 0 for kw in keywords_list if kw.get("competition")]
     avg_difficulty = sum(competitions) / len(competitions) * 100 if competitions else 50
 
     return KeywordCluster(
