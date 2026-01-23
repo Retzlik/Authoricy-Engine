@@ -183,8 +183,29 @@ def extract_backlinks_from_result(result: CollectionResult) -> list:
 
 def extract_technical_from_result(result: CollectionResult) -> dict:
     """Extract technical metrics from collection result."""
-    technical = result.technical_audit or result.technical_audits or {}
+    # Handle technical_audit (dict) or technical_audits (list)
+    technical_raw = result.technical_audit or result.technical_audits or {}
     baseline = result.technical_baseline or {}
+
+    # If technical_audits is a list, aggregate issues from all audits
+    if isinstance(technical_raw, list):
+        critical_issues = []
+        warnings = []
+        all_issues = []
+        for audit in technical_raw:
+            if isinstance(audit, dict):
+                critical_issues.extend(audit.get("critical_issues") or [])
+                warnings.extend(audit.get("warnings") or [])
+                all_issues.extend(audit.get("issues") or [])
+        technical = {
+            "critical_issues": critical_issues,
+            "warnings": warnings,
+            "issues": all_issues,
+        }
+    elif isinstance(technical_raw, dict):
+        technical = technical_raw
+    else:
+        technical = {}
 
     return {
         "performance_score": baseline.get("performance_score"),
