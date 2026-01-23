@@ -104,11 +104,25 @@ async def fetch_domain_overview(client, domain: str, market: str, language: str)
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])
-        if not items:
+        # Properly check for empty/error results
+        tasks = result.get("tasks", [])
+        if not tasks:
+            logger.warning(f"Domain overview: No tasks returned for {domain}")
             return {}
 
-        item = items[0]
+        task = tasks[0]
+        task_result = task.get("result")
+
+        # Check if result is None, empty list, or error
+        if not task_result:
+            logger.warning(f"Domain overview: No result data for {domain} in {market}/{language}")
+            return {}
+
+        item = task_result[0] if task_result else {}
+        if not item or not item.get("metrics"):
+            logger.warning(f"Domain overview: No metrics data for {domain}")
+            return {}
+
         return {
             "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
             "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
@@ -117,7 +131,7 @@ async def fetch_domain_overview(client, domain: str, market: str, language: str)
             "visibility": item.get("metrics", {}).get("organic", {}).get("is_lost", 0),
         }
     except Exception as e:
-        logger.error(f"Domain overview failed: {e}")
+        logger.error(f"Domain overview failed for {domain}: {e}")
         return {}
 
 
