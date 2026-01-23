@@ -1321,7 +1321,7 @@ def store_context_intelligence(
             detected_languages=context_result.website_analysis.detected_languages if context_result.website_analysis else [],
             detected_offerings=[o.name for o in context_result.website_analysis.offerings] if context_result.website_analysis else [],
             has_blog=context_result.website_analysis.has_blog if context_result.website_analysis else False,
-            has_pricing=context_result.website_analysis.has_pricing_page if context_result.website_analysis else False,
+            has_pricing_page=context_result.website_analysis.has_pricing_page if context_result.website_analysis else False,
             has_demo_form=context_result.website_analysis.has_demo_form if context_result.website_analysis else False,
             has_contact_form=context_result.website_analysis.has_contact_form if context_result.website_analysis else False,
             has_ecommerce=context_result.website_analysis.has_ecommerce if context_result.website_analysis else False,

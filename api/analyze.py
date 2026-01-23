@@ -12,6 +12,7 @@ FastAPI webhook handler that:
 import asyncio
 import logging
 import os
+import sys
 import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
@@ -47,12 +48,18 @@ from src.context import (
     ContextIntelligenceResult,
 )
 
-# Configure logging
+# Configure logging to stdout (Railway treats stderr as errors)
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,  # Explicitly use stdout
+    force=True,  # Override any existing config
 )
 logger = logging.getLogger(__name__)
+
+# Quiet down chatty loggers
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # Create FastAPI app
 app = FastAPI(
@@ -493,9 +500,19 @@ async def run_analysis(
                 market_full = market_names.get(collection_market, "Sweden")
                 language_full = language_names.get(collection_language, "Swedish")
             else:
-                # Fallback to provided values
-                market_full = market or "Sweden"
-                language_full = language or "Swedish"
+                # Fallback to provided values - use primary_market if legacy market not set
+                market_names_fallback = {
+                    "se": "Sweden", "us": "United States", "de": "Germany",
+                    "uk": "United Kingdom", "no": "Norway", "dk": "Denmark",
+                    "fi": "Finland", "fr": "France", "nl": "Netherlands",
+                }
+                language_names_fallback = {
+                    "sv": "Swedish", "en": "English", "de": "German",
+                    "no": "Norwegian", "da": "Danish", "fi": "Finnish",
+                    "fr": "French", "nl": "Dutch",
+                }
+                market_full = market or market_names_fallback.get(primary_market, "Sweden")
+                language_full = language or language_names_fallback.get(primary_language or "sv", "Swedish")
 
             # Run data collection (Phase 1-4: 60 endpoints)
             logger.info(f"[{job_id}] Phase 1-4: Collecting data from DataForSEO...")

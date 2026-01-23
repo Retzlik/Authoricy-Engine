@@ -32,7 +32,7 @@ Endpoints used:
 Total: 15-18 API calls
 Expected time: 8-12 seconds (with parallelization)
 
-Note: All endpoints use language_name (e.g., "English") not language_code (e.g., "en")
+Note: DataForSEO Labs endpoints use language_code (e.g., "sv"), NOT language_name!
 Note: backlinks/domain_intersection requires targets as dict, not array
 """
 
@@ -43,6 +43,32 @@ from datetime import datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# Language name to code mapping for DataForSEO Labs API
+LANGUAGE_NAME_TO_CODE = {
+    "Swedish": "sv",
+    "English": "en",
+    "German": "de",
+    "Norwegian": "no",
+    "Danish": "da",
+    "Finnish": "fi",
+    "French": "fr",
+    "Dutch": "nl",
+    "Spanish": "es",
+    "Italian": "it",
+    "Portuguese": "pt",
+    "Polish": "pl",
+    "Russian": "ru",
+    "Japanese": "ja",
+    "Chinese": "zh",
+    "Korean": "ko",
+}
+
+
+def get_language_code(language_name: str) -> str:
+    """Convert language name to code for DataForSEO Labs API."""
+    return LANGUAGE_NAME_TO_CODE.get(language_name, "en")
 
 # =============================================================================
 # NON-COMPETITOR DOMAIN LISTS
@@ -681,7 +707,7 @@ async def fetch_domain_rank_overview(
         [{
             "target": domain,
             "location_name": market,
-            "language_name": language,  # FIXED: was language_code
+            "language_code": get_language_code(language),
         }]
     )
 
@@ -717,7 +743,7 @@ async def fetch_domain_intersection(
             "target1": target,
             "target2": competitor,
             "location_name": market,
-            "language_name": language,  # FIXED: was language_code
+            "language_code": get_language_code(language),
             "limit": limit,
             "intersections": True,  # Get shared keywords
         }]
@@ -780,7 +806,7 @@ async def fetch_serp_competitors(
         [{
             "keywords": keywords[:200],  # Max 200 keywords
             "location_name": market,
-            "language_name": language,
+            "language_code": get_language_code(language),
             "limit": 100,  # Fetch more to allow for thorough filtering
         }]
     )
