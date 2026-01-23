@@ -18,6 +18,44 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
+def safe_get_result(response: Dict, get_items: bool = True) -> Any:
+    """
+    Safely extract result data from DataForSEO API response.
+
+    Handles cases where result is None, empty, or malformed.
+
+    Args:
+        response: Raw API response dict
+        get_items: If True, returns items list. If False, returns first result object.
+
+    Returns:
+        List of items, result dict, or empty list/dict on failure
+    """
+    try:
+        tasks = response.get("tasks")
+        if not tasks or not isinstance(tasks, list):
+            return [] if get_items else {}
+
+        task = tasks[0] if tasks else {}
+        result = task.get("result")
+
+        if not result or not isinstance(result, list):
+            return [] if get_items else {}
+
+        first_result = result[0] if result else {}
+        if not first_result or not isinstance(first_result, dict):
+            return [] if get_items else {}
+
+        if get_items:
+            items = first_result.get("items")
+            return items if items and isinstance(items, list) else []
+        else:
+            return first_result
+    except (TypeError, IndexError, KeyError) as e:
+        logger.debug(f"Safe result extraction failed: {e}")
+        return [] if get_items else {}
+
+
 @dataclass
 class RetryConfig:
     """Configuration for retry behavior."""

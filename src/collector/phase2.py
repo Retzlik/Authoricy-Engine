@@ -31,6 +31,8 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 import logging
 
+from src.collector.client import safe_get_result
+
 logger = logging.getLogger(__name__)
 
 
@@ -332,23 +334,23 @@ async def fetch_ranked_keywords(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     keywords = []
     for item in items:
-        kw_data = item.get("keyword_data", {})
-        kw_info = kw_data.get("keyword_info", {})
-        serp_item = item.get("ranked_serp_element", {}).get("serp_item", {})
+        kw_data = item.get("keyword_data") or {}
+        kw_info = kw_data.get("keyword_info") or {}
+        serp_item = (item.get("ranked_serp_element") or {}).get("serp_item") or {}
 
         keywords.append({
             "keyword": kw_data.get("keyword", ""),
             "position": serp_item.get("rank_group", 0),
-            "search_volume": kw_info.get("search_volume", 0),
-            "cpc": kw_info.get("cpc", 0),
-            "competition": kw_info.get("competition", 0),
+            "search_volume": kw_info.get("search_volume") or 0,
+            "cpc": kw_info.get("cpc") or 0,
+            "competition": kw_info.get("competition") or 0,
             "url": serp_item.get("url", ""),
-            "traffic": item.get("ranked_serp_element", {}).get("etv", 0),
-            "traffic_value": item.get("ranked_serp_element", {}).get("estimated_paid_traffic_cost", 0),
+            "traffic": (item.get("ranked_serp_element") or {}).get("etv") or 0,
+            "traffic_value": (item.get("ranked_serp_element") or {}).get("estimated_paid_traffic_cost") or 0,
         })
 
     return keywords
@@ -376,17 +378,17 @@ async def fetch_keywords_for_site(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     keywords = []
     for item in items:
-        kw_info = item.get("keyword_info", {})
+        kw_info = item.get("keyword_info") or {}
 
         keywords.append({
             "keyword": item.get("keyword", ""),
-            "search_volume": kw_info.get("search_volume", 0),
-            "cpc": kw_info.get("cpc", 0),
-            "competition": kw_info.get("competition", 0),
+            "search_volume": kw_info.get("search_volume") or 0,
+            "cpc": kw_info.get("cpc") or 0,
+            "competition": kw_info.get("competition") or 0,
             "competition_level": kw_info.get("competition_level", ""),
         })
 
@@ -413,15 +415,17 @@ async def fetch_search_intent(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    # Safe parsing
+    tasks = result.get("tasks") or [{}]
+    items = tasks[0].get("result") or []
 
     intent_map = {}
-    for item in items:
+    for item in items or []:
         keyword = item.get("keyword", "")
         intent_map[keyword] = {
-            "intent": item.get("keyword_intent", {}).get("label", "unknown"),
-            "probability": item.get("keyword_intent", {}).get("probability", 0),
-            "secondary_intents": item.get("secondary_keyword_intents", [])
+            "intent": (item.get("keyword_intent") or {}).get("label", "unknown"),
+            "probability": (item.get("keyword_intent") or {}).get("probability") or 0,
+            "secondary_intents": item.get("secondary_keyword_intents") or []
         }
 
     return intent_map
@@ -448,17 +452,17 @@ async def fetch_keyword_suggestions(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     suggestions = []
     for item in items:
-        kw_info = item.get("keyword_info", {})
+        kw_info = item.get("keyword_info") or {}
 
         suggestions.append({
             "keyword": item.get("keyword", ""),
-            "search_volume": kw_info.get("search_volume", 0),
-            "cpc": kw_info.get("cpc", 0),
-            "competition": kw_info.get("competition", 0),
+            "search_volume": kw_info.get("search_volume") or 0,
+            "cpc": kw_info.get("cpc") or 0,
+            "competition": kw_info.get("competition") or 0,
         })
 
     return suggestions
@@ -487,19 +491,19 @@ async def fetch_related_keywords(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     related = []
     for item in items:
-        kw_data = item.get("keyword_data", {})
-        kw_info = kw_data.get("keyword_info", {})
+        kw_data = item.get("keyword_data") or {}
+        kw_info = kw_data.get("keyword_info") or {}
 
         related.append({
             "keyword": kw_data.get("keyword", ""),
-            "search_volume": kw_info.get("search_volume", 0),
-            "cpc": kw_info.get("cpc", 0),
-            "competition": kw_info.get("competition", 0),
-            "depth": item.get("depth", 0),
+            "search_volume": kw_info.get("search_volume") or 0,
+            "cpc": kw_info.get("cpc") or 0,
+            "competition": kw_info.get("competition") or 0,
+            "depth": item.get("depth") or 0,
         })
 
     return related
@@ -527,13 +531,13 @@ async def fetch_keyword_ideas(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     ideas = []
     for item in items:
-        kw_info = item.get("keyword_info", {})
-        search_volume = kw_info.get("search_volume", 0)
-        competition = kw_info.get("competition", 0.5)
+        kw_info = item.get("keyword_info") or {}
+        search_volume = kw_info.get("search_volume") or 0
+        competition = kw_info.get("competition") or 0.5
 
         # Calculate opportunity score: volume / (competition * 100)
         # Higher = better opportunity
@@ -576,12 +580,14 @@ async def fetch_bulk_difficulty(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    # Safe parsing
+    tasks = result.get("tasks") or [{}]
+    items = tasks[0].get("result") or []
 
     difficulty_map = {}
-    for item in items:
+    for item in items or []:
         keyword = item.get("keyword", "")
-        difficulty = item.get("keyword_difficulty", 0)
+        difficulty = item.get("keyword_difficulty") or 0
         difficulty_map[keyword] = difficulty
 
     return difficulty_map
@@ -606,12 +612,14 @@ async def fetch_historical_search_volume(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    # Safe parsing
+    tasks = result.get("tasks") or [{}]
+    items = tasks[0].get("result") or []
 
     historical_data = []
-    for item in items:
+    for item in items or []:
         keyword = item.get("keyword", "")
-        monthly_searches = item.get("keyword_info", {}).get("monthly_searches", [])
+        monthly_searches = (item.get("keyword_info") or {}).get("monthly_searches") or []
 
         historical_data.append({
             "keyword": keyword,
@@ -658,15 +666,15 @@ async def fetch_serp_elements(
         }]
     )
 
-    task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+    task_result = safe_get_result(result, get_items=False)
 
     serp_elements = {
-        "organic_results": task_result.get("organic_results_count", 0),
-        "featured_snippets": task_result.get("featured_snippets_count", 0),
-        "people_also_ask": task_result.get("people_also_ask_count", 0),
-        "local_packs": task_result.get("local_pack_count", 0),
-        "knowledge_graphs": task_result.get("knowledge_graph_count", 0),
-        "items": task_result.get("items", [])[:50],
+        "organic_results": task_result.get("organic_results_count") or 0,
+        "featured_snippets": task_result.get("featured_snippets_count") or 0,
+        "people_also_ask": task_result.get("people_also_ask_count") or 0,
+        "local_packs": task_result.get("local_pack_count") or 0,
+        "knowledge_graphs": task_result.get("knowledge_graph_count") or 0,
+        "items": (task_result.get("items") or [])[:50],
     }
 
     return [serp_elements]
@@ -696,16 +704,16 @@ async def fetch_questions_for_keywords(
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = safe_get_result(result, get_items=True)
 
         questions = [
             {
                 "seed_keyword": keyword,
-                "question": item.get("keyword_data", {}).get("keyword", ""),
-                "search_volume": item.get("keyword_data", {}).get("keyword_info", {}).get("search_volume", 0),
+                "question": (item.get("keyword_data") or {}).get("keyword", ""),
+                "search_volume": ((item.get("keyword_data") or {}).get("keyword_info") or {}).get("search_volume") or 0,
             }
             for item in items
-            if "?" in item.get("keyword_data", {}).get("keyword", "")
+            if "?" in (item.get("keyword_data") or {}).get("keyword", "")
         ]
 
         all_questions.extend(questions)
@@ -764,14 +772,26 @@ async def fetch_bulk_traffic_estimation(
     """
     Estimate traffic potential for keywords at different positions.
     Useful for opportunity sizing.
+
+    NOTE: DataForSEO's bulk_traffic_estimation API is for DOMAINS, not keywords.
+    This function calculates traffic estimates using keyword search volumes
+    and industry-standard CTR curves (Position 1: ~28%, Position 3: ~12%, Position 10: ~2.5%).
+    We fetch search volumes via historical_search_volume or use existing keyword data.
     """
-    # Note: bulk_traffic_estimation uses 'keywords', not 'targets'
+    # Industry-standard CTR by position (Google organic)
+    CTR_BY_POSITION = {
+        1: 0.28,   # Position 1: ~28% CTR
+        3: 0.12,   # Position 3: ~12% CTR
+        10: 0.025, # Position 10: ~2.5% CTR
+    }
+
+    # Fetch keyword data with search volumes
     result = await client.post(
-        "dataforseo_labs/google/bulk_traffic_estimation/live",
+        "dataforseo_labs/google/historical_search_volume/live",
         [{
-            "keywords": keywords[:200],  # Max 200 keywords - FIXED: was 'targets'
+            "keywords": keywords[:200],  # API accepts max 1000, we limit to 200
             "location_name": market,
-            "language_name": language  # FIXED: was language_code
+            "language_name": language
         }]
     )
 
@@ -784,10 +804,15 @@ async def fetch_bulk_traffic_estimation(
 
     for item in items or []:
         keyword = item.get("keyword", "")
+        kw_info = item.get("keyword_info") or {}
+        search_volume = kw_info.get("search_volume") or 0
+
+        # Calculate estimated traffic at different positions
         estimate = {
-            "traffic_at_pos_1": item.get("metrics", {}).get("pos_1", {}).get("etv", 0),
-            "traffic_at_pos_3": item.get("metrics", {}).get("pos_3", {}).get("etv", 0),
-            "traffic_at_pos_10": item.get("metrics", {}).get("pos_10", {}).get("etv", 0),
+            "search_volume": search_volume,
+            "traffic_at_pos_1": int(search_volume * CTR_BY_POSITION[1]),
+            "traffic_at_pos_3": int(search_volume * CTR_BY_POSITION[3]),
+            "traffic_at_pos_10": int(search_volume * CTR_BY_POSITION[10]),
         }
         traffic_estimates[keyword] = estimate
         total_potential += estimate["traffic_at_pos_1"]
