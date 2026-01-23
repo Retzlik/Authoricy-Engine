@@ -1307,6 +1307,11 @@ def store_context_intelligence(
     # The values match ValidatedCompetitorType in database/models.py
 
     with get_db_context() as db:
+        # Clean up existing market opportunities for this domain to avoid duplicate key errors
+        # (unique constraint on domain_id, region, language)
+        db.query(MarketOpportunityRecord).filter(
+            MarketOpportunityRecord.domain_id == domain_id
+        ).delete(synchronize_session=False)
         # Create main context intelligence record
         context_record = ContextIntelligence(
             domain_id=domain_id,

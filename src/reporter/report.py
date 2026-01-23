@@ -289,14 +289,18 @@ class ReportBuilder:
             self.confidence.track_fallback("executive_summary", "executive_summary", "missing")
             summary_html = data_missing_html("AI Executive Summary", "Executive Summary")
 
-        # Key metrics from raw data
-        keywords = summary.get("total_organic_keywords") or 0
+        # Key metrics from raw data - use multiple sources for robustness
+        keywords = summary.get("total_organic_keywords") or summary.get("ranked_keywords_count") or 0
         traffic = summary.get("total_organic_traffic") or 0
         dr = summary.get("domain_rank") or 0
         competitors = summary.get("competitor_count") or 0
+        backlinks = summary.get("total_backlinks") or 0
+        ref_domains = summary.get("referring_domains_count") or 0
 
-        self.confidence.track("summary_metrics", "executive_summary", "raw_data",
-                             keywords > 0 or traffic > 0)
+        # Track as having data if ANY metric is available (more inclusive)
+        has_any_metrics = (keywords > 0 or traffic > 0 or backlinks > 0 or
+                          ref_domains > 0 or competitors > 0 or dr > 0)
+        self.confidence.track("summary_metrics", "executive_summary", "raw_data", has_any_metrics)
 
         return f"""
         <div class="page">
@@ -338,15 +342,16 @@ class ReportBuilder:
         top_pages = phase1.get("top_pages", [])[:20]
         tech = phase1.get("technologies", [])
 
-        # Track data presence
-        has_overview = self.confidence.track("domain_overview", "domain_analysis", "raw_data", bool(overview))
-        has_historical = self.confidence.track("historical_data", "domain_analysis", "raw_data", len(historical) > 0)
-        has_pages = self.confidence.track("top_pages", "domain_analysis", "raw_data", len(top_pages) > 0)
-
         # Domain metrics
         org_kw = overview.get('organic_keywords') or 0
         org_traffic = overview.get('organic_traffic') or 0
         paid_kw = overview.get('paid_keywords') or 0
+
+        # Track data presence - check for actual content, not just dict existence
+        has_overview_data = bool(overview) and (org_kw > 0 or org_traffic > 0 or paid_kw > 0)
+        has_overview = self.confidence.track("domain_overview", "domain_analysis", "raw_data", has_overview_data or len(top_pages) > 0)
+        has_historical = self.confidence.track("historical_data", "domain_analysis", "raw_data", len(historical) > 0)
+        has_pages = self.confidence.track("top_pages", "domain_analysis", "raw_data", len(top_pages) > 0)
 
         # Historical trend
         hist_rows = ""

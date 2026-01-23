@@ -89,6 +89,7 @@ REFERENCE_SITES = {
 
 # News & Media Organizations
 NEWS_MEDIA = {
+    # International
     "bbc.com", "bbc.co.uk",
     "cnn.com",
     "nytimes.com",
@@ -103,6 +104,70 @@ NEWS_MEDIA = {
     "theverge.com",
     "wired.com",
     "mashable.com",
+    # Swedish News & Media
+    "aftonbladet.se",
+    "expressen.se",
+    "dn.se", "dagensnyheter.se",
+    "svd.se", "svenskadagbladet.se",
+    "svt.se",  # Swedish public TV
+    "sverigesradio.se", "sr.se",  # Swedish public radio
+    "tv4.se",
+    "omni.se",
+    "nyheter24.se",
+    "metro.se",
+    # Norwegian News
+    "vg.no",
+    "dagbladet.no",
+    "nrk.no",  # Norwegian public broadcasting
+    "aftenposten.no",
+    # Danish News
+    "dr.dk",  # Danish public broadcasting
+    "politiken.dk",
+    "berlingske.dk",
+    "bt.dk",
+    # Finnish News
+    "yle.fi",  # Finnish public broadcasting
+    "hs.fi", "helsinkisanomat.fi",
+    "iltalehti.fi",
+    # German News
+    "spiegel.de",
+    "bild.de",
+    "zeit.de",
+    "sueddeutsche.de",
+    "faz.net",
+    "tagesschau.de",  # German public news
+}
+
+# Swedish/Nordic Government & Official Sites
+NORDIC_GOVERNMENT = {
+    # Swedish Government
+    "krisinformation.se",  # Swedish crisis information
+    "msb.se",  # Swedish Civil Contingencies Agency
+    "regeringen.se",  # Swedish government
+    "riksdagen.se",  # Swedish parliament
+    "folkhalsomyndigheten.se",  # Public Health Agency
+    "forsakringskassan.se",  # Social insurance
+    "skatteverket.se",  # Tax agency
+    "arbetsformedlingen.se",  # Employment agency
+    "polisen.se",  # Police
+    "transportstyrelsen.se",  # Transport agency
+    "naturvardsverket.se",  # Environmental agency
+    "livsmedelsverket.se",  # Food agency
+    "socialstyrelsen.se",  # Health/social affairs
+    "konsumentverket.se",  # Consumer agency
+    "1177.se",  # Healthcare info
+    # Norwegian Government
+    "regjeringen.no",
+    "stortinget.no",
+    "nav.no",
+    "helsedirektoratet.no",
+    # Danish Government
+    "borger.dk",
+    "retsinformation.dk",
+    "sst.dk",
+    # Finnish Government
+    "suomi.fi",
+    "finlex.fi",
 }
 
 # Government & Official Sites (patterns)
@@ -135,6 +200,7 @@ EXCLUDED_DOMAINS: Set[str] = (
     MARKETPLACES |
     REFERENCE_SITES |
     NEWS_MEDIA |
+    NORDIC_GOVERNMENT |
     REVIEW_DIRECTORIES
 )
 
@@ -271,6 +337,9 @@ def get_exclusion_reason(domain: str) -> Optional[str]:
 
     if domain_lower in NEWS_MEDIA or any(domain_lower.endswith("." + d) for d in NEWS_MEDIA):
         return "News/media organization"
+
+    if domain_lower in NORDIC_GOVERNMENT or any(domain_lower.endswith("." + d) for d in NORDIC_GOVERNMENT):
+        return "Government/official site"
 
     if domain_lower in REVIEW_DIRECTORIES or any(domain_lower.endswith("." + d) for d in REVIEW_DIRECTORIES):
         return "Review/directory site"
