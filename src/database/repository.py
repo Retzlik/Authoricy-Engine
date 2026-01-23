@@ -1271,3 +1271,219 @@ def store_serp_competitors(
 
         logger.info(f"Stored {count} SERP competitors for run {run_id}")
         return count
+
+
+# =============================================================================
+# CONTEXT INTELLIGENCE STORAGE
+# =============================================================================
+
+def store_context_intelligence(
+    run_id: UUID,
+    domain_id: UUID,
+    context_result: "ContextIntelligenceResult",
+) -> UUID:
+    """
+    Store Context Intelligence results.
+
+    This persists the pre-collection intelligence for:
+    - Reuse in future analyses
+    - Learning and improvement
+    - Audit trail
+
+    Args:
+        run_id: Analysis run ID
+        domain_id: Domain ID
+        context_result: ContextIntelligenceResult from orchestrator
+
+    Returns:
+        ID of created ContextIntelligence record
+    """
+    from .models import (
+        ContextIntelligence,
+        ValidatedCompetitorRecord,
+        MarketOpportunityRecord,
+    )
+    from src.context.models import CompetitorType
+
+    with get_db_context() as db:
+        # Create main context intelligence record
+        context_record = ContextIntelligence(
+            domain_id=domain_id,
+            analysis_run_id=run_id,
+            # User inputs
+            declared_market=context_result.market_validation.declared_primary if context_result.market_validation else None,
+            declared_language=context_result.market_validation.declared_language if context_result.market_validation else None,
+            declared_goal=context_result.business_context.primary_goal.value if context_result.business_context else None,
+            user_provided_competitors=context_result.competitor_validation.user_provided if context_result.competitor_validation else [],
+            # Website analysis
+            detected_business_model=context_result.website_analysis.business_model.value if context_result.website_analysis else None,
+            detected_company_stage=context_result.website_analysis.company_stage.value if context_result.website_analysis else None,
+            detected_languages=context_result.website_analysis.detected_languages if context_result.website_analysis else [],
+            detected_offerings=[o.name for o in context_result.website_analysis.offerings] if context_result.website_analysis else [],
+            has_blog=context_result.website_analysis.has_blog if context_result.website_analysis else False,
+            has_pricing=context_result.website_analysis.has_pricing_page if context_result.website_analysis else False,
+            has_demo_form=context_result.website_analysis.has_demo_form if context_result.website_analysis else False,
+            has_contact_form=context_result.website_analysis.has_contact_form if context_result.website_analysis else False,
+            has_ecommerce=context_result.website_analysis.has_ecommerce if context_result.website_analysis else False,
+            # Goal validation
+            goal_fits_business=context_result.business_context.goal_validation.goal_fits_business if context_result.business_context and context_result.business_context.goal_validation else True,
+            suggested_goal=context_result.business_context.goal_validation.suggested_goal.value if context_result.business_context and context_result.business_context.goal_validation and context_result.business_context.goal_validation.suggested_goal else None,
+            goal_validation_reason=context_result.business_context.goal_validation.suggestion_reason if context_result.business_context and context_result.business_context.goal_validation else None,
+            # Market validation
+            primary_market_validated=context_result.market_validation.primary_validated if context_result.market_validation else False,
+            should_adjust_market=context_result.market_validation.should_adjust_primary if context_result.market_validation else False,
+            suggested_market=context_result.market_validation.suggested_primary if context_result.market_validation else None,
+            language_mismatch=context_result.market_validation.language_mismatch if context_result.market_validation else False,
+            # Competitor summary
+            direct_competitors_count=context_result.competitor_validation.total_direct_competitors if context_result.competitor_validation else 0,
+            seo_competitors_count=context_result.competitor_validation.total_seo_competitors if context_result.competitor_validation else 0,
+            emerging_threats_count=context_result.competitor_validation.emerging_threats if context_result.competitor_validation else 0,
+            # Business context
+            buyer_journey_type=context_result.business_context.buyer_journey.journey_type.value if context_result.business_context and context_result.business_context.buyer_journey else None,
+            seo_fit=context_result.business_context.seo_fit if context_result.business_context else None,
+            recommended_focus=context_result.business_context.recommended_focus if context_result.business_context else [],
+            # Confidence
+            overall_confidence=context_result.overall_confidence,
+            website_analysis_confidence=context_result.website_analysis.analysis_confidence if context_result.website_analysis else 0.0,
+            context_confidence=context_result.business_context.context_confidence if context_result.business_context else 0.0,
+            # Execution metadata
+            execution_time_seconds=context_result.execution_time_seconds,
+            errors=context_result.errors,
+            warnings=context_result.warnings,
+        )
+        db.add(context_record)
+        db.flush()  # Get the ID
+
+        context_id = context_record.id
+
+        # Store validated competitors
+        if context_result.competitor_validation:
+            all_competitors = (
+                context_result.competitor_validation.confirmed +
+                context_result.competitor_validation.discovered +
+                context_result.competitor_validation.reclassified
+            )
+
+            for comp in all_competitors:
+                comp_record = ValidatedCompetitorRecord(
+                    domain_id=domain_id,
+                    context_intelligence_id=context_id,
+                    competitor_domain=comp.domain,
+                    competitor_name=comp.name,
+                    competitor_type=comp.competitor_type.value,
+                    threat_level=comp.threat_level.value,
+                    discovery_method=comp.discovery_method.value,
+                    user_provided=comp.user_provided,
+                    validation_status=comp.validation_status.value,
+                    validation_notes=comp.validation_notes,
+                    strengths=comp.strengths,
+                    weaknesses=comp.weaknesses,
+                    organic_traffic=comp.organic_traffic,
+                    organic_keywords=comp.organic_keywords,
+                    domain_rating=comp.domain_rating,
+                    confidence_score=comp.confidence_score,
+                )
+                db.add(comp_record)
+
+            # Also store rejected competitors with reason
+            for rejected in context_result.competitor_validation.rejected:
+                comp_record = ValidatedCompetitorRecord(
+                    domain_id=domain_id,
+                    context_intelligence_id=context_id,
+                    competitor_domain=rejected.get("domain", ""),
+                    competitor_type="not_competitor",
+                    threat_level="none",
+                    discovery_method="user_provided",
+                    user_provided=True,
+                    validation_status="rejected",
+                    validation_notes=rejected.get("reason", "Not a real competitor"),
+                    confidence_score=0.8,
+                )
+                db.add(comp_record)
+
+        # Store market opportunities
+        if context_result.market_validation:
+            all_markets = (
+                context_result.market_validation.validated_markets +
+                context_result.market_validation.discovered_opportunities
+            )
+
+            for market in all_markets:
+                from src.context.models import MARKET_CONFIG
+                market_config = MARKET_CONFIG.get(market.region, {})
+
+                market_record = MarketOpportunityRecord(
+                    domain_id=domain_id,
+                    context_intelligence_id=context_id,
+                    region=market.region,
+                    language=market.language,
+                    region_name=market_config.get("name", market.region),
+                    opportunity_score=market.opportunity_score,
+                    competition_level=market.competition_level,
+                    search_volume_potential=market.search_volume_potential,
+                    keyword_count_estimate=market.keyword_count_estimate,
+                    our_current_visibility=market.our_current_visibility,
+                    is_primary=market.is_primary,
+                    is_recommended=market.is_recommended,
+                    priority_rank=market.priority_rank,
+                    recommendation_reason=market.recommendation_reason,
+                    discovery_method=market.discovery_method.value,
+                )
+                db.add(market_record)
+
+        logger.info(
+            f"Stored context intelligence for run {run_id}: "
+            f"{context_result.competitor_validation.total_direct_competitors if context_result.competitor_validation else 0} competitors, "
+            f"{len(context_result.market_validation.discovered_opportunities) if context_result.market_validation else 0} market opportunities"
+        )
+
+        return context_id
+
+
+def get_context_intelligence(domain: str) -> Optional[Dict[str, Any]]:
+    """
+    Get the most recent context intelligence for a domain.
+
+    Useful for reusing context in subsequent analyses.
+
+    Args:
+        domain: Domain name
+
+    Returns:
+        Dict with context data, or None if not found
+    """
+    from .models import Domain, ContextIntelligence
+
+    with get_db_context() as db:
+        # Find domain
+        domain_record = db.query(Domain).filter(Domain.domain == domain).first()
+        if not domain_record:
+            return None
+
+        # Get most recent context intelligence
+        context = (
+            db.query(ContextIntelligence)
+            .filter(ContextIntelligence.domain_id == domain_record.id)
+            .order_by(ContextIntelligence.created_at.desc())
+            .first()
+        )
+
+        if not context:
+            return None
+
+        return {
+            "id": str(context.id),
+            "domain_id": str(context.domain_id),
+            "declared_market": context.declared_market,
+            "declared_language": context.declared_language,
+            "declared_goal": context.declared_goal,
+            "detected_business_model": context.detected_business_model,
+            "detected_company_stage": context.detected_company_stage,
+            "goal_fits_business": context.goal_fits_business,
+            "suggested_goal": context.suggested_goal,
+            "primary_market_validated": context.primary_market_validated,
+            "direct_competitors_count": context.direct_competitors_count,
+            "seo_competitors_count": context.seo_competitors_count,
+            "overall_confidence": context.overall_confidence,
+            "created_at": context.created_at.isoformat() if context.created_at else None,
+        }

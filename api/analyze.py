@@ -35,6 +35,11 @@ from src.database import (
     get_db_info,
     run_analysis_with_db,
     get_quality_summary,
+    store_context_intelligence,
+    create_analysis_run,
+    update_run_status,
+    complete_run,
+    AnalysisStatus,
 )
 from src.context import (
     PrimaryGoal,
@@ -417,6 +422,39 @@ async def run_analysis(
                             f"[{job_id}] Goal mismatch: '{goal.value}' may not fit business. "
                             f"Suggested: {gv.suggested_goal.value if gv.suggested_goal else 'N/A'}"
                         )
+
+                # Store context intelligence in database
+                try:
+                    db_run_id = create_analysis_run(
+                        domain=domain,
+                        config={
+                            "market": primary_market,
+                            "language": primary_language,
+                            "goal": primary_goal,
+                            "email": email,
+                            "company_name": company_name,
+                        },
+                        client_email=email,
+                    )
+
+                    # Get domain_id from run
+                    from src.database.session import get_db_context
+                    from src.database.models import AnalysisRun
+                    with get_db_context() as db:
+                        run = db.query(AnalysisRun).get(db_run_id)
+                        domain_id = run.domain_id
+
+                    # Store context intelligence
+                    context_id = store_context_intelligence(
+                        run_id=db_run_id,
+                        domain_id=domain_id,
+                        context_result=context_result,
+                    )
+                    logger.info(f"[{job_id}] Context Intelligence stored (context_id={context_id})")
+
+                except Exception as db_error:
+                    logger.warning(f"[{job_id}] Failed to store context intelligence: {db_error}")
+                    # Continue without DB storage
 
             except Exception as e:
                 logger.error(f"[{job_id}] Context Intelligence failed: {e}")

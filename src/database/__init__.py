@@ -129,6 +129,9 @@ from .repository import (
     store_ai_visibility,
     store_local_rankings,
     store_serp_competitors,
+    # Data storage - Context Intelligence (NEW)
+    store_context_intelligence,
+    get_context_intelligence,
     # AI outputs
     store_agent_output,
     store_report,
@@ -229,6 +232,9 @@ __all__ = [
     "store_ai_visibility",
     "store_local_rankings",
     "store_serp_competitors",
+    # Repository - Context Intelligence (NEW)
+    "store_context_intelligence",
+    "get_context_intelligence",
     # Pipeline
     "run_analysis_with_db",
     "get_quality_summary",
