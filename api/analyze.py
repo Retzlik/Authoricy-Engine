@@ -12,6 +12,7 @@ FastAPI webhook handler that:
 import asyncio
 import logging
 import os
+import sys
 import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
@@ -47,12 +48,18 @@ from src.context import (
     ContextIntelligenceResult,
 )
 
-# Configure logging
+# Configure logging to stdout (Railway treats stderr as errors)
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,  # Explicitly use stdout
+    force=True,  # Override any existing config
 )
 logger = logging.getLogger(__name__)
+
+# Quiet down chatty loggers
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # Create FastAPI app
 app = FastAPI(
