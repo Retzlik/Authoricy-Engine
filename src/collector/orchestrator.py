@@ -81,14 +81,6 @@ class CollectionResult:
     top_searches: List[Dict] = field(default_factory=list)
     traffic_estimation: Dict[str, Any] = field(default_factory=dict)
 
-    # Phase 2 summary metrics
-    total_ranking_keywords: int = 0
-    total_search_volume: int = 0
-    position_distribution: Dict[str, int] = field(default_factory=dict)
-    intent_distribution: Dict[str, int] = field(default_factory=dict)
-    cluster_metrics: Dict[str, Any] = field(default_factory=dict)
-    gap_metrics: Dict[str, Any] = field(default_factory=dict)
-
     # Phase 3: Competitive (15 endpoints)
     competitor_analysis: List[Dict] = field(default_factory=list)
     competitor_metrics: Dict[str, Any] = field(default_factory=dict)
@@ -107,12 +99,6 @@ class CollectionResult:
     backlink_history: List[Dict] = field(default_factory=list)
     bulk_ref_domains: Dict[str, Any] = field(default_factory=dict)
     backlink_competitors: List[Dict] = field(default_factory=list)
-
-    # Phase 3 summary metrics
-    total_backlinks: int = 0
-    total_referring_domains: int = 0
-    dofollow_percentage: float = 0.0
-    avg_competitor_traffic: int = 0
 
     # Phase 4: AI & Technical (15 endpoints)
     ai_visibility: Dict[str, Any] = field(default_factory=dict)
@@ -336,315 +322,20 @@ class DataCollectionOrchestrator:
         return priority[:20]
 
 
-# =============================================================================
-# DATA DICTIONARY - Comprehensive field documentation for AI agents
-# =============================================================================
-
-DATA_DICTIONARY = {
-    "domain_overview": {
-        "_description": "Core domain metrics from DataForSEO Domain Overview API",
-        "_source": "DataForSEO /v3/dataforseo_labs/google/domain_metrics_by_categories/live",
-        "_reliability": "HIGH - Direct Google index data",
-        "organic_keywords": {
-            "meaning": "Total keywords this domain ranks for in Google top 100",
-            "interpretation": "Higher = broader visibility. <100 = minimal presence, 100-1000 = emerging, 1000-10000 = established, >10000 = dominant",
-        },
-        "organic_traffic": {
-            "meaning": "Estimated monthly organic visitors based on keyword positions and CTR models",
-            "interpretation": "Modeled estimate, not actual analytics. Typically 60-80% of real traffic due to long-tail not captured",
-        },
-        "organic_cost": {
-            "meaning": "Equivalent Google Ads spend to buy this traffic at current CPCs",
-            "interpretation": "Higher = more valuable traffic. Useful for ROI calculations",
-        },
-        "domain_rank": {
-            "meaning": "DataForSEO's proprietary authority score (0-1000 scale)",
-            "interpretation": "Combines backlink authority + traffic. <100 = low authority, 100-300 = moderate, >300 = strong",
-        },
-    },
-    "ranked_keywords": {
-        "_description": "Keywords where the domain currently ranks in Google top 100",
-        "_source": "DataForSEO /v3/dataforseo_labs/google/ranked_keywords/live",
-        "_reliability": "HIGH - Direct SERP position data",
-        "_truncation_note": "May be truncated to 1000 keywords. Full data can have 10,000+",
-        "keyword": {"meaning": "The search query text"},
-        "position": {
-            "meaning": "Current Google ranking position (1-100)",
-            "interpretation": "1-3 = high CTR (20-30%), 4-10 = moderate CTR (5-10%), 11-20 = low CTR (1-3%), 21+ = minimal traffic",
-        },
-        "search_volume": {
-            "meaning": "Average monthly searches in the target market",
-            "interpretation": "Higher = more potential traffic. But consider competition",
-        },
-        "cpc": {
-            "meaning": "Average cost-per-click in Google Ads for this keyword",
-            "interpretation": "Higher CPC = higher commercial intent = more valuable traffic",
-        },
-        "keyword_difficulty": {
-            "meaning": "DataForSEO's difficulty score (0-100)",
-            "interpretation": "0-30 = easy (can rank with content alone), 30-60 = moderate (need links), 60+ = hard (need authority)",
-        },
-        "url": {"meaning": "The URL that ranks for this keyword"},
-        "traffic": {
-            "meaning": "Estimated monthly traffic from this keyword",
-            "interpretation": "position × search_volume × CTR_model",
-        },
-        "traffic_cost": {"meaning": "Equivalent Google Ads cost for this keyword's traffic"},
-        "competition_level": {
-            "meaning": "Google Ads competition indicator",
-            "interpretation": "'high' = advertisers pay for this = commercial intent",
-        },
-        "intent": {
-            "meaning": "Search intent classification",
-            "interpretation": "'informational' = research, 'commercial' = comparison, 'transactional' = buy, 'navigational' = brand",
-        },
-    },
-    "keyword_gaps": {
-        "_description": "Keywords competitors rank for but target domain does not",
-        "_source": "DataForSEO /v3/dataforseo_labs/google/competitors_domain/live comparison",
-        "_reliability": "HIGH - Direct comparison data",
-        "_truncation_note": "May be truncated. Gaps can number in thousands",
-        "keyword": {"meaning": "Search query competitor ranks for"},
-        "search_volume": {"meaning": "Monthly search volume"},
-        "competitor_positions": {
-            "meaning": "Dict of competitor domain -> their ranking position",
-            "interpretation": "Lower position number = they rank better. Use to identify who to target content against",
-        },
-        "opportunity_score": {
-            "meaning": "Calculated as: search_volume × (1 - difficulty/100) × intent_multiplier",
-            "interpretation": "Higher = better opportunity. Prioritize top scores for content creation",
-            "formula": "search_volume * (1 - keyword_difficulty/100) * (1.5 if transactional else 1.2 if commercial else 1.0)",
-        },
-    },
-    "competitors": {
-        "_description": "Domains competing for similar keywords",
-        "_source": "DataForSEO /v3/dataforseo_labs/google/competitors_domain/live",
-        "_reliability": "HIGH - Based on keyword overlap analysis",
-        "domain": {"meaning": "Competitor domain name"},
-        "competitor_type": {
-            "meaning": "Classification based on overlap and trajectory",
-            "interpretation": "'direct' = same keywords, 'indirect' = adjacent keywords, 'emerging' = growing fast, 'declining' = losing ground",
-            "classification_rules": {
-                "direct": "Keyword overlap > 30% AND similar traffic range (0.5x-2x)",
-                "indirect": "Keyword overlap 10-30% OR different traffic tier",
-                "emerging": "Traffic growth > 20% month-over-month AND overlap > 10%",
-                "declining": "Traffic decline > 15% month-over-month",
-            },
-        },
-        "organic_keywords": {"meaning": "Their total ranking keywords"},
-        "organic_traffic": {"meaning": "Their estimated monthly traffic"},
-        "common_keywords": {
-            "meaning": "Number of keywords both domains rank for",
-            "interpretation": "Higher = more direct competition",
-        },
-    },
-    "backlink_summary": {
-        "_description": "Overview of domain's backlink profile",
-        "_source": "DataForSEO /v3/backlinks/summary/live",
-        "_reliability": "MEDIUM-HIGH - DataForSEO crawl may miss some links",
-        "total_backlinks": {
-            "meaning": "Total number of backlinks pointing to domain",
-            "interpretation": "Raw count. Quality matters more than quantity",
-        },
-        "referring_domains": {
-            "meaning": "Unique domains linking to the target",
-            "interpretation": "More important than total links. 100+ RDs = established, 500+ = strong, 1000+ = authoritative",
-        },
-        "domain_rank": {
-            "meaning": "DataForSEO's authority score combining link metrics",
-            "interpretation": "0-100 scale. 30+ = credible, 50+ = strong, 70+ = highly authoritative",
-        },
-        "dofollow_percentage": {
-            "meaning": "Percentage of links passing PageRank",
-            "interpretation": "50-80% is healthy. <40% may indicate low-quality profile. >90% may indicate manipulation",
-        },
-    },
-    "referring_domains": {
-        "_description": "List of domains linking to target",
-        "_source": "DataForSEO /v3/backlinks/referring_domains/live",
-        "_reliability": "MEDIUM-HIGH",
-        "_truncation_note": "Limited to top 500 by authority. Full list can be thousands",
-        "domain": {"meaning": "The referring domain"},
-        "domain_rank": {
-            "meaning": "Authority score of the referring domain",
-            "interpretation": "Higher = more valuable link. DR 50+ links are premium",
-        },
-        "backlinks": {"meaning": "Number of links from this domain to target"},
-        "first_seen": {"meaning": "Date link was first discovered"},
-    },
-    "technical_audit": {
-        "_description": "Site technical health assessment",
-        "_source": "DataForSEO /v3/on_page/lighthouse/live",
-        "_reliability": "HIGH - Based on actual page rendering",
-        "performance_score": {
-            "meaning": "Google Lighthouse performance score (0-100)",
-            "interpretation": "90+ = excellent, 50-89 = needs improvement, <50 = poor (impacts rankings)",
-        },
-        "accessibility_score": {"meaning": "Lighthouse accessibility score (0-100)"},
-        "best_practices_score": {"meaning": "Lighthouse best practices score (0-100)"},
-        "seo_score": {
-            "meaning": "Lighthouse SEO score (0-100)",
-            "interpretation": "Basic on-page SEO health. 90+ expected for modern sites",
-        },
-    },
-    "ai_visibility": {
-        "_description": "Brand presence in AI-generated responses",
-        "_source": "DataForSEO AI Overview and custom LLM queries",
-        "_reliability": "MEDIUM - AI responses vary by session/time",
-        "mentioned": {
-            "meaning": "Whether brand appears in AI overviews for target keywords",
-            "interpretation": "Boolean. Presence in AI = future traffic source",
-        },
-        "cited": {
-            "meaning": "Whether brand is cited as a source in AI responses",
-            "interpretation": "Citations = authority recognition by AI systems",
-        },
-    },
-    "_scoring_formulas": {
-        "opportunity_score": "search_volume × (1 - difficulty/100) × intent_multiplier. intent_multiplier: transactional=1.5, commercial=1.2, informational=1.0",
-        "personalized_difficulty": "base_difficulty × (competitor_authority / our_authority). Harder if competitors stronger",
-        "traffic_value": "estimated_traffic × CPC. Dollar value of organic traffic",
-        "content_decay_risk": "traffic_change_90d < -20% = HIGH, -10 to -20% = MEDIUM, stable = LOW",
-        "link_quality_score": "Average DR of referring domains × dofollow_percentage",
-    },
-    "_data_limitations": {
-        "traffic_estimates": "Modeled from CTR curves, typically 60-80% of actual. Use for relative comparison, not absolute numbers",
-        "keyword_coverage": "DataForSEO may miss long-tail queries. Total universe could be 2-5x larger",
-        "backlink_freshness": "Crawl data may be 1-4 weeks old. Recent link changes not reflected",
-        "competitor_classification": "Algorithmic. May misclassify niche competitors or new entrants",
-        "ai_visibility": "AI responses are non-deterministic. Results represent a snapshot, not consistent behavior",
-    },
-}
-
-
-def _calculate_data_quality(result: CollectionResult) -> Dict[str, Any]:
-    """
-    Calculate comprehensive data quality metrics for AI context.
-
-    Returns quality scores, completeness indicators, and specific warnings
-    to help agents understand data reliability.
-    """
-    quality = {
-        "overall_score": 0.0,
-        "phase_scores": {},
-        "completeness": {},
-        "truncation_warnings": [],
-        "missing_data": [],
-        "reliability_notes": [],
-        "confidence_indicators": {},
-    }
-
-    # Phase 1 completeness
-    phase1_fields = [
-        ("domain_overview", result.domain_overview, "Critical for analysis"),
-        ("competitors", result.competitors, "Needed for competitive analysis"),
-        ("backlink_summary", result.backlink_summary, "Authority assessment"),
-        ("top_pages", result.top_pages, "Content performance"),
-        ("technical_baseline", result.technical_baseline, "Technical health"),
-    ]
-    phase1_complete = sum(1 for _, v, _ in phase1_fields if v) / len(phase1_fields)
-    quality["phase_scores"]["phase1_foundation"] = phase1_complete
-    for name, value, purpose in phase1_fields:
-        if not value:
-            quality["missing_data"].append(f"{name}: {purpose}")
-
-    # Phase 2 completeness
-    phase2_fields = [
-        ("ranked_keywords", result.ranked_keywords, "Current rankings"),
-        ("keyword_gaps", result.keyword_gaps, "Opportunity identification"),
-        ("keyword_clusters", result.keyword_clusters, "Topical authority"),
-    ]
-    phase2_complete = sum(1 for _, v, _ in phase2_fields if v) / len(phase2_fields)
-    quality["phase_scores"]["phase2_keywords"] = phase2_complete
-    for name, value, purpose in phase2_fields:
-        if not value:
-            quality["missing_data"].append(f"{name}: {purpose}")
-
-    # Phase 3 completeness
-    phase3_fields = [
-        ("competitor_metrics", result.competitor_metrics, "Competitor benchmarking"),
-        ("referring_domains", result.referring_domains, "Link profile analysis"),
-        ("link_gaps", result.link_gaps, "Link building targets"),
-    ]
-    phase3_complete = sum(1 for _, v, _ in phase3_fields if v) / len(phase3_fields)
-    quality["phase_scores"]["phase3_competitive"] = phase3_complete
-    for name, value, purpose in phase3_fields:
-        if not value:
-            quality["missing_data"].append(f"{name}: {purpose}")
-
-    # Phase 4 completeness
-    phase4_fields = [
-        ("technical_audit", result.technical_audit, "Technical assessment"),
-        ("ai_visibility", result.ai_visibility, "AI presence"),
-        ("brand_mentions", result.brand_mentions, "Brand awareness"),
-    ]
-    phase4_complete = sum(1 for _, v, _ in phase4_fields if v) / len(phase4_fields)
-    quality["phase_scores"]["phase4_ai_technical"] = phase4_complete
-    for name, value, purpose in phase4_fields:
-        if not value:
-            quality["missing_data"].append(f"{name}: {purpose}")
-
-    # Truncation warnings - help agents understand they're seeing a sample
-    truncation_thresholds = [
-        ("ranked_keywords", result.ranked_keywords, 1000, "May have 10,000+ keywords"),
-        ("keyword_gaps", result.keyword_gaps, 500, "May have thousands of gaps"),
-        ("referring_domains", result.referring_domains, 500, "May have thousands of RDs"),
-        ("backlinks", result.backlinks, 500, "May have millions of backlinks"),
-        ("competitors", result.competitors, 20, "May have hundreds of competitors"),
-    ]
-    for name, data, threshold, note in truncation_thresholds:
-        if isinstance(data, list) and len(data) >= threshold * 0.9:
-            quality["truncation_warnings"].append({
-                "field": name,
-                "shown": len(data),
-                "threshold": threshold,
-                "note": f"Data likely truncated. {note}",
-            })
-
-    # Overall quality score
-    phase_weights = {"phase1_foundation": 0.3, "phase2_keywords": 0.3, "phase3_competitive": 0.2, "phase4_ai_technical": 0.2}
-    quality["overall_score"] = sum(
-        quality["phase_scores"].get(phase, 0) * weight
-        for phase, weight in phase_weights.items()
-    ) * 100
-
-    # Confidence indicators for key metrics
-    quality["confidence_indicators"] = {
-        "traffic_estimates": "MEDIUM - Modeled from CTR curves, use for relative comparison",
-        "keyword_positions": "HIGH - Direct SERP data from DataForSEO",
-        "backlink_counts": "MEDIUM-HIGH - Crawl-based, may miss recent changes",
-        "competitor_classification": "MEDIUM - Algorithmic classification based on overlap",
-        "ai_visibility": "LOW-MEDIUM - AI responses are non-deterministic",
-        "technical_scores": "HIGH - Direct Lighthouse measurements",
-    }
-
-    # Add reliability notes based on data state
-    if result.errors:
-        quality["reliability_notes"].append(f"Collection had {len(result.errors)} error(s): data may be incomplete")
-    if result.warnings:
-        quality["reliability_notes"].append(f"Collection had {len(result.warnings)} warning(s)")
-    if not result.domain_overview.get("organic_keywords"):
-        quality["reliability_notes"].append("Domain appears to have minimal organic presence - limited data available")
-
-    return quality
-
-
 def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
     """
     Compile collection result into a structured format for AI analysis.
 
     This function transforms the raw CollectionResult into a format
-    optimized for consumption by Claude's analysis loops, including:
-    - Comprehensive data dictionary explaining field meanings
-    - Data quality metrics and completeness scores
-    - Truncation warnings and confidence indicators
+    optimized for consumption by Claude's analysis loops.
 
     Args:
         result: CollectionResult from data collection
 
     Returns:
-        Dict containing structured data ready for AI analysis with full context
+        Dict containing structured data ready for AI analysis
     """
+    import json
     from dataclasses import asdict
 
     # Convert dataclass to dict
@@ -654,24 +345,8 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
     if data.get("timestamp"):
         data["timestamp"] = data["timestamp"].isoformat()
 
-    # Calculate data quality metrics
-    data_quality = _calculate_data_quality(result)
-
-    # Structure for AI analysis with comprehensive context
+    # Structure for AI analysis
     compiled = {
-        # =====================================================================
-        # DATA DICTIONARY - Explains what each field means
-        # =====================================================================
-        "data_dictionary": DATA_DICTIONARY,
-
-        # =====================================================================
-        # DATA QUALITY - Helps agents understand data reliability
-        # =====================================================================
-        "data_quality": data_quality,
-
-        # =====================================================================
-        # METADATA - Collection context
-        # =====================================================================
         "metadata": {
             "domain": result.domain,
             "market": result.market,
@@ -682,12 +357,7 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
             "success": result.success,
             "errors": result.errors,
             "warnings": result.warnings,
-            "data_freshness": "Data collected at timestamp above. Backlink data may be 1-4 weeks old.",
         },
-
-        # =====================================================================
-        # PHASE 1: FOUNDATION DATA
-        # =====================================================================
         "phase1_foundation": {
             "domain_overview": result.domain_overview,
             "historical_data": result.historical_data,
@@ -697,16 +367,7 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
             "backlink_summary": result.backlink_summary,
             "technical_baseline": result.technical_baseline,
             "technologies": result.technologies,
-            "_field_counts": {
-                "competitors_shown": len(result.competitors),
-                "top_pages_shown": len(result.top_pages),
-                "subdomains_shown": len(result.subdomains),
-            },
         },
-
-        # =====================================================================
-        # PHASE 2: KEYWORD INTELLIGENCE
-        # =====================================================================
         "phase2_keywords": {
             "ranked_keywords": result.ranked_keywords,
             "keyword_universe": result.keyword_universe,
@@ -714,18 +375,7 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
             "keyword_clusters": result.keyword_clusters,
             "intent_classification": result.intent_classification,
             "difficulty_scores": result.difficulty_scores,
-            "_field_counts": {
-                "ranked_keywords_shown": len(result.ranked_keywords),
-                "keyword_gaps_shown": len(result.keyword_gaps),
-                "keyword_clusters_shown": len(result.keyword_clusters),
-                "total_claimed_keywords": result.domain_overview.get("organic_keywords", 0),
-                "note": "ranked_keywords may be truncated. Use total_claimed_keywords for accurate count.",
-            },
         },
-
-        # =====================================================================
-        # PHASE 3: COMPETITIVE & BACKLINK DATA
-        # =====================================================================
         "phase3_competitive": {
             "competitor_analysis": result.competitor_analysis,
             "competitor_metrics": result.competitor_metrics,
@@ -736,18 +386,7 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
             "referring_domains": result.referring_domains,
             "link_gaps": result.link_gaps,
             "link_velocity": result.link_velocity,
-            "_field_counts": {
-                "referring_domains_shown": len(result.referring_domains),
-                "backlinks_shown": len(result.backlinks),
-                "total_claimed_backlinks": result.backlink_summary.get("total_backlinks", 0),
-                "total_claimed_referring_domains": result.backlink_summary.get("referring_domains", 0),
-                "note": "Backlink lists truncated to top 500 by authority. Full profile may have millions.",
-            },
         },
-
-        # =====================================================================
-        # PHASE 4: AI VISIBILITY & TECHNICAL
-        # =====================================================================
         "phase4_ai_technical": {
             "ai_visibility": result.ai_visibility,
             "ai_mentions": result.ai_mentions,
@@ -756,12 +395,7 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
             "trend_data": result.trend_data,
             "technical_audit": result.technical_audit,
             "technical_audits": result.technical_audits,
-            "_reliability_note": "AI visibility data is non-deterministic. Results represent a snapshot.",
         },
-
-        # =====================================================================
-        # SUMMARY METRICS - Quick reference
-        # =====================================================================
         "summary": {
             "total_organic_keywords": result.domain_overview.get("organic_keywords", 0),
             "total_organic_traffic": result.domain_overview.get("organic_traffic", 0),
@@ -771,12 +405,24 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
             "competitor_count": len(result.competitors),
             "ranked_keywords_count": len(result.ranked_keywords),
             "keyword_gaps_count": len(result.keyword_gaps),
-            "_interpretation_guide": {
-                "traffic_reliability": "Estimated, typically 60-80% of actual. Use for relative comparisons.",
-                "keyword_count_note": "ranked_keywords_count is sample size. total_organic_keywords is true count.",
-                "domain_rank_scale": "0-1000. <100=low, 100-300=moderate, 300+=strong authority.",
-            },
         },
     }
 
     return compiled
+
+
+def get_analysis_json(result: CollectionResult, indent: int = 2) -> str:
+    """
+    Get analysis data as JSON string.
+
+    Args:
+        result: CollectionResult from data collection
+        indent: JSON indentation level
+
+    Returns:
+        JSON string of compiled analysis data
+    """
+    import json
+
+    compiled = compile_analysis_data(result)
+    return json.dumps(compiled, indent=indent, default=str)

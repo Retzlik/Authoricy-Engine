@@ -32,7 +32,7 @@ Endpoints used:
 Total: 15-18 API calls
 Expected time: 8-12 seconds (with parallelization)
 
-Note: DataForSEO Labs endpoints use language_code (e.g., "sv"), NOT language_name!
+Note: All endpoints use language_name (e.g., "English") not language_code (e.g., "en")
 Note: backlinks/domain_intersection requires targets as dict, not array
 """
 
@@ -43,305 +43,6 @@ from datetime import datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-# Language name to code mapping for DataForSEO Labs API
-LANGUAGE_NAME_TO_CODE = {
-    "Swedish": "sv",
-    "English": "en",
-    "German": "de",
-    "Norwegian": "no",
-    "Danish": "da",
-    "Finnish": "fi",
-    "French": "fr",
-    "Dutch": "nl",
-    "Spanish": "es",
-    "Italian": "it",
-    "Portuguese": "pt",
-    "Polish": "pl",
-    "Russian": "ru",
-    "Japanese": "ja",
-    "Chinese": "zh",
-    "Korean": "ko",
-}
-
-
-def get_language_code(language_name: str) -> str:
-    """Convert language name to code for DataForSEO Labs API."""
-    return LANGUAGE_NAME_TO_CODE.get(language_name, "en")
-
-# =============================================================================
-# NON-COMPETITOR DOMAIN LISTS
-# =============================================================================
-
-# Domains that should NEVER be considered competitors - platforms and social media
-NON_COMPETITOR_DOMAINS = {
-    # Social Media
-    "facebook.com", "www.facebook.com", "m.facebook.com",
-    "youtube.com", "www.youtube.com", "m.youtube.com",
-    "twitter.com", "www.twitter.com", "x.com",
-    "instagram.com", "www.instagram.com",
-    "linkedin.com", "www.linkedin.com",
-    "tiktok.com", "www.tiktok.com",
-    "pinterest.com", "www.pinterest.com",
-    "reddit.com", "www.reddit.com",
-    "tumblr.com", "www.tumblr.com",
-    "snapchat.com", "www.snapchat.com",
-    "whatsapp.com", "www.whatsapp.com",
-    "telegram.org", "www.telegram.org",
-    "discord.com", "www.discord.com",
-
-    # Search Engines
-    "google.com", "www.google.com", "google.se", "google.co.uk",
-    "bing.com", "www.bing.com",
-    "yahoo.com", "www.yahoo.com",
-    "duckduckgo.com", "www.duckduckgo.com",
-    "baidu.com", "www.baidu.com",
-    "yandex.com", "www.yandex.com",
-
-    # E-commerce Platforms
-    "amazon.com", "www.amazon.com", "amazon.se", "amazon.co.uk", "amazon.de",
-    "ebay.com", "www.ebay.com", "ebay.se", "ebay.co.uk",
-    "etsy.com", "www.etsy.com",
-    "aliexpress.com", "www.aliexpress.com",
-    "alibaba.com", "www.alibaba.com",
-    "wish.com", "www.wish.com",
-
-    # Reference/Encyclopedia
-    "wikipedia.org", "www.wikipedia.org", "en.wikipedia.org", "sv.wikipedia.org",
-    "wikimedia.org", "www.wikimedia.org",
-    "britannica.com", "www.britannica.com",
-    "quora.com", "www.quora.com",
-    "medium.com", "www.medium.com",
-
-    # Developer/Tech Platforms
-    "github.com", "www.github.com",
-    "stackoverflow.com", "www.stackoverflow.com",
-    "stackexchange.com", "www.stackexchange.com",
-    "npmjs.com", "www.npmjs.com",
-    "pypi.org", "www.pypi.org",
-
-    # Cloud/Infrastructure
-    "cloudflare.com", "www.cloudflare.com",
-    "aws.amazon.com",
-    "azure.microsoft.com",
-    "cloud.google.com",
-
-    # App Stores
-    "play.google.com",
-    "apps.apple.com", "itunes.apple.com",
-
-    # Job Sites
-    "indeed.com", "www.indeed.com",
-    "glassdoor.com", "www.glassdoor.com",
-    "monster.com", "www.monster.com",
-
-    # Review Sites (generic)
-    "trustpilot.com", "www.trustpilot.com",
-    "yelp.com", "www.yelp.com",
-    "tripadvisor.com", "www.tripadvisor.com",
-
-    # Maps
-    "maps.google.com",
-    "maps.apple.com",
-}
-
-# Government and official domains - NOT competitors
-GOVERNMENT_DOMAINS = {
-    # Swedish government
-    "krisinformation.se", "www.krisinformation.se",  # Crisis info
-    "msb.se", "www.msb.se",  # Civil contingencies agency
-    "folkhalsomyndigheten.se", "www.folkhalsomyndigheten.se",
-    "regeringen.se", "www.regeringen.se",
-    "riksdagen.se", "www.riksdagen.se",
-    "polisen.se", "www.polisen.se",
-    "forsakringskassan.se", "www.forsakringskassan.se",
-    "skatteverket.se", "www.skatteverket.se",
-    "1177.se", "www.1177.se",
-
-    # International government
-    "gov.uk", "www.gov.uk",
-    "usa.gov", "www.usa.gov",
-    "cdc.gov", "www.cdc.gov",
-    "fema.gov", "www.fema.gov",
-    "ready.gov", "www.ready.gov",
-}
-
-# Media and news organizations - NOT business competitors
-MEDIA_DOMAINS = {
-    # Swedish media
-    "sverigesradio.se", "www.sverigesradio.se",  # Public radio
-    "svt.se", "www.svt.se",  # Public TV
-    "dn.se", "www.dn.se",  # Dagens Nyheter
-    "expressen.se", "www.expressen.se",
-    "aftonbladet.se", "www.aftonbladet.se",
-    "gp.se", "www.gp.se",
-    "sydsvenskan.se", "www.sydsvenskan.se",
-    "tv4.se", "www.tv4.se",
-
-    # International media
-    "news.google.com", "news.yahoo.com",
-    "msn.com", "www.msn.com",
-    "cnn.com", "www.cnn.com",
-    "bbc.com", "www.bbc.com", "bbc.co.uk",
-    "nytimes.com", "www.nytimes.com",
-    "theguardian.com", "www.theguardian.com",
-    "forbes.com", "www.forbes.com",
-    "businessinsider.com", "www.businessinsider.com",
-    "reuters.com", "www.reuters.com",
-    "apnews.com", "www.apnews.com",
-}
-
-# Patterns that indicate non-competitor domains
-GOVERNMENT_PATTERNS = [".gov", ".gov.", ".myndighet", ".kommun."]
-MEDIA_PATTERNS = ["radio", "tv", "news", "nyheter", "tidning", "media"]
-
-
-def _get_root_domain(domain: str) -> str:
-    """Extract root domain from a full domain string."""
-    domain = domain.lower().strip()
-    parts = domain.split(".")
-    if len(parts) >= 2:
-        return parts[-2] + "." + parts[-1]
-    return domain
-
-
-def _is_government_domain(domain: str) -> bool:
-    """Check if domain is a government/official site."""
-    domain_lower = domain.lower()
-    root = _get_root_domain(domain_lower)
-
-    # Check explicit list
-    if domain_lower in GOVERNMENT_DOMAINS or root in GOVERNMENT_DOMAINS:
-        return True
-
-    # Check patterns
-    for pattern in GOVERNMENT_PATTERNS:
-        if pattern in domain_lower:
-            return True
-
-    return False
-
-
-def _is_media_domain(domain: str) -> bool:
-    """Check if domain is a media/news organization."""
-    domain_lower = domain.lower()
-    root = _get_root_domain(domain_lower)
-
-    # Check explicit list
-    if domain_lower in MEDIA_DOMAINS or root in MEDIA_DOMAINS:
-        return True
-
-    # Check patterns in domain name
-    domain_name = root.split(".")[0]
-    for pattern in MEDIA_PATTERNS:
-        if pattern in domain_name:
-            return True
-
-    return False
-
-
-def _is_real_competitor(domain: str, target_domain: str = None) -> bool:
-    """
-    Check if a domain is a real business competitor.
-
-    Filters out:
-    - Social media platforms
-    - Search engines
-    - Generic platforms (Amazon, eBay, Wikipedia, etc.)
-    - Government and official sites
-    - Media and news organizations
-    - The target domain itself (if provided)
-    - Subdomains of non-competitor domains
-
-    Args:
-        domain: The potential competitor domain
-        target_domain: The domain being analyzed (optional)
-
-    Returns:
-        True if this is a real competitor, False otherwise
-    """
-    if not domain:
-        return False
-
-    domain_lower = domain.lower().strip()
-    root_domain = _get_root_domain(domain_lower)
-
-    # Filter out the target domain itself
-    if target_domain:
-        target_lower = target_domain.lower().strip()
-        if domain_lower == target_lower or domain_lower.endswith(f".{target_lower}"):
-            return False
-
-    # Check against known non-competitor domains (platforms)
-    if domain_lower in NON_COMPETITOR_DOMAINS or root_domain in NON_COMPETITOR_DOMAINS:
-        return False
-
-    # Check for government domains
-    if _is_government_domain(domain_lower):
-        logger.debug(f"Filtered government domain: {domain}")
-        return False
-
-    # Check for media domains
-    if _is_media_domain(domain_lower):
-        logger.debug(f"Filtered media domain: {domain}")
-        return False
-
-    # Check if it's a subdomain of a non-competitor
-    for non_competitor in NON_COMPETITOR_DOMAINS:
-        if domain_lower.endswith(f".{non_competitor}"):
-            return False
-
-    return True
-
-
-def _safe_get_items(result: Dict, get_first: bool = True) -> List[Dict]:
-    """
-    Safely extract items from DataForSEO API response.
-    Handles cases where result or nested values are None.
-
-    Args:
-        result: API response dict
-        get_first: If True, gets items from result[0], else returns result list
-
-    Returns:
-        List of items or empty list
-    """
-    tasks = result.get("tasks") or [{}]
-    task_result = tasks[0].get("result")
-
-    if task_result is None:
-        return []
-
-    if get_first:
-        if isinstance(task_result, list) and len(task_result) > 0:
-            first_result = task_result[0]
-            if isinstance(first_result, dict):
-                return first_result.get("items") or []
-        return []
-    else:
-        # Return the result list directly (for endpoints that return list at result level)
-        return task_result if isinstance(task_result, list) else []
-
-
-def _safe_get_first_result(result: Dict) -> Dict:
-    """
-    Safely get the first result object from DataForSEO API response.
-
-    Returns:
-        First result dict or empty dict
-    """
-    tasks = result.get("tasks") or [{}]
-    task_result = tasks[0].get("result")
-
-    if task_result is None:
-        return {}
-
-    if isinstance(task_result, list) and len(task_result) > 0:
-        first = task_result[0]
-        return first if isinstance(first, dict) else {}
-
-    return {}
 
 
 # ============================================================================
@@ -477,8 +178,7 @@ async def collect_competitive_data(
     if not competitors:
         logger.info("Phase 3.1: Identifying competitors from SERP data...")
         serp_competitors_data = await fetch_serp_competitors(
-            client, top_keywords or [domain], market, language,
-            target_domain=domain  # Pass target domain for filtering
+            client, top_keywords or [domain], market, language
         )
         if not isinstance(serp_competitors_data, Exception):
             competitors = [c["domain"] for c in serp_competitors_data[:5]]
@@ -486,8 +186,7 @@ async def collect_competitive_data(
             logger.warning(f"Failed to fetch SERP competitors: {serp_competitors_data}")
             competitors = []
 
-    # Apply real competitor filter to any pre-provided competitors as well
-    competitors = [c for c in competitors if c != domain and _is_real_competitor(c, domain)][:5]
+    competitors = [c for c in competitors if c != domain][:5]  # Top 5, exclude self
 
     logger.info(f"Phase 3.1: Analyzing {len(competitors)} competitors: {competitors}")
 
@@ -575,17 +274,13 @@ async def collect_competitive_data(
     if competitors:
         # Get domains linking to competitors but not to us
         targets_to_analyze = [domain] + competitors[:3]
-        try:
-            link_gap_result = await fetch_backlink_domain_intersection(
-                client, targets_to_analyze
-            )
-            if not isinstance(link_gap_result, Exception):
-                link_gap_targets = link_gap_result
-            else:
-                logger.warning(f"Failed to analyze link gaps: {link_gap_result}")
-        except Exception as e:
-            # Link gap is non-critical - continue without it
-            logger.warning(f"Link gap analysis failed (non-critical): {e}")
+        link_gap_result = await fetch_backlink_domain_intersection(
+            client, targets_to_analyze
+        )
+        if not isinstance(link_gap_result, Exception):
+            link_gap_targets = link_gap_result
+        else:
+            logger.warning(f"Failed to analyze link gaps: {link_gap_result}")
 
     logger.info(f"Phase 3.5: Found {len(link_gap_targets)} link gap targets")
 
@@ -707,11 +402,11 @@ async def fetch_domain_rank_overview(
         [{
             "target": domain,
             "location_name": market,
-            "language_code": get_language_code(language),
+            "language_name": language,  # FIXED: was language_code
         }]
     )
 
-    data = _safe_get_first_result(result)
+    data = result.get("tasks", [{}])[0].get("result", [{}])[0]
 
     return CompetitorMetrics(
         domain=domain,
@@ -743,14 +438,14 @@ async def fetch_domain_intersection(
             "target1": target,
             "target2": competitor,
             "location_name": market,
-            "language_code": get_language_code(language),
+            "language_name": language,  # FIXED: was language_code
             "limit": limit,
             "intersections": True,  # Get shared keywords
         }]
     )
 
-    task_result = _safe_get_first_result(result)
-    items = task_result.get("items") or []
+    task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+    items = task_result.get("items", [])
 
     shared = 0
     opportunities = []
@@ -790,90 +485,33 @@ async def fetch_serp_competitors(
     keywords: List[str],
     market: str,
     language: str,
-    target_domain: str = None,
     limit: int = 20
 ) -> List[Dict[str, Any]]:
     """
     Identify competitors from SERP data.
     Finds domains that rank for similar keywords.
-
-    IMPORTANT: Filters out non-competitors like social media, platforms,
-    government sites, and media organizations.
-    Only returns actual business competitors.
     """
     result = await client.post(
         "dataforseo_labs/google/serp_competitors/live",
         [{
             "keywords": keywords[:200],  # Max 200 keywords
             "location_name": market,
-            "language_code": get_language_code(language),
-            "limit": 100,  # Fetch more to allow for thorough filtering
+            "language_name": language,  # FIXED: was language_code
+            "limit": limit,
         }]
     )
 
-    items = _safe_get_items(result)
-
-    # Track filtering stats
-    filtered_stats = {
-        "platform": 0,
-        "government": 0,
-        "media": 0,
-        "low_overlap": 0,
-        "accepted": 0,
-    }
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     competitors = []
     for item in items:
-        competitor_domain = item.get("domain", "")
-        keywords_count = item.get("keywords_count", 0) or 0
-
-        # Check domain type
-        if competitor_domain in NON_COMPETITOR_DOMAINS or _get_root_domain(competitor_domain) in NON_COMPETITOR_DOMAINS:
-            filtered_stats["platform"] += 1
-            continue
-
-        if _is_government_domain(competitor_domain):
-            filtered_stats["government"] += 1
-            logger.debug(f"Filtered government from SERP: {competitor_domain}")
-            continue
-
-        if _is_media_domain(competitor_domain):
-            filtered_stats["media"] += 1
-            logger.debug(f"Filtered media from SERP: {competitor_domain}")
-            continue
-
-        # Filter out target domain
-        if target_domain:
-            target_lower = target_domain.lower().strip()
-            if competitor_domain.lower() == target_lower:
-                continue
-
-        # Very permissive keyword overlap threshold for niche sites
-        min_keywords = 1  # Accept any overlap
-        if keywords_count < min_keywords:
-            filtered_stats["low_overlap"] += 1
-            continue
-
-        filtered_stats["accepted"] += 1
         competitors.append({
-            "domain": competitor_domain,
+            "domain": item.get("domain", ""),
             "visibility": item.get("visibility", 0),
             "relevant_serp_items": item.get("relevant_serp_items", 0),
-            "keywords_count": keywords_count,
+            "keywords_count": item.get("keywords_count", 0),
             "avg_position": item.get("avg_position", 0),
         })
-
-        # Stop after getting enough real competitors
-        if len(competitors) >= limit:
-            break
-
-    logger.info(f"SERP competitor filtering: {filtered_stats}")
-    logger.info(f"Found {len(competitors)} real SERP competitors (filtered from {len(items)} raw results)")
-
-    # Log warning if too few competitors found
-    if len(competitors) < 3 and len(items) > 10:
-        raw_domains = [item.get("domain", "")[:30] for item in items[:10]]
-        logger.warning(f"Very few SERP competitors found. Top raw domains: {raw_domains}")
 
     return competitors
 
@@ -897,7 +535,7 @@ async def fetch_backlinks(
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     backlinks = []
     for item in items:
@@ -935,9 +573,8 @@ async def fetch_anchors(
         }]
     )
 
-    first_result = _safe_get_first_result(result)
-    items = first_result.get("items") or []
-    total_backlinks = first_result.get("total_count", 1) or 1
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    total_backlinks = result.get("tasks", [{}])[0].get("result", [{}])[0].get("total_count", 1)
 
     anchors = []
     for item in items:
@@ -970,7 +607,7 @@ async def fetch_referring_domains(
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     domains = []
     for item in items:
@@ -985,22 +622,6 @@ async def fetch_referring_domains(
     return domains
 
 
-def _clean_domain(domain: str) -> str:
-    """Clean domain by removing protocol and trailing slashes."""
-    domain = domain.strip()
-    # Remove protocol
-    if domain.startswith("https://"):
-        domain = domain[8:]
-    elif domain.startswith("http://"):
-        domain = domain[7:]
-    # Remove trailing slash
-    domain = domain.rstrip("/")
-    # Remove www. prefix for consistency
-    if domain.startswith("www."):
-        domain = domain[4:]
-    return domain
-
-
 async def fetch_backlink_domain_intersection(
     client,
     targets: List[str],
@@ -1011,74 +632,26 @@ async def fetch_backlink_domain_intersection(
     targets[0] = our domain, targets[1:] = competitors
 
     FIXED: targets must be a dict with numbered keys, not an array
-    FIXED: Clean domains and handle API errors gracefully
     """
-    # Validate and clean targets
-    if not targets or len(targets) < 2:
-        logger.warning("Link gap analysis requires at least 2 targets (domain + 1 competitor)")
-        return []
+    # FIXED: Convert array to dict format required by API
+    targets_dict = {str(i+1): target for i, target in enumerate(targets)}
 
-    # Clean all domains
-    cleaned_targets = [_clean_domain(t) for t in targets if t]
-    cleaned_targets = [t for t in cleaned_targets if t]  # Remove empty strings
+    result = await client.post(
+        "backlinks/domain_intersection/live",
+        [{
+            "targets": targets_dict,  # FIXED: was array, now dict
+            "limit": limit,
+            "order_by": ["1.rank,desc"],  # Sort by domain rank
+        }]
+    )
 
-    if len(cleaned_targets) < 2:
-        logger.warning("Not enough valid targets for link gap analysis")
-        return []
-
-    # Limit to max 5 targets (API limitation)
-    cleaned_targets = cleaned_targets[:5]
-
-    # Convert array to dict format required by API
-    targets_dict = {str(i+1): target for i, target in enumerate(cleaned_targets)}
-
-    try:
-        result = await client.post(
-            "backlinks/domain_intersection/live",
-            [{
-                "targets": targets_dict,
-                "limit": limit,
-                "order_by": ["rank,desc"],  # FIXED: Use simple field name, not "1.rank"
-            }]
-        )
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "500" in error_msg or "internal server error" in error_msg:
-            logger.warning(f"Link gap API returned 500 error - this may be a temporary DataForSEO issue")
-            # Try with fewer targets as fallback
-            if len(cleaned_targets) > 2:
-                logger.info("Retrying link gap with fewer targets...")
-                targets_dict_reduced = {str(i+1): target for i, target in enumerate(cleaned_targets[:2])}
-                try:
-                    result = await client.post(
-                        "backlinks/domain_intersection/live",
-                        [{
-                            "targets": targets_dict_reduced,
-                            "limit": limit,
-                            "order_by": ["rank,desc"],
-                        }]
-                    )
-                except Exception as retry_e:
-                    logger.warning(f"Link gap retry also failed: {retry_e}")
-                    return []
-            else:
-                return []
-        else:
-            raise
-
-    items = _safe_get_items(result)
-
-    if not items:
-        logger.info("Link gap analysis returned no results")
-        return []
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     # Filter: domains that link to at least one competitor but not to us
+    # The API returns intersection data - we need to filter
     link_gaps = []
 
     for item in items:
-        if not isinstance(item, dict):
-            continue
-
         target_data = item.get("1", {})  # Our domain's data
 
         # If target_data is empty/null, this domain doesn't link to us = opportunity
@@ -1087,7 +660,7 @@ async def fetch_backlink_domain_intersection(
             total_competitor_links = 0
 
             # Check each competitor (positions 2, 3, 4...)
-            for i, target in enumerate(cleaned_targets[1:], start=2):
+            for i, target in enumerate(targets[1:], start=2):
                 comp_data = item.get(str(i), {})
                 if comp_data and comp_data.get("backlinks", 0) > 0:
                     competitors_linked.append(target)
@@ -1104,7 +677,6 @@ async def fetch_backlink_domain_intersection(
     # Sort by number of competitors linked (more = better target)
     link_gaps.sort(key=lambda x: (len(x["competitors_linked"]), x["domain_rank"]), reverse=True)
 
-    logger.info(f"Link gap analysis found {len(link_gaps)} opportunities")
     return link_gaps
 
 
@@ -1131,7 +703,7 @@ async def fetch_link_velocity(
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     velocity_data = {
         "months": [],
@@ -1181,7 +753,7 @@ async def fetch_referring_networks(
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     networks = [
         {
@@ -1225,7 +797,7 @@ async def fetch_broken_backlinks(
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     broken_links = [
         {
@@ -1264,7 +836,7 @@ async def fetch_backlink_history(
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     history = [
         {
@@ -1294,7 +866,7 @@ async def fetch_bulk_referring_domains(
         }]
     )
 
-    items = _safe_get_items(result, get_first=False)
+    items = result.get("tasks", [{}])[0].get("result", [])
 
     domain_data = {}
     for item in items:
@@ -1324,7 +896,7 @@ async def fetch_backlink_competitors(
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     competitors = [
         {
