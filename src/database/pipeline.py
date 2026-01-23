@@ -38,6 +38,7 @@ from .repository import (
     update_run_status,
     complete_run,
     fail_run,
+    # Core storage
     store_keywords,
     store_competitors,
     store_backlinks,
@@ -45,6 +46,15 @@ from .repository import (
     store_agent_output,
     store_report,
     get_run_data,
+    # Intelligence storage (NEW)
+    store_serp_features,
+    store_keyword_gaps,
+    store_referring_domains,
+    store_ranking_history,
+    store_content_clusters,
+    store_ai_visibility,
+    store_local_rankings,
+    store_serp_competitors,
 )
 from .validation import validate_run_data, QualityGate, DataQualityReport
 from .models import AnalysisStatus, DataQualityLevel
@@ -192,6 +202,84 @@ def extract_technical_from_result(result: CollectionResult) -> dict:
     }
 
 
+# =============================================================================
+# INTELLIGENCE DATA EXTRACTION
+# =============================================================================
+
+def extract_serp_features_from_result(result: CollectionResult) -> list:
+    """Extract SERP features for storage."""
+    serp_data = []
+
+    # From serp_elements (Phase 2)
+    for item in getattr(result, 'serp_elements', []) or []:
+        serp_data.append(item)
+
+    # From live_serp_data (Phase 4)
+    for item in getattr(result, 'live_serp_data', []) or []:
+        serp_data.append(item)
+
+    return serp_data
+
+
+def extract_keyword_gaps_from_result(result: CollectionResult) -> tuple:
+    """Extract keyword gaps and overlaps for storage."""
+    gaps = getattr(result, 'keyword_gaps', []) or []
+    overlaps = getattr(result, 'keyword_overlaps', []) or []
+    return gaps, overlaps
+
+
+def extract_referring_domains_from_result(result: CollectionResult) -> tuple:
+    """Extract referring domains data for storage."""
+    ref_domains = getattr(result, 'referring_domains', []) or []
+    backlinks = getattr(result, 'backlinks', []) or []
+    anchor_dist = getattr(result, 'anchor_distribution', []) or []
+    return ref_domains, backlinks, anchor_dist
+
+
+def extract_content_clusters_from_result(result: CollectionResult) -> list:
+    """Extract content clusters for storage."""
+    return getattr(result, 'keyword_clusters', []) or []
+
+
+def extract_ai_visibility_from_result(result: CollectionResult) -> tuple:
+    """Extract AI visibility data for storage."""
+    llm_mentions = getattr(result, 'llm_mentions', {}) or {}
+    brand_mentions = getattr(result, 'brand_mentions', []) or []
+    return llm_mentions, brand_mentions
+
+
+def extract_local_data_from_result(result: CollectionResult) -> tuple:
+    """Extract local ranking data for storage."""
+    local_data = []
+
+    # Extract from live_serp_data if local pack present
+    for item in getattr(result, 'live_serp_data', []) or []:
+        if item.get('local_pack') or item.get('local_pack_position'):
+            local_data.append(item)
+
+    # GBP data if available
+    gbp_data = None
+    domain_overview = getattr(result, 'domain_overview', {}) or {}
+    if domain_overview.get('google_business_profile'):
+        gbp_data = domain_overview['google_business_profile']
+
+    return local_data, gbp_data
+
+
+def extract_serp_competitors_from_result(result: CollectionResult) -> tuple:
+    """Extract per-keyword SERP competitors for storage."""
+    serp_data = getattr(result, 'serp_elements', []) or []
+
+    # Build competitor metrics lookup
+    comp_metrics = {}
+    for comp in getattr(result, 'competitor_analysis', []) or []:
+        domain = comp.get('domain', '')
+        if domain:
+            comp_metrics[domain] = comp
+
+    return serp_data, comp_metrics
+
+
 def prepare_validation_data(result: CollectionResult) -> dict:
     """Prepare data structure for validation."""
     return {
@@ -305,7 +393,7 @@ async def run_analysis_with_db(
             run = db.query(AnalysisRun).get(run_id)
             domain_id = run.domain_id
 
-        # Store all entities
+        # Store all entities - CORE TABLES
         keywords = extract_keywords_from_result(result)
         competitors = extract_competitors_from_result(result)
         backlinks = extract_backlinks_from_result(result)
@@ -319,8 +407,58 @@ async def run_analysis_with_db(
             store_technical_metrics(run_id, domain_id, technical)
 
         logger.info(
-            f"Stored: {keywords_count} keywords, {competitors_count} competitors, "
+            f"Stored core: {keywords_count} keywords, {competitors_count} competitors, "
             f"{backlinks_count} backlinks"
+        )
+
+        # Store all entities - INTELLIGENCE TABLES (NEW)
+        update_run_status(run_id, AnalysisStatus.COLLECTING, phase="storing_intelligence", progress=55)
+
+        # 1. SERP Features
+        serp_features_data = extract_serp_features_from_result(result)
+        serp_features_count = store_serp_features(
+            run_id, domain_id, serp_features_data, ranked_keywords=result.ranked_keywords
+        )
+
+        # 2. Keyword Gaps
+        gaps_data, overlaps_data = extract_keyword_gaps_from_result(result)
+        keyword_gaps_count = store_keyword_gaps(run_id, domain_id, gaps_data, overlaps_data)
+
+        # 3. Referring Domains
+        ref_domains, bl_data, anchor_data = extract_referring_domains_from_result(result)
+        ref_domains_count = store_referring_domains(run_id, domain_id, ref_domains, bl_data, anchor_data)
+
+        # 4. Ranking History (snapshot current rankings for trend tracking)
+        ranking_history_count = store_ranking_history(
+            run_id, domain_id, result.ranked_keywords, timestamp=result.timestamp
+        )
+
+        # 5. Content Clusters
+        clusters_data = extract_content_clusters_from_result(result)
+        clusters_count = store_content_clusters(
+            run_id, domain_id, clusters_data, ranked_keywords=result.ranked_keywords
+        )
+
+        # 6. AI Visibility (GEO)
+        llm_mentions, brand_mentions = extract_ai_visibility_from_result(result)
+        ai_visibility_count = store_ai_visibility(
+            run_id, domain_id, result.domain, llm_mentions, brand_mentions
+        )
+
+        # 7. Local Rankings
+        local_data, gbp_data = extract_local_data_from_result(result)
+        local_count = store_local_rankings(run_id, domain_id, local_data, gbp_data)
+
+        # 8. SERP Competitors
+        serp_comp_data, comp_metrics = extract_serp_competitors_from_result(result)
+        serp_competitors_count = store_serp_competitors(run_id, domain_id, serp_comp_data, comp_metrics)
+
+        logger.info(
+            f"Stored intelligence: {serp_features_count} SERP features, "
+            f"{keyword_gaps_count} keyword gaps, {ref_domains_count} referring domains, "
+            f"{ranking_history_count} rankings, {clusters_count} clusters, "
+            f"{ai_visibility_count} AI visibility, {local_count} local, "
+            f"{serp_competitors_count} SERP competitors"
         )
 
         # =====================================================================

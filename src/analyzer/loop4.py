@@ -31,7 +31,16 @@ SYSTEM_PROMPT = """You are a senior editor and quality assurance lead reviewing 
 2. **Check consistency** — Numbers should match across sections
 3. **Verify actionability** — Every recommendation must be specific
 4. **Business focus** — Executive summary must speak to business outcomes
-5. **Honest assessment** — Score fairly, don't inflate"""
+5. **Honest assessment** — Score fairly, don't inflate
+6. **Acknowledge data limitations** — If underlying data quality is poor, note it in the executive summary
+
+## DATA QUALITY AWARENESS
+
+You will receive data quality metrics. Use these to:
+- Adjust expectations if data was incomplete
+- Flag when conclusions are based on limited data
+- Note in executive summary if certain sections lack confidence
+- Consider data completeness in "Data Completeness" scoring dimension"""
 
 
 USER_PROMPT_TEMPLATE = """# QUALITY REVIEW REQUEST
@@ -44,6 +53,15 @@ USER_PROMPT_TEMPLATE = """# QUALITY REVIEW REQUEST
 - Competitors Analyzed: {competitor_count}
 - Backlinks: {backlink_count}
 - Collection Duration: {duration}s
+
+## Data Quality Assessment
+- **Overall Quality Score:** {data_quality_score:.1f}%
+- **Collection Errors:** {error_count}
+- **Missing Data Points:** {missing_data}
+- **Truncation Warnings:** {truncation_warnings}
+
+### Confidence Levels
+{confidence_levels}
 
 ---
 
@@ -228,6 +246,25 @@ class QualityReviewer:
         """
         metadata = analysis_data.get("metadata", {})
         summary = analysis_data.get("summary", {})
+        data_quality = analysis_data.get("data_quality", {})
+
+        # Extract data quality information
+        confidence_indicators = data_quality.get("confidence_indicators", {})
+        confidence_text = "\n".join([
+            f"- **{key}**: {value}"
+            for key, value in confidence_indicators.items()
+        ]) if confidence_indicators else "- Standard confidence levels"
+
+        missing_data = data_quality.get("missing_data", [])
+        missing_text = ", ".join(missing_data[:5]) if missing_data else "None"
+        if len(missing_data) > 5:
+            missing_text += f" (+{len(missing_data) - 5} more)"
+
+        truncation_warnings = data_quality.get("truncation_warnings", [])
+        truncation_text = ", ".join([
+            f"{w.get('field', 'unknown')} ({w.get('shown', 0)} of {w.get('threshold', 0)}+)"
+            for w in truncation_warnings[:3]
+        ]) if truncation_warnings else "None"
 
         # Format prompt
         prompt = USER_PROMPT_TEMPLATE.format(
@@ -236,6 +273,13 @@ class QualityReviewer:
             competitor_count=summary.get("competitor_count", 0),
             backlink_count=summary.get("total_backlinks", 0),
             duration=metadata.get("duration_seconds", 0),
+            # Data quality fields
+            data_quality_score=data_quality.get("overall_score", 0.0),
+            error_count=len(metadata.get("errors", [])),
+            missing_data=missing_text,
+            truncation_warnings=truncation_text,
+            confidence_levels=confidence_text,
+            # Loop outputs
             loop1_output=loop1_output[:20000],  # Truncate if needed
             loop2_output=loop2_output[:15000],
             loop3_output=loop3_output[:10000],
