@@ -463,95 +463,102 @@ async def run_analysis(
             claude_client = ClaudeClient(api_key=anthropic_key)
 
         # ================================================================
-        # PHASE 0: CONTEXT INTELLIGENCE (NEW)
+        # Create DataForSEO client EARLY - needed for Context Intelligence
         # ================================================================
-        if not skip_context_intelligence:
-            logger.info(f"[{job_id}] Phase 0: Running Context Intelligence...")
-            try:
-                context_result = await gather_context_intelligence(
-                    domain=domain,
-                    primary_market=primary_market,
-                    primary_goal=goal,
-                    primary_language=primary_language,
-                    secondary_markets=secondary_markets,
-                    known_competitors=known_competitors,
-                    claude_client=claude_client,
-                )
-
-                logger.info(
-                    f"[{job_id}] Context Intelligence complete in {context_result.execution_time_seconds:.1f}s. "
-                    f"Confidence: {context_result.overall_confidence:.2f}"
-                )
-
-                # Log key discoveries
-                if context_result.competitor_validation:
-                    cv = context_result.competitor_validation
-                    logger.info(
-                        f"[{job_id}] Competitors: {cv.total_direct_competitors} direct, "
-                        f"{len(cv.discovered)} discovered, {len(cv.reclassified)} reclassified"
-                    )
-
-                if context_result.market_validation:
-                    mv = context_result.market_validation
-                    if mv.discovered_opportunities:
-                        logger.info(
-                            f"[{job_id}] Market opportunities: {len(mv.discovered_opportunities)} discovered"
-                        )
-
-                if context_result.business_context and context_result.business_context.goal_validation:
-                    gv = context_result.business_context.goal_validation
-                    if not gv.goal_fits_business:
-                        logger.warning(
-                            f"[{job_id}] Goal mismatch: '{goal.value}' may not fit business. "
-                            f"Suggested: {gv.suggested_goal.value if gv.suggested_goal else 'N/A'}"
-                        )
-
-                # Store context intelligence in database
-                try:
-                    db_run_id = create_analysis_run(
-                        domain=domain,
-                        config={
-                            "market": primary_market,
-                            "language": primary_language,
-                            "goal": primary_goal,
-                            "email": email,
-                            "company_name": company_name,
-                        },
-                        client_email=email,
-                    )
-
-                    # Get domain_id from run
-                    from src.database.session import get_db_context
-                    from src.database.models import AnalysisRun
-                    with get_db_context() as db:
-                        run = db.query(AnalysisRun).get(db_run_id)
-                        domain_id = run.domain_id
-
-                    # Store context intelligence
-                    context_id = store_context_intelligence(
-                        run_id=db_run_id,
-                        domain_id=domain_id,
-                        context_result=context_result,
-                    )
-                    logger.info(f"[{job_id}] Context Intelligence stored (context_id={context_id})")
-
-                except Exception as db_error:
-                    logger.warning(f"[{job_id}] Failed to store context intelligence: {db_error}")
-                    # Continue without DB storage
-
-            except Exception as e:
-                logger.error(f"[{job_id}] Context Intelligence failed: {e}")
-                # Continue without context - fallback to original behavior
-                context_result = None
-        else:
-            logger.info(f"[{job_id}] Context Intelligence skipped (disabled)")
-
-        # Create client and orchestrator
         async with DataForSEOClient(
             login=dataforseo_login,
             password=dataforseo_password
         ) as client:
 
+            # ================================================================
+            # PHASE 0: CONTEXT INTELLIGENCE
+            # Now has access to DataForSEO client for competitor discovery!
+            # ================================================================
+            if not skip_context_intelligence:
+                logger.info(f"[{job_id}] Phase 0: Running Context Intelligence...")
+                try:
+                    context_result = await gather_context_intelligence(
+                        domain=domain,
+                        primary_market=primary_market,
+                        primary_goal=goal,
+                        primary_language=primary_language,
+                        secondary_markets=secondary_markets,
+                        known_competitors=known_competitors,
+                        claude_client=claude_client,
+                        dataforseo_client=client,  # KEY FIX: Pass client for SERP discovery!
+                    )
+
+                    logger.info(
+                        f"[{job_id}] Context Intelligence complete in {context_result.execution_time_seconds:.1f}s. "
+                        f"Confidence: {context_result.overall_confidence:.2f}"
+                    )
+
+                    # Log key discoveries
+                    if context_result.competitor_validation:
+                        cv = context_result.competitor_validation
+                        logger.info(
+                            f"[{job_id}] Competitors: {cv.total_direct_competitors} direct, "
+                            f"{len(cv.discovered)} discovered, {len(cv.reclassified)} reclassified"
+                        )
+
+                    if context_result.market_validation:
+                        mv = context_result.market_validation
+                        if mv.discovered_opportunities:
+                            logger.info(
+                                f"[{job_id}] Market opportunities: {len(mv.discovered_opportunities)} discovered"
+                            )
+
+                    if context_result.business_context and context_result.business_context.goal_validation:
+                        gv = context_result.business_context.goal_validation
+                        if not gv.goal_fits_business:
+                            logger.warning(
+                                f"[{job_id}] Goal mismatch: '{goal.value}' may not fit business. "
+                                f"Suggested: {gv.suggested_goal.value if gv.suggested_goal else 'N/A'}"
+                            )
+
+                    # Store context intelligence in database
+                    try:
+                        db_run_id = create_analysis_run(
+                            domain=domain,
+                            config={
+                                "market": primary_market,
+                                "language": primary_language,
+                                "goal": primary_goal,
+                                "email": email,
+                                "company_name": company_name,
+                            },
+                            client_email=email,
+                        )
+
+                        # Get domain_id from run
+                        from src.database.session import get_db_context
+                        from src.database.models import AnalysisRun
+                        with get_db_context() as db:
+                            run = db.query(AnalysisRun).get(db_run_id)
+                            domain_id = run.domain_id
+
+                        # Store context intelligence
+                        context_id = store_context_intelligence(
+                            run_id=db_run_id,
+                            domain_id=domain_id,
+                            context_result=context_result,
+                        )
+                        logger.info(f"[{job_id}] Context Intelligence stored (context_id={context_id})")
+
+                    except Exception as db_error:
+                        logger.warning(f"[{job_id}] Failed to store context intelligence: {db_error}")
+                        # Continue without DB storage
+
+                except Exception as e:
+                    logger.error(f"[{job_id}] Context Intelligence failed: {e}")
+                    # Continue without context - fallback to original behavior
+                    context_result = None
+            else:
+                logger.info(f"[{job_id}] Context Intelligence skipped (disabled)")
+
+            # ================================================================
+            # PHASE 1-4: DATA COLLECTION
+            # ================================================================
             orchestrator = DataCollectionOrchestrator(client)
 
             # Determine collection config based on context

@@ -369,6 +369,12 @@ async def collect_competitive_data(
             for o in keyword_overlaps
         ],
         "backlinks": backlinks[:500],
+        # Top backlinks sorted by source domain rank (highest authority first)
+        "top_backlinks": sorted(
+            backlinks,
+            key=lambda x: x.get("domain_from_rank") or 0,
+            reverse=True
+        )[:50],
         "anchor_distribution": anchors,
         "referring_domains": referring_domains,
         "link_gap_targets": link_gap_targets[:100],

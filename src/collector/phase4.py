@@ -287,11 +287,26 @@ async def collect_ai_technical_data(
     # Return complete Phase 4 data
     # -------------------------------------------------------------------------
 
+    # Build ai_visibility dict for reporter compatibility
+    total_mentions = len(brand_mentions)
+    chatgpt_mention_count = len(chatgpt_mentions.get("items", []) if isinstance(chatgpt_mentions, dict) else [])
+    google_ai_mention_count = len(google_ai_mentions.get("items", []) if isinstance(google_ai_mentions, dict) else [])
+
     return {
         "ai_keyword_data": ai_keyword_data,
         "llm_mentions": {
             "chatgpt": chatgpt_mentions,
             "google_ai": google_ai_mentions,
+        },
+        # ai_visibility dict for reporter compatibility
+        "ai_visibility": {
+            "visibility_score": ai_visibility_score,
+            "ai_visibility_score": ai_visibility_score,
+            "mention_count": total_mentions,
+            "chatgpt_mentions": chatgpt_mention_count,
+            "google_ai_mentions": google_ai_mention_count,
+            "brand_mentions_count": len(brand_mentions),
+            "sentiment_score": brand_sentiment_score,
         },
         "brand_mentions": brand_mentions,
         "sentiment_summary": sentiment_summary,

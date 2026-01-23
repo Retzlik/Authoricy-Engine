@@ -323,6 +323,9 @@ async def fetch_ranked_keywords(
     Fetch all keywords the domain currently ranks for.
     Returns keywords with: position, volume, CPC, URL, traffic
     """
+    # DEBUG: Log the exact request parameters
+    logger.info(f"Fetching ranked keywords for {domain}: market={market}, language={language}, limit={limit}")
+
     # Note: order_by removed - not supported by this endpoint
     result = await client.post(
         "dataforseo_labs/google/ranked_keywords/live",
@@ -331,8 +334,19 @@ async def fetch_ranked_keywords(
             "location_name": market,
             "language_name": language,  # FIXED: was language_code
             "limit": limit,
+            "include_subdomains": True,  # Include keywords from all subdomains
         }]
     )
+
+    # DEBUG: Log API response metadata
+    tasks = result.get("tasks", [])
+    if tasks:
+        task = tasks[0]
+        task_result = task.get("result", [{}])
+        if task_result:
+            total_count = task_result[0].get("total_count", 0)
+            items_count = task_result[0].get("items_count", 0)
+            logger.info(f"Ranked keywords API: total_count={total_count}, items_count={items_count}, returned={len(task_result[0].get('items', []))}")
 
     items = safe_get_result(result, get_items=True)
 
@@ -740,6 +754,7 @@ async def fetch_top_searches(
             "location_name": market,
             "language_name": language,  # FIXED: was language_code
             "limit": limit,
+            "include_subdomains": True,  # Include keywords from all subdomains
         }]
     )
 
