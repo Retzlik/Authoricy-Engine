@@ -67,6 +67,8 @@ from .session import (
     init_db,
     check_db_connection,
     get_engine,
+    get_db_info,
+    get_table_count,
     engine,
 )
 
@@ -139,6 +141,8 @@ __all__ = [
     "init_db",
     "check_db_connection",
     "get_engine",
+    "get_db_info",
+    "get_table_count",
     "engine",
     # Validation
     "validate_run_data",
