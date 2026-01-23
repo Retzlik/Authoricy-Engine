@@ -23,7 +23,7 @@ Execution strategy:
 Expected API calls: 18-25 depending on seed keyword count
 Expected time: 6-10 seconds (with parallelization)
 
-Note: All endpoints use language_name (e.g., "English") not language_code (e.g., "en")
+Note: DataForSEO Labs endpoints use language_code (e.g., "sv"), NOT language_name!
 """
 
 import asyncio
@@ -32,6 +32,32 @@ from dataclasses import dataclass, field
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# Language name to code mapping for DataForSEO Labs API
+LANGUAGE_NAME_TO_CODE = {
+    "Swedish": "sv",
+    "English": "en",
+    "German": "de",
+    "Norwegian": "no",
+    "Danish": "da",
+    "Finnish": "fi",
+    "French": "fr",
+    "Dutch": "nl",
+    "Spanish": "es",
+    "Italian": "it",
+    "Portuguese": "pt",
+    "Polish": "pl",
+    "Russian": "ru",
+    "Japanese": "ja",
+    "Chinese": "zh",
+    "Korean": "ko",
+}
+
+
+def get_language_code(language_name: str) -> str:
+    """Convert language name to code for DataForSEO Labs API."""
+    return LANGUAGE_NAME_TO_CODE.get(language_name, "en")
 
 
 def _safe_get_items(result: Dict, get_first: bool = True) -> List[Dict]:
@@ -375,7 +401,7 @@ async def fetch_ranked_keywords(
         [{
             "target": domain,
             "location_name": market,
-            "language_name": language,  # FIXED: was language_code
+            "language_code": get_language_code(language),  # FIXED: was language_code
             "limit": limit,
             # Note: order_by not needed - results are sorted by relevance by default
         }]
@@ -419,7 +445,7 @@ async def fetch_keywords_for_site(
         [{
             "target": domain,
             "location_name": market,
-            "language_name": language,  # FIXED: was language_code
+            "language_code": get_language_code(language),  # FIXED: was language_code
             "limit": limit,
             "include_subdomains": True
         }]
@@ -458,7 +484,7 @@ async def fetch_search_intent(
         "dataforseo_labs/google/search_intent/live",
         [{
             "keywords": keywords,
-            "language_name": language  # FIXED: was language_code
+            "language_code": get_language_code(language)  # FIXED: was language_code
         }]
     )
 
@@ -492,7 +518,7 @@ async def fetch_keyword_suggestions(
         [{
             "keyword": keyword,
             "location_name": market,
-            "language_name": language,  # FIXED: was language_code
+            "language_code": get_language_code(language),  # FIXED: was language_code
             "limit": limit
         }]
     )
@@ -530,7 +556,7 @@ async def fetch_related_keywords(
         [{
             "keyword": keyword,
             "location_name": market,
-            "language_name": language,  # FIXED: was language_code
+            "language_code": get_language_code(language),  # FIXED: was language_code
             "limit": limit,
             "depth": depth
         }]
@@ -570,7 +596,7 @@ async def fetch_keyword_ideas(
         [{
             "keywords": seed_keywords,
             "location_name": market,
-            "language_name": language,  # FIXED: was language_code
+            "language_code": get_language_code(language),  # FIXED: was language_code
             "limit": limit,
             "filters": [["keyword_info.search_volume", ">", 50]]  # Filter low-volume
         }]
@@ -621,7 +647,7 @@ async def fetch_bulk_difficulty(
         [{
             "keywords": keywords,
             "location_name": market,
-            "language_name": language  # FIXED: was language_code
+            "language_code": get_language_code(language)  # FIXED: was language_code
         }]
     )
 
@@ -651,7 +677,7 @@ async def fetch_historical_search_volume(
         [{
             "keywords": keywords[:100],  # Max 100 keywords
             "location_name": market,
-            "language_name": language  # FIXED: was language_code
+            "language_code": get_language_code(language)  # FIXED: was language_code
         }]
     )
 
@@ -704,7 +730,7 @@ async def fetch_serp_elements(
         [{
             "keywords": keywords[:200],  # Max 200 keywords
             "location_name": market,
-            "language_name": language,  # FIXED: was language_code
+            "language_code": get_language_code(language),  # FIXED: was language_code
             # Note: item_types is NOT a valid field for this endpoint
         }]
     )
@@ -741,7 +767,7 @@ async def fetch_questions_for_keywords(
             [{
                 "keyword": keyword,
                 "location_name": market,
-                "language_name": language,  # FIXED: was language_code
+                "language_code": get_language_code(language),  # FIXED: was language_code
                 "include_questions": True,
                 "limit": 50
             }]
@@ -780,7 +806,7 @@ async def fetch_top_searches(
         [{
             "target": domain,
             "location_name": market,
-            "language_name": language,  # FIXED: was language_code
+            "language_code": get_language_code(language),  # FIXED: was language_code
             "limit": limit,
             # Note: order_by not supported - we'll sort results client-side
         }]
@@ -822,7 +848,7 @@ async def fetch_bulk_traffic_estimation(
         [{
             "targets": [domain],  # FIXED: must be domains, not keywords
             "location_name": market,
-            "language_name": language
+            "language_code": get_language_code(language)
         }]
     )
 

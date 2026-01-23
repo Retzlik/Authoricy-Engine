@@ -12,7 +12,7 @@ This module collects AI-era and technical SEO data:
 - Search volume data
 - Content ratings
 
-Note: All endpoints use language_name (e.g., "English") not language_code (e.g., "en")
+Note: DataForSEO Labs endpoints use language_code (e.g., "sv"), NOT language_name!
 Note: LLM mentions endpoint requires target as array of objects: [{"domain": "..."}]
 Note: on_page/microdata and on_page/duplicate_content are task-based (not instant)
 """
@@ -47,6 +47,11 @@ LANGUAGE_NAME_TO_CODE = {
     "Danish": "da",
     "Finnish": "fi",
 }
+
+
+def get_language_code(language_name: str) -> str:
+    """Convert language name to code for DataForSEO Labs API."""
+    return LANGUAGE_NAME_TO_CODE.get(language_name, "en")
 
 
 def _safe_get_items(result: Dict, get_first: bool = True) -> List[Dict]:
@@ -410,7 +415,7 @@ async def fetch_ai_keyword_data(
         [{
             "keywords": keywords,
             "location_name": market,
-            "language_name": language,
+            "language_code": get_language_code(language),
         }]
     )
 

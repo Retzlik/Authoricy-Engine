@@ -16,6 +16,7 @@ Collects baseline domain data through 11 parallel API calls:
 
 Note: domain_pages_summary endpoint removed (404 - does not exist)
 Note: bulk_domain_rank_overview endpoint removed (404 - does not exist)
+Note: DataForSEO Labs endpoints use language_code (e.g., "sv"), NOT language_name!
 """
 
 import asyncio
@@ -23,6 +24,33 @@ from typing import Dict, Any, List
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# Language name to code mapping for DataForSEO Labs API
+# DataForSEO Labs endpoints require language_code, not language_name
+LANGUAGE_NAME_TO_CODE = {
+    "Swedish": "sv",
+    "English": "en",
+    "German": "de",
+    "Norwegian": "no",
+    "Danish": "da",
+    "Finnish": "fi",
+    "French": "fr",
+    "Dutch": "nl",
+    "Spanish": "es",
+    "Italian": "it",
+    "Portuguese": "pt",
+    "Polish": "pl",
+    "Russian": "ru",
+    "Japanese": "ja",
+    "Chinese": "zh",
+    "Korean": "ko",
+}
+
+
+def get_language_code(language_name: str) -> str:
+    """Convert language name to code for DataForSEO Labs API."""
+    return LANGUAGE_NAME_TO_CODE.get(language_name, "en")
 
 # Domains that should NEVER be considered competitors
 # These are platforms, social media, search engines, etc.
@@ -404,7 +432,7 @@ async def fetch_domain_overview(client, domain: str, market: str, language: str)
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language
+                "language_code": get_language_code(language)
             }]
         )
 
@@ -438,7 +466,7 @@ async def fetch_historical_overview(client, domain: str, market: str, language: 
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language
+                "language_code": get_language_code(language)
             }]
         )
 
@@ -465,7 +493,7 @@ async def fetch_subdomains(client, domain: str, market: str, language: str) -> L
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language,
+                "language_code": get_language_code(language),
                 "limit": 20
             }]
         )
@@ -493,7 +521,7 @@ async def fetch_relevant_pages(client, domain: str, market: str, language: str) 
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language,
+                "language_code": get_language_code(language),
                 "limit": 50
             }]
         )
@@ -526,7 +554,7 @@ async def fetch_competitors(client, domain: str, market: str, language: str) -> 
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language,
+                "language_code": get_language_code(language),
                 "limit": 100  # Fetch more to allow for filtering
             }]
         )
@@ -748,7 +776,7 @@ async def fetch_page_intersection(client, domain: str, market: str, language: st
                     "1": f"https://{domain}/"
                 },
                 "location_name": market,
-                "language_name": language,
+                "language_code": get_language_code(language),
                 "limit": 50
             }]
         )
@@ -776,7 +804,7 @@ async def fetch_categories_for_domain(client, domain: str, market: str, language
             [{
                 "target": domain,
                 "location_name": market,
-                "language_name": language,
+                "language_code": get_language_code(language),
                 "limit": 20
             }]
         )
