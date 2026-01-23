@@ -317,20 +317,24 @@ async def fetch_technologies(client, domain: str) -> List[Dict]:
             [{"target": domain}]
         )
 
-        # Safe parsing - handle None values
+        # Safe parsing - handle None values and unexpected types
         tasks = result.get("tasks") or [{}]
         task_result = tasks[0].get("result") if tasks else None
         items = []
-        if task_result and len(task_result) > 0:
-            items = task_result[0].get("technologies") or []
+        if task_result and isinstance(task_result, list) and len(task_result) > 0:
+            tech_data = task_result[0].get("technologies") if isinstance(task_result[0], dict) else None
+            if isinstance(tech_data, list):
+                items = tech_data
 
-        return [
-            {
-                "name": item.get("name"),
-                "category": item.get("category"),
-            }
-            for item in (items or [])[:20]  # Limit to top 20
-        ]
+        # Safely iterate with type checking
+        output = []
+        for item in items[:20]:  # Limit to top 20
+            if isinstance(item, dict):
+                output.append({
+                    "name": item.get("name"),
+                    "category": item.get("category"),
+                })
+        return output
     except Exception as e:
         logger.error(f"Technologies failed: {e}")
         return []
