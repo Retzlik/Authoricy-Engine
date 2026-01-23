@@ -334,6 +334,7 @@ async def fetch_ranked_keywords(
             "location_name": market,
             "language_name": language,  # FIXED: was language_code
             "limit": limit,
+            "include_subdomains": True,  # Include keywords from all subdomains
         }]
     )
 
@@ -753,6 +754,7 @@ async def fetch_top_searches(
             "location_name": market,
             "language_name": language,  # FIXED: was language_code
             "limit": limit,
+            "include_subdomains": True,  # Include keywords from all subdomains
         }]
     )
 
