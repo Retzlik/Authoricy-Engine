@@ -28,6 +28,14 @@ from src.collector.client import safe_get_result
 logger = logging.getLogger(__name__)
 
 
+def _safe_get_gather_result(results: list, idx: int, default):
+    """Safely extract a result from asyncio.gather with return_exceptions=True."""
+    if idx >= len(results):
+        return default
+    val = results[idx]
+    return default if isinstance(val, Exception) else val
+
+
 # ============================================================================
 # DATA MODELS
 # ============================================================================
@@ -160,16 +168,15 @@ async def collect_ai_technical_data(
 
     ai_results = await asyncio.gather(*ai_tasks, return_exceptions=True)
 
-    ai_keyword_data = ai_results[0] if not isinstance(ai_results[0], Exception) else []
-    chatgpt_mentions = ai_results[1] if not isinstance(ai_results[1], Exception) else {}
-    google_ai_mentions = ai_results[2] if not isinstance(ai_results[2], Exception) else {}
+    # Safe extraction with length checks
+    ai_keyword_data = _safe_get_gather_result(ai_results, 0, [])
+    chatgpt_mentions = _safe_get_gather_result(ai_results, 1, {})
+    google_ai_mentions = _safe_get_gather_result(ai_results, 2, {})
 
-    if isinstance(ai_results[0], Exception):
-        logger.warning(f"Failed to fetch AI keyword data: {ai_results[0]}")
-    if isinstance(ai_results[1], Exception):
-        logger.warning(f"Failed to fetch ChatGPT mentions: {ai_results[1]}")
-    if isinstance(ai_results[2], Exception):
-        logger.warning(f"Failed to fetch Google AI mentions: {ai_results[2]}")
+    # Log any exceptions
+    for idx, name in enumerate(["AI keyword data", "ChatGPT mentions", "Google AI mentions"]):
+        if idx < len(ai_results) and isinstance(ai_results[idx], Exception):
+            logger.warning(f"Failed to fetch {name}: {ai_results[idx]}")
 
     logger.info(f"Phase 4.1: Analyzed {len(ai_keyword_data)} keywords for AI visibility")
 
@@ -186,13 +193,14 @@ async def collect_ai_technical_data(
 
     brand_results = await asyncio.gather(*brand_tasks, return_exceptions=True)
 
-    brand_mentions = brand_results[0] if not isinstance(brand_results[0], Exception) else []
-    sentiment_summary = brand_results[1] if not isinstance(brand_results[1], Exception) else {}
+    # Safe extraction with length checks
+    brand_mentions = _safe_get_gather_result(brand_results, 0, [])
+    sentiment_summary = _safe_get_gather_result(brand_results, 1, {})
 
-    if isinstance(brand_results[0], Exception):
-        logger.warning(f"Failed to fetch brand mentions: {brand_results[0]}")
-    if isinstance(brand_results[1], Exception):
-        logger.warning(f"Failed to fetch sentiment: {brand_results[1]}")
+    # Log any exceptions
+    for idx, name in enumerate(["brand mentions", "sentiment"]):
+        if idx < len(brand_results) and isinstance(brand_results[idx], Exception):
+            logger.warning(f"Failed to fetch {name}: {brand_results[idx]}")
 
     logger.info(f"Phase 4.2: Found {len(brand_mentions)} brand mentions")
 
@@ -250,13 +258,15 @@ async def collect_ai_technical_data(
 
     additional_results = await asyncio.gather(*additional_tasks, return_exceptions=True)
 
-    live_serp_data = additional_results[0] if not isinstance(additional_results[0], Exception) else []
-    content_ratings = additional_results[1] if not isinstance(additional_results[1], Exception) else {}
-    search_volume_live = additional_results[2] if not isinstance(additional_results[2], Exception) else []
+    # Safe extraction with length checks
+    live_serp_data = _safe_get_gather_result(additional_results, 0, [])
+    content_ratings = _safe_get_gather_result(additional_results, 1, {})
+    search_volume_live = _safe_get_gather_result(additional_results, 2, [])
 
-    for i, name in enumerate(["live_serp", "content_ratings", "search_volume"]):
-        if isinstance(additional_results[i], Exception):
-            logger.warning(f"Failed to fetch {name}: {additional_results[i]}")
+    # Log any exceptions
+    for idx, name in enumerate(["live_serp", "content_ratings", "search_volume"]):
+        if idx < len(additional_results) and isinstance(additional_results[idx], Exception):
+            logger.warning(f"Failed to fetch {name}: {additional_results[idx]}")
 
     # -------------------------------------------------------------------------
     # Step 6: Calculate aggregated scores
@@ -773,8 +783,8 @@ async def fetch_technical_audit(
         load_time=on_page.get("duration_time", 0) / 1000,  # Convert to seconds
         page_size=page.get("resource_size", 0),
         word_count=word_count,
-        h1_count=meta.get("htags", {}).get("h1", []) and len(meta.get("htags", {}).get("h1", [])) or 0,
-        h2_count=meta.get("htags", {}).get("h2", []) and len(meta.get("htags", {}).get("h2", [])) or 0,
+        h1_count=len(meta.get("htags", {}).get("h1") or []),
+        h2_count=len(meta.get("htags", {}).get("h2") or []),
         internal_links=meta.get("internal_links_count", 0),
         external_links=meta.get("external_links_count", 0),
         images_count=meta.get("images_count", 0),

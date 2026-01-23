@@ -17,6 +17,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
 
 from .models import DataQualityLevel, CompetitorType
+from src.utils.domain_filter import is_excluded_domain
 
 logger = logging.getLogger(__name__)
 
@@ -340,13 +341,25 @@ def _validate_competitors(competitors: List[Dict], report: DataQualityReport) ->
     score += 30 * metrics_coverage
 
     # Check for platform pollution (Facebook, YouTube, etc. as "competitors")
-    platforms = [c for c in competitors if c.get("competitor_type") == "platform"]
-    if len(platforms) > total * 0.3:
-        report.add_issue(
-            "warning", "data_suspicious", "competitors",
-            f"{len(platforms)} platforms detected as competitors - filtering may need review"
-        )
-        score -= 10
+    # Use both type-based check AND domain filter for defense in depth
+    platforms_by_type = [c for c in competitors if c.get("competitor_type") == "platform"]
+    platforms_by_domain = [c for c in competitors if is_excluded_domain(c.get("competitor_domain", ""))]
+    platforms = list(set([c.get("competitor_domain", "") for c in platforms_by_type + platforms_by_domain]))
+
+    if len(platforms) > 0:
+        platform_ratio = len(platforms) / total if total else 0
+        if platform_ratio > 0.2:  # More than 20% platforms = CRITICAL
+            report.add_issue(
+                "critical", "data_suspicious", "competitors",
+                f"{len(platforms)} platforms ({platform_ratio:.0%}) detected as competitors: {', '.join(platforms[:5])}"
+            )
+            score -= 40  # Heavy penalty
+        elif platform_ratio > 0.1:  # 10-20% = WARNING
+            report.add_issue(
+                "warning", "data_suspicious", "competitors",
+                f"{len(platforms)} platforms detected as competitors - data quality impacted"
+            )
+            score -= 20
 
     # Bonus for keyword overlap data
     with_overlap = sum(1 for c in competitors if c.get("keyword_overlap_count"))

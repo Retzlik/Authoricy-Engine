@@ -30,6 +30,7 @@ from .models import (
     ValidationStatus,
     WebsiteAnalysis,
 )
+from src.utils.domain_filter import is_excluded_domain, get_exclusion_reason
 
 if TYPE_CHECKING:
     from src.analyzer.client import ClaudeClient
@@ -196,20 +197,32 @@ class CompetitorDiscovery:
         # Collect all potential competitors
         all_competitors: Dict[str, Dict[str, Any]] = {}
 
-        # 1. Add user-provided competitors
+        # 1. Add user-provided competitors (WITH PLATFORM FILTERING)
         if user_provided_competitors:
             for comp in user_provided_competitors:
+                # Filter out platforms - reject with reason
+                if is_excluded_domain(comp):
+                    reason = get_exclusion_reason(comp) or "Platform/non-competitor"
+                    result.rejected.append({
+                        "domain": comp,
+                        "reason": f"Excluded: {reason}",
+                    })
+                    logger.info(f"Rejected user-provided competitor {comp}: {reason}")
+                    continue
                 all_competitors[comp] = {
                     "domain": comp,
                     "source": DiscoveryMethod.USER_PROVIDED,
                     "user_provided": True,
                 }
 
-        # 2. Add DataForSEO suggested competitors
+        # 2. Add DataForSEO suggested competitors (WITH PLATFORM FILTERING)
         if dataforseo_competitors:
             for comp in dataforseo_competitors[:20]:  # Limit to top 20
                 comp_domain = comp.get("domain", "")
-                if comp_domain and comp_domain not in all_competitors:
+                # Filter out platforms
+                if not comp_domain or is_excluded_domain(comp_domain):
+                    continue
+                if comp_domain not in all_competitors:
                     all_competitors[comp_domain] = {
                         "domain": comp_domain,
                         "source": DiscoveryMethod.DATAFORSEO_SUGGESTED,
@@ -221,8 +234,12 @@ class CompetitorDiscovery:
         if self.dataforseo_client:
             discovered = await self._discover_from_serp(domain, market)
             for comp in discovered:
-                if comp["domain"] not in all_competitors:
-                    all_competitors[comp["domain"]] = comp
+                comp_domain = comp.get("domain", "")
+                # Filter out platforms from SERP results
+                if not comp_domain or is_excluded_domain(comp_domain):
+                    continue
+                if comp_domain not in all_competitors:
+                    all_competitors[comp_domain] = comp
 
         # If no competitors found, return empty result
         if not all_competitors:
@@ -328,7 +345,8 @@ class CompetitorDiscovery:
                 if serp_results:
                     for item in serp_results.get("items", [])[:10]:
                         result_domain = item.get("domain", "")
-                        if result_domain and result_domain != domain:
+                        # Filter: must exist, not be self, not be a platform
+                        if result_domain and result_domain != domain and not is_excluded_domain(result_domain):
                             discovered.append({
                                 "domain": result_domain,
                                 "source": DiscoveryMethod.SERP_ANALYSIS,
