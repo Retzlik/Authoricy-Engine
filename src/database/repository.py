@@ -1303,7 +1303,8 @@ def store_context_intelligence(
         ValidatedCompetitorRecord,
         MarketOpportunityRecord,
     )
-    from src.context.models import CompetitorType
+    # Note: CompetitorType from context.models is used implicitly via comp.competitor_type.value
+    # The values match ValidatedCompetitorType in database/models.py
 
     with get_db_context() as db:
         # Create main context intelligence record
@@ -1313,11 +1314,11 @@ def store_context_intelligence(
             # User inputs
             declared_market=context_result.market_validation.declared_primary if context_result.market_validation else None,
             declared_language=context_result.market_validation.declared_language if context_result.market_validation else None,
-            declared_goal=context_result.business_context.primary_goal.value if context_result.business_context else None,
+            declared_goal=context_result.business_context.primary_goal.value if context_result.business_context and context_result.business_context.primary_goal else None,
             user_provided_competitors=context_result.competitor_validation.user_provided if context_result.competitor_validation else [],
             # Website analysis
-            detected_business_model=context_result.website_analysis.business_model.value if context_result.website_analysis else None,
-            detected_company_stage=context_result.website_analysis.company_stage.value if context_result.website_analysis else None,
+            detected_business_model=context_result.website_analysis.business_model.value if context_result.website_analysis and context_result.website_analysis.business_model else None,
+            detected_company_stage=context_result.website_analysis.company_stage.value if context_result.website_analysis and context_result.website_analysis.company_stage else None,
             detected_languages=context_result.website_analysis.detected_languages if context_result.website_analysis else [],
             detected_offerings=[o.name for o in context_result.website_analysis.offerings] if context_result.website_analysis else [],
             has_blog=context_result.website_analysis.has_blog if context_result.website_analysis else False,
@@ -1339,7 +1340,7 @@ def store_context_intelligence(
             seo_competitors_count=context_result.competitor_validation.total_seo_competitors if context_result.competitor_validation else 0,
             emerging_threats_count=context_result.competitor_validation.emerging_threats if context_result.competitor_validation else 0,
             # Business context
-            buyer_journey_type=context_result.business_context.buyer_journey.journey_type.value if context_result.business_context and context_result.business_context.buyer_journey else None,
+            buyer_journey_type=context_result.business_context.buyer_journey.journey_type.value if context_result.business_context and context_result.business_context.buyer_journey and context_result.business_context.buyer_journey.journey_type else None,
             seo_fit=context_result.business_context.seo_fit if context_result.business_context else None,
             recommended_focus_areas=context_result.business_context.recommended_focus if context_result.business_context else [],
             # Confidence
@@ -1370,11 +1371,11 @@ def store_context_intelligence(
                     context_intelligence_id=context_id,
                     competitor_domain=comp.domain,
                     competitor_name=comp.name,
-                    competitor_type=comp.competitor_type.value,
-                    threat_level=comp.threat_level.value,
-                    discovery_method=comp.discovery_method.value,
+                    competitor_type=comp.competitor_type.value if comp.competitor_type else "direct",
+                    threat_level=comp.threat_level.value if comp.threat_level else "medium",
+                    discovery_method=comp.discovery_method.value if comp.discovery_method else "dataforseo_suggested",
                     user_provided=comp.user_provided,
-                    validation_status=comp.validation_status.value,
+                    validation_status=comp.validation_status.value if comp.validation_status else "unvalidated",
                     validation_notes=comp.validation_notes,
                     strengths=comp.strengths,
                     weaknesses=comp.weaknesses,
@@ -1427,7 +1428,7 @@ def store_context_intelligence(
                     is_recommended=market.is_recommended,
                     priority_rank=market.priority_rank,
                     recommendation_reason=market.recommendation_reason,
-                    discovery_method=market.discovery_method.value,
+                    discovery_method=market.discovery_method.value if market.discovery_method else "serp_analysis",
                 )
                 db.add(market_record)
 

@@ -258,7 +258,12 @@ async def fetch_competitors(client, domain: str, market: str, language: str) -> 
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        # Safe parsing - handle empty lists and None values
+        tasks = result.get("tasks") or [{}]
+        task = tasks[0] if tasks else {}
+        task_result = task.get("result") or [{}]
+        first_result = task_result[0] if task_result else {}
+        items = first_result.get("items") or []
 
         competitors = []
         for item in items:

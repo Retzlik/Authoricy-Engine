@@ -773,8 +773,8 @@ async def fetch_technical_audit(
         load_time=on_page.get("duration_time", 0) / 1000,  # Convert to seconds
         page_size=page.get("resource_size", 0),
         word_count=word_count,
-        h1_count=meta.get("htags", {}).get("h1", []) and len(meta.get("htags", {}).get("h1", [])) or 0,
-        h2_count=meta.get("htags", {}).get("h2", []) and len(meta.get("htags", {}).get("h2", [])) or 0,
+        h1_count=len(meta.get("htags", {}).get("h1") or []),
+        h2_count=len(meta.get("htags", {}).get("h2") or []),
         internal_links=meta.get("internal_links_count", 0),
         external_links=meta.get("external_links_count", 0),
         images_count=meta.get("images_count", 0),
