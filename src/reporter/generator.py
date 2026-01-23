@@ -1,6 +1,8 @@
 """
 Report Generator - Main orchestrator for PDF generation.
 
+v6: Now tracks report confidence - makes missing data VISIBLE.
+
 Generates both external (lead magnet) and internal (strategy guide) reports.
 """
 
@@ -9,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from weasyprint import HTML, CSS
 
@@ -21,12 +23,16 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 @dataclass
 class GeneratedReport:
-    """A generated PDF report."""
+    """A generated PDF report with confidence tracking."""
     filename: str
     pdf_bytes: bytes
     page_count: int
     report_type: str  # "external" or "internal"
     generated_at: datetime
+    # v6: Confidence tracking
+    confidence_score: float = 0.0
+    confidence_level: str = "UNKNOWN"
+    missing_data: list = field(default_factory=list)
 
 
 class ReportGenerator:
@@ -49,17 +55,26 @@ class ReportGenerator:
         """
         Generate external report (lead magnet).
 
+        v6: Now returns confidence tracking info.
+
         Args:
             analysis_result: Complete analysis result from engine
             analysis_data: Original compiled data
 
         Returns:
-            GeneratedReport with PDF bytes
+            GeneratedReport with PDF bytes and confidence info
         """
         from .external import ExternalReportBuilder
 
         builder = ExternalReportBuilder(self.template_dir)
-        html_content = builder.build(analysis_result, analysis_data)
+        result = builder.build(analysis_result, analysis_data)
+
+        # Handle both old (str) and new (tuple) return formats
+        if isinstance(result, tuple):
+            html_content, confidence = result
+        else:
+            html_content = result
+            confidence = None
 
         # Generate PDF
         pdf_bytes = self._html_to_pdf(html_content)
@@ -68,12 +83,22 @@ class ReportGenerator:
         timestamp = datetime.now().strftime("%Y%m%d")
         filename = f"{domain}_seo_analysis_{timestamp}.pdf"
 
+        # Log confidence warning if low
+        if confidence and confidence.confidence_score < 50:
+            logger.warning(
+                f"Report confidence LOW: {confidence.confidence_score:.0f}% "
+                f"Missing: {confidence.missing_required[:3]}"
+            )
+
         return GeneratedReport(
             filename=filename,
             pdf_bytes=pdf_bytes,
             page_count=self._estimate_pages(len(pdf_bytes)),
             report_type="external",
             generated_at=datetime.now(),
+            confidence_score=confidence.confidence_score if confidence else 0.0,
+            confidence_level=confidence.confidence_level if confidence else "UNKNOWN",
+            missing_data=confidence.missing_required[:10] if confidence else [],
         )
 
     async def generate_internal(
