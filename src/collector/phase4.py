@@ -12,7 +12,7 @@ This module collects AI-era and technical SEO data:
 - Search volume data
 - Content ratings
 
-Note: DataForSEO Labs endpoints use language_code (e.g., "sv"), NOT language_name!
+Note: All endpoints use language_name (e.g., "English") not language_code (e.g., "en")
 Note: LLM mentions endpoint requires target as array of objects: [{"domain": "..."}]
 Note: on_page/microdata and on_page/duplicate_content are task-based (not instant)
 """
@@ -24,83 +24,6 @@ from datetime import datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-# Language code mapping for endpoints that require language_code instead of language_name
-LANGUAGE_NAME_TO_CODE = {
-    "English": "en",
-    "Swedish": "sv",
-    "German": "de",
-    "French": "fr",
-    "Spanish": "es",
-    "Italian": "it",
-    "Portuguese": "pt",
-    "Dutch": "nl",
-    "Polish": "pl",
-    "Russian": "ru",
-    "Japanese": "ja",
-    "Chinese (Simplified)": "zh-CN",
-    "Korean": "ko",
-    "Arabic": "ar",
-    "Turkish": "tr",
-    "Norwegian": "no",
-    "Danish": "da",
-    "Finnish": "fi",
-}
-
-
-def get_language_code(language_name: str) -> str:
-    """Convert language name to code for DataForSEO Labs API."""
-    return LANGUAGE_NAME_TO_CODE.get(language_name, "en")
-
-
-def _safe_get_items(result: Dict, get_first: bool = True) -> List[Dict]:
-    """
-    Safely extract items from DataForSEO API response.
-    Handles cases where result or nested values are None.
-
-    Args:
-        result: API response dict
-        get_first: If True, gets items from result[0], else returns result list
-
-    Returns:
-        List of items or empty list
-    """
-    tasks = result.get("tasks") or [{}]
-    task_result = tasks[0].get("result")
-
-    if task_result is None:
-        return []
-
-    if get_first:
-        if isinstance(task_result, list) and len(task_result) > 0:
-            first_result = task_result[0]
-            if isinstance(first_result, dict):
-                return first_result.get("items") or []
-        return []
-    else:
-        # Return the result list directly (for endpoints that return list at result level)
-        return task_result if isinstance(task_result, list) else []
-
-
-def _safe_get_first_result(result: Dict) -> Dict:
-    """
-    Safely get the first result object from DataForSEO API response.
-
-    Returns:
-        First result dict or empty dict
-    """
-    tasks = result.get("tasks") or [{}]
-    task_result = tasks[0].get("result")
-
-    if task_result is None:
-        return {}
-
-    if isinstance(task_result, list) and len(task_result) > 0:
-        first = task_result[0]
-        return first if isinstance(first, dict) else {}
-
-    return {}
 
 
 # ============================================================================
@@ -407,25 +330,20 @@ async def fetch_ai_keyword_data(
 
     Uses keyword overview to get search volume and AI-related metrics.
     """
-    if not keywords:
-        return []
-
     result = await client.post(
         "dataforseo_labs/google/keyword_overview/live",
         [{
             "keywords": keywords,
             "location_name": market,
-            "language_code": get_language_code(language),
+            "language_name": language,  # FIXED: was language_code
         }]
     )
 
-    items = _safe_get_items(result, get_first=False)
+    items = result.get("tasks", [{}])[0].get("result", [])
 
     keyword_data = []
     for item in items:
-        if not isinstance(item, dict):
-            continue
-        kw_info = item.get("keyword_info") or {}
+        kw_info = item.get("keyword_info", {})
 
         keyword_data.append({
             "keyword": item.get("keyword", ""),
@@ -463,13 +381,13 @@ async def fetch_llm_mentions(
             }]
         )
 
-        task_result = _safe_get_first_result(result)
+        task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
 
         return {
             "platform": platform,
             "total_mentions": task_result.get("total_count", 0),
-            "items": (task_result.get("items") or [])[:20],  # Top 20
-            "metrics": task_result.get("metrics") or {},
+            "items": task_result.get("items", [])[:20],  # Top 20
+            "metrics": task_result.get("metrics", {}),
         }
     except Exception as e:
         logger.warning(f"LLM mentions not available for {platform}: {e}")
@@ -501,7 +419,7 @@ async def fetch_brand_mentions(
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     mentions = []
     for item in items:
@@ -548,9 +466,9 @@ async def fetch_sentiment_summary(
         }]
     )
 
-    task_result = _safe_get_first_result(result)
+    task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
 
-    sentiment_data = task_result.get("sentiment_connotations") or {}
+    sentiment_data = task_result.get("sentiment_connotations", {})
     connotation_types = task_result.get("connotation_types", {})
 
     return {
@@ -581,104 +499,49 @@ async def fetch_trends_data(
     Fetch Google Trends data for keywords.
 
     Returns trend data for past 12 months.
-
-    Note: Google Trends API has specific requirements:
-    - Keywords must have sufficient search volume
-    - Some markets/languages may have limited data
-    - Response structure varies based on data availability
     """
-    if not keywords:
-        logger.warning("No keywords provided for trends analysis")
-        return []
+    result = await client.post(
+        "keywords_data/google_trends/explore/live",
+        [{
+            "keywords": keywords[:5],  # Max 5 per request
+            "location_name": market,
+            "time_range": "past_12_months",
+            "item_types": ["google_trends_graph"],
+        }]
+    )
 
-    try:
-        result = await client.post(
-            "keywords_data/google_trends/explore/live",
-            [{
-                "keywords": keywords[:5],  # Max 5 per request
-                "location_name": market,
-                "time_range": "past_12_months",
-                "item_types": ["google_trends_graph"],
-            }]
-        )
+    items = result.get("tasks", [{}])[0].get("result", [])
 
-        # Log raw response structure for debugging
-        tasks = result.get("tasks", [])
-        if tasks:
-            task = tasks[0]
-            task_result = task.get("result")
-            status = task.get("status_message", "unknown")
-            logger.info(f"Trends API status: {status}, result type: {type(task_result)}")
+    trend_data = []
 
-            if task_result is None:
-                logger.warning(f"Trends API returned no result for keywords: {keywords[:5]}")
-                return []
+    for item in items:
+        if item.get("type") == "google_trends_graph":
+            for line in item.get("lines", []):
+                keyword = line.get("keyword", "")
+                values = line.get("values", [])
 
-        items = _safe_get_items(result, get_first=False)
+                if values:
+                    # Calculate trend direction
+                    first_half = sum(v.get("value", 0) for v in values[:len(values)//2])
+                    second_half = sum(v.get("value", 0) for v in values[len(values)//2:])
 
-        # Also try getting items from first result if that fails
-        if not items:
-            items = _safe_get_items(result, get_first=True)
+                    if second_half > first_half * 1.1:
+                        direction = "rising"
+                    elif second_half < first_half * 0.9:
+                        direction = "falling"
+                    else:
+                        direction = "stable"
 
-        if not items:
-            # Try alternative structure: result might be directly in tasks[0].result
-            if tasks and tasks[0].get("result"):
-                task_result = tasks[0]["result"]
-                if isinstance(task_result, list):
-                    items = task_result
-                elif isinstance(task_result, dict):
-                    items = [task_result]
+                    avg_interest = sum(v.get("value", 0) for v in values) / len(values)
 
-        logger.info(f"Trends: Processing {len(items)} items")
+                    trend_data.append({
+                        "keyword": keyword,
+                        "values": values,
+                        "direction": direction,
+                        "avg_interest": round(avg_interest, 1),
+                    })
 
-        trend_data = []
-
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-
-            item_type = item.get("type", "")
-            logger.debug(f"Trends item type: {item_type}")
-
-            if item_type == "google_trends_graph" or "lines" in item:
-                lines = item.get("lines", [])
-                logger.debug(f"Found {len(lines)} trend lines")
-
-                for line in lines:
-                    keyword = line.get("keyword", "")
-                    values = line.get("values", [])
-
-                    if values:
-                        # Calculate trend direction
-                        first_half = sum(v.get("value", 0) for v in values[:len(values)//2])
-                        second_half = sum(v.get("value", 0) for v in values[len(values)//2:])
-
-                        if second_half > first_half * 1.1:
-                            direction = "rising"
-                        elif second_half < first_half * 0.9:
-                            direction = "falling"
-                        else:
-                            direction = "stable"
-
-                        avg_interest = sum(v.get("value", 0) for v in values) / len(values) if values else 0
-
-                        trend_data.append({
-                            "keyword": keyword,
-                            "values": values,
-                            "direction": direction,
-                            "avg_interest": round(avg_interest, 1),
-                        })
-
-        if not trend_data:
-            logger.warning(f"No trend data found for keywords: {keywords[:5]}. "
-                          f"This may be due to low search volume or market limitations.")
-
-        logger.info(f"Trends: Found data for {len(trend_data)} keywords")
-        return trend_data
-
-    except Exception as e:
-        logger.error(f"Trends fetch failed: {e}")
-        return []
+    return trend_data
 
 
 async def fetch_live_serp_ai_overview(
@@ -691,13 +554,8 @@ async def fetch_live_serp_ai_overview(
     Fetch live SERP data to detect AI Overview presence.
 
     Checks if keywords trigger AI Overview in search results.
-
-    NOTE: SERP API uses language_code, not language_name!
     """
     serp_results = []
-
-    # Convert language name to code for SERP API
-    language_code = LANGUAGE_NAME_TO_CODE.get(language, "en")
 
     for keyword in keywords[:5]:  # Limit to 5 to control costs
         try:
@@ -706,26 +564,25 @@ async def fetch_live_serp_ai_overview(
                 [{
                     "keyword": keyword,
                     "location_name": market,
-                    "language_code": language_code,  # FIXED: SERP API uses language_code
+                    "language_name": language,  # FIXED: was language_code
                     "device": "desktop",
                     "depth": 10,
                 }]
             )
 
-            task_result = _safe_get_first_result(result)
-            items = task_result.get("items") or []
+            task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+            items = task_result.get("items", [])
 
             # Check for AI overview presence
             has_ai_overview = any(
                 item.get("type") in ["ai_overview", "featured_snippet", "knowledge_graph"]
                 for item in items
-                if isinstance(item, dict)
             )
 
             # Get AI overview content if present
             ai_overview_content = None
             for item in items:
-                if isinstance(item, dict) and item.get("type") == "ai_overview":
+                if item.get("type") == "ai_overview":
                     ai_overview_content = item.get("text", "")[:500]
                     break
 
@@ -733,8 +590,8 @@ async def fetch_live_serp_ai_overview(
                 "keyword": keyword,
                 "has_ai_overview": has_ai_overview,
                 "ai_overview_content": ai_overview_content,
-                "serp_features": [item.get("type") for item in items[:20] if isinstance(item, dict)],
-                "organic_results_count": sum(1 for item in items if isinstance(item, dict) and item.get("type") == "organic"),
+                "serp_features": [item.get("type") for item in items[:20]],
+                "organic_results_count": sum(1 for item in items if item.get("type") == "organic"),
             })
         except Exception as e:
             logger.warning(f"Failed to fetch live SERP for '{keyword}': {e}")
@@ -768,12 +625,12 @@ async def fetch_content_ratings(
             }]
         )
 
-        task_result = _safe_get_first_result(result)
+        task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
 
         return {
             "total_count": task_result.get("total_count", 0),
-            "rating_distribution": task_result.get("rating_distribution") or {},
-            "average_rating": (task_result.get("metrics") or {}).get("average_rating", 0),
+            "rating_distribution": task_result.get("rating_distribution", {}),
+            "average_rating": task_result.get("metrics", {}).get("average_rating", 0),
         }
     except Exception as e:
         logger.warning(f"Failed to fetch content ratings: {e}")
@@ -790,35 +647,27 @@ async def fetch_search_volume_live(
     Fetch live search volume data (most current).
 
     More accurate than cached data for trending topics.
-
-    NOTE: DataForSEO docs recommend NOT using language params with this endpoint
-    as it may return null values. We use location_name only.
     """
-    if not keywords:
-        return []
-
     try:
         result = await client.post(
             "keywords_data/google/search_volume/live",
             [{
                 "keywords": keywords[:100],  # Max 100
                 "location_name": market,
-                # NOTE: Intentionally not using language params - docs say it may return null
+                "language_name": language,  # FIXED: was language_code
             }]
         )
 
-        items = _safe_get_items(result, get_first=False)
+        items = result.get("tasks", [{}])[0].get("result", [])
 
         volume_data = []
         for item in items:
-            if not isinstance(item, dict):
-                continue
             volume_data.append({
                 "keyword": item.get("keyword", ""),
                 "search_volume": item.get("search_volume", 0),
                 "competition": item.get("competition", 0),
                 "cpc": item.get("cpc", 0),
-                "monthly_searches": item.get("monthly_searches") or [],
+                "monthly_searches": item.get("monthly_searches", []),
             })
 
         return volume_data
@@ -837,19 +686,16 @@ async def fetch_technical_audit(
 
     Uses On-Page Instant Pages API.
     """
-    # Convert language name to code for accept_language header
-    language_code = LANGUAGE_NAME_TO_CODE.get(language, "en")
-
     result = await client.post(
         "on_page/instant_pages",
         [{
             "url": url,
             "enable_javascript": True,
-            "accept_language": language_code,
+            "accept_language": language,
         }]
     )
 
-    items = _safe_get_items(result, get_first=False)
+    items = result.get("tasks", [{}])[0].get("result", [])
 
     if not items:
         return TechnicalAudit(

@@ -1328,7 +1328,7 @@ def store_context_intelligence(
             # Goal validation
             goal_fits_business=context_result.business_context.goal_validation.goal_fits_business if context_result.business_context and context_result.business_context.goal_validation else True,
             suggested_goal=context_result.business_context.goal_validation.suggested_goal.value if context_result.business_context and context_result.business_context.goal_validation and context_result.business_context.goal_validation.suggested_goal else None,
-            goal_validation_reason=context_result.business_context.goal_validation.suggestion_reason if context_result.business_context and context_result.business_context.goal_validation else None,
+            goal_suggestion_reason=context_result.business_context.goal_validation.suggestion_reason if context_result.business_context and context_result.business_context.goal_validation else None,
             # Market validation
             primary_market_validated=context_result.market_validation.primary_validated if context_result.market_validation else False,
             should_adjust_market=context_result.market_validation.should_adjust_primary if context_result.market_validation else False,
@@ -1341,7 +1341,7 @@ def store_context_intelligence(
             # Business context
             buyer_journey_type=context_result.business_context.buyer_journey.journey_type.value if context_result.business_context and context_result.business_context.buyer_journey else None,
             seo_fit=context_result.business_context.seo_fit if context_result.business_context else None,
-            recommended_focus=context_result.business_context.recommended_focus if context_result.business_context else [],
+            recommended_focus_areas=context_result.business_context.recommended_focus if context_result.business_context else [],
             # Confidence
             overall_confidence=context_result.overall_confidence,
             website_analysis_confidence=context_result.website_analysis.analysis_confidence if context_result.website_analysis else 0.0,

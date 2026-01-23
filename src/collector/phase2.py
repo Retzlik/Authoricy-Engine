@@ -23,7 +23,7 @@ Execution strategy:
 Expected API calls: 18-25 depending on seed keyword count
 Expected time: 6-10 seconds (with parallelization)
 
-Note: DataForSEO Labs endpoints use language_code (e.g., "sv"), NOT language_name!
+Note: All endpoints use language_name (e.g., "English") not language_code (e.g., "en")
 """
 
 import asyncio
@@ -32,81 +32,6 @@ from dataclasses import dataclass, field
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-# Language name to code mapping for DataForSEO Labs API
-LANGUAGE_NAME_TO_CODE = {
-    "Swedish": "sv",
-    "English": "en",
-    "German": "de",
-    "Norwegian": "no",
-    "Danish": "da",
-    "Finnish": "fi",
-    "French": "fr",
-    "Dutch": "nl",
-    "Spanish": "es",
-    "Italian": "it",
-    "Portuguese": "pt",
-    "Polish": "pl",
-    "Russian": "ru",
-    "Japanese": "ja",
-    "Chinese": "zh",
-    "Korean": "ko",
-}
-
-
-def get_language_code(language_name: str) -> str:
-    """Convert language name to code for DataForSEO Labs API."""
-    return LANGUAGE_NAME_TO_CODE.get(language_name, "en")
-
-
-def _safe_get_items(result: Dict, get_first: bool = True) -> List[Dict]:
-    """
-    Safely extract items from DataForSEO API response.
-    Handles cases where result or nested values are None.
-
-    Args:
-        result: API response dict
-        get_first: If True, gets items from result[0], else returns result list
-
-    Returns:
-        List of items or empty list
-    """
-    tasks = result.get("tasks") or [{}]
-    task_result = tasks[0].get("result")
-
-    if task_result is None:
-        return []
-
-    if get_first:
-        if isinstance(task_result, list) and len(task_result) > 0:
-            first_result = task_result[0]
-            if isinstance(first_result, dict):
-                return first_result.get("items") or []
-        return []
-    else:
-        # Return the result list directly (for endpoints that return list at result level)
-        return task_result if isinstance(task_result, list) else []
-
-
-def _safe_get_first_result(result: Dict) -> Dict:
-    """
-    Safely get the first result object from DataForSEO API response.
-
-    Returns:
-        First result dict or empty dict
-    """
-    tasks = result.get("tasks") or [{}]
-    task_result = tasks[0].get("result")
-
-    if task_result is None:
-        return {}
-
-    if isinstance(task_result, list) and len(task_result) > 0:
-        first = task_result[0]
-        return first if isinstance(first, dict) else {}
-
-    return {}
 
 
 # ============================================================================
@@ -401,13 +326,13 @@ async def fetch_ranked_keywords(
         [{
             "target": domain,
             "location_name": market,
-            "language_code": get_language_code(language),  # FIXED: was language_code
+            "language_name": language,  # FIXED: was language_code
             "limit": limit,
-            # Note: order_by not needed - results are sorted by relevance by default
+            "order_by": ["keyword_data.keyword_info.search_volume,desc"]
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     keywords = []
     for item in items:
@@ -445,13 +370,13 @@ async def fetch_keywords_for_site(
         [{
             "target": domain,
             "location_name": market,
-            "language_code": get_language_code(language),  # FIXED: was language_code
+            "language_name": language,  # FIXED: was language_code
             "limit": limit,
             "include_subdomains": True
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     keywords = []
     for item in items:
@@ -484,11 +409,11 @@ async def fetch_search_intent(
         "dataforseo_labs/google/search_intent/live",
         [{
             "keywords": keywords,
-            "language_code": get_language_code(language)  # FIXED: was language_code
+            "language_name": language  # FIXED: was language_code
         }]
     )
 
-    items = _safe_get_items(result, get_first=False)
+    items = result.get("tasks", [{}])[0].get("result", [])
 
     intent_map = {}
     for item in items:
@@ -518,12 +443,12 @@ async def fetch_keyword_suggestions(
         [{
             "keyword": keyword,
             "location_name": market,
-            "language_code": get_language_code(language),  # FIXED: was language_code
+            "language_name": language,  # FIXED: was language_code
             "limit": limit
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     suggestions = []
     for item in items:
@@ -556,13 +481,13 @@ async def fetch_related_keywords(
         [{
             "keyword": keyword,
             "location_name": market,
-            "language_code": get_language_code(language),  # FIXED: was language_code
+            "language_name": language,  # FIXED: was language_code
             "limit": limit,
             "depth": depth
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     related = []
     for item in items:
@@ -596,13 +521,13 @@ async def fetch_keyword_ideas(
         [{
             "keywords": seed_keywords,
             "location_name": market,
-            "language_code": get_language_code(language),  # FIXED: was language_code
+            "language_name": language,  # FIXED: was language_code
             "limit": limit,
             "filters": [["keyword_info.search_volume", ">", 50]]  # Filter low-volume
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
     ideas = []
     for item in items:
@@ -647,11 +572,11 @@ async def fetch_bulk_difficulty(
         [{
             "keywords": keywords,
             "location_name": market,
-            "language_code": get_language_code(language)  # FIXED: was language_code
+            "language_name": language  # FIXED: was language_code
         }]
     )
 
-    items = _safe_get_items(result, get_first=False)
+    items = result.get("tasks", [{}])[0].get("result", [])
 
     difficulty_map = {}
     for item in items:
@@ -677,11 +602,11 @@ async def fetch_historical_search_volume(
         [{
             "keywords": keywords[:100],  # Max 100 keywords
             "location_name": market,
-            "language_code": get_language_code(language)  # FIXED: was language_code
+            "language_name": language  # FIXED: was language_code
         }]
     )
 
-    items = _safe_get_items(result, get_first=False)
+    items = result.get("tasks", [{}])[0].get("result", [])
 
     historical_data = []
     for item in items:
@@ -722,20 +647,18 @@ async def fetch_serp_elements(
     """
     Fetch SERP element distribution for keywords.
     Shows what SERP features appear for each keyword (featured snippets, PAA, etc.)
-
-    Note: serp_competitors endpoint doesn't support item_types filter.
     """
     result = await client.post(
         "dataforseo_labs/google/serp_competitors/live",
         [{
             "keywords": keywords[:200],  # Max 200 keywords
             "location_name": market,
-            "language_code": get_language_code(language),  # FIXED: was language_code
-            # Note: item_types is NOT a valid field for this endpoint
+            "language_name": language,  # FIXED: was language_code
+            "item_types": ["organic", "featured_snippet", "people_also_ask", "local_pack", "knowledge_graph"]
         }]
     )
 
-    task_result = _safe_get_first_result(result)
+    task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
 
     serp_elements = {
         "organic_results": task_result.get("organic_results_count", 0),
@@ -767,13 +690,13 @@ async def fetch_questions_for_keywords(
             [{
                 "keyword": keyword,
                 "location_name": market,
-                "language_code": get_language_code(language),  # FIXED: was language_code
+                "language_name": language,  # FIXED: was language_code
                 "include_questions": True,
                 "limit": 50
             }]
         )
 
-        items = _safe_get_items(result)
+        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
         questions = [
             {
@@ -806,75 +729,65 @@ async def fetch_top_searches(
         [{
             "target": domain,
             "location_name": market,
-            "language_code": get_language_code(language),  # FIXED: was language_code
+            "language_name": language,  # FIXED: was language_code
             "limit": limit,
-            # Note: order_by not supported - we'll sort results client-side
+            "order_by": ["ranked_serp_element.etv,desc"]  # Sort by estimated traffic
         }]
     )
 
-    items = _safe_get_items(result)
+    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
 
-    results = [
+    return [
         {
             "keyword": item.get("keyword_data", {}).get("keyword", ""),
             "position": item.get("ranked_serp_element", {}).get("serp_item", {}).get("rank_group", 0),
-            "traffic": item.get("ranked_serp_element", {}).get("etv") or 0,
-            "traffic_cost": item.get("ranked_serp_element", {}).get("estimated_paid_traffic_cost") or 0,
+            "traffic": item.get("ranked_serp_element", {}).get("etv", 0),
+            "traffic_cost": item.get("ranked_serp_element", {}).get("estimated_paid_traffic_cost", 0),
             "url": item.get("ranked_serp_element", {}).get("serp_item", {}).get("url", ""),
         }
         for item in items
     ]
 
-    # Sort by traffic descending (client-side since order_by not supported)
-    results.sort(key=lambda x: x["traffic"], reverse=True)
-    return results
-
 
 async def fetch_bulk_traffic_estimation(
     client,
     domain: str,
-    keywords: List[str],  # Not used - endpoint requires domains, not keywords
+    keywords: List[str],
     market: str,
     language: str
 ) -> Dict[str, Any]:
     """
-    Estimate traffic for the domain across organic/paid channels.
-
-    NOTE: This endpoint estimates traffic for DOMAINS, not keywords.
-    The `targets` parameter accepts domains, subdomains, and URLs.
+    Estimate traffic potential for keywords at different positions.
+    Useful for opportunity sizing.
     """
     result = await client.post(
         "dataforseo_labs/google/bulk_traffic_estimation/live",
         [{
-            "targets": [domain],  # FIXED: must be domains, not keywords
+            "targets": keywords[:200],  # Max 200 keywords
             "location_name": market,
-            "language_code": get_language_code(language)
+            "language_name": language  # FIXED: was language_code
         }]
     )
 
-    items = _safe_get_items(result, get_first=False)
+    items = result.get("tasks", [{}])[0].get("result", [])
 
-    if not items:
-        return {
-            "domain": domain,
-            "organic_traffic": 0,
-            "paid_traffic": 0,
-            "organic_keywords": 0,
-            "paid_keywords": 0,
+    traffic_estimates = {}
+    total_potential = 0
+
+    for item in items:
+        keyword = item.get("keyword", "")
+        estimate = {
+            "traffic_at_pos_1": item.get("metrics", {}).get("pos_1", {}).get("etv", 0),
+            "traffic_at_pos_3": item.get("metrics", {}).get("pos_3", {}).get("etv", 0),
+            "traffic_at_pos_10": item.get("metrics", {}).get("pos_10", {}).get("etv", 0),
         }
-
-    # Get the first (and only) domain result
-    item = items[0] if items else {}
-    metrics = item.get("metrics", {})
-    organic = metrics.get("organic", {})
-    paid = metrics.get("paid", {})
+        traffic_estimates[keyword] = estimate
+        total_potential += estimate["traffic_at_pos_1"]
 
     return {
-        "domain": domain,
-        "organic_traffic": organic.get("etv", 0),
-        "organic_keywords": organic.get("count", 0),
-        "paid_traffic": paid.get("etv", 0),
-        "paid_keywords": paid.get("count", 0),
+        "keyword_estimates": traffic_estimates,
+        "total_pos_1_potential": total_potential,
+        "keywords_analyzed": len(traffic_estimates),
     }
 
 
@@ -923,9 +836,9 @@ async def expand_keyword(
     # Convert to list
     keywords_list = list(all_keywords.values())
 
-    # Calculate cluster metrics (handle None values safely)
-    total_volume = sum(kw.get("search_volume") or 0 for kw in keywords_list)
-    competitions = [kw.get("competition") or 0 for kw in keywords_list if kw.get("competition") is not None]
+    # Calculate cluster metrics
+    total_volume = sum(kw.get("search_volume", 0) for kw in keywords_list)
+    competitions = [kw.get("competition", 0) for kw in keywords_list if kw.get("competition")]
     avg_difficulty = sum(competitions) / len(competitions) * 100 if competitions else 50
 
     return KeywordCluster(

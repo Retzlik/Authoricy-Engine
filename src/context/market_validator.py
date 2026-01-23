@@ -342,11 +342,11 @@ class MarketValidator:
         config = MARKET_CONFIG.get(market, MARKET_CONFIG["us"])
 
         try:
-            # Use DataForSEO keywords data API
+            # Use DataForSEO keywords data API (Labs API uses language_name)
             results = await self.dataforseo_client.get_keywords_data(
                 keywords=keywords,
                 location_code=config["location_code"],
-                language_code=config["language"],
+                language_name=config["language_name"],
             )
 
             if results:

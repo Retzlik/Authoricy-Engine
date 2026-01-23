@@ -129,19 +129,19 @@ async def run_full_analysis(
     }
     primary_goal = goal_map.get(goal.lower(), PrimaryGoal.BALANCED)
 
-    # Market to language mapping
+    # Market to language mapping (use full language names for DataForSEO Labs API)
     market_language = {
-        "se": ("Sweden", "sv"),
-        "us": ("United States", "en"),
-        "uk": ("United Kingdom", "en"),
-        "de": ("Germany", "de"),
-        "no": ("Norway", "no"),
-        "dk": ("Denmark", "da"),
-        "fi": ("Finland", "fi"),
-        "fr": ("France", "fr"),
-        "nl": ("Netherlands", "nl"),
+        "se": ("Sweden", "Swedish"),
+        "us": ("United States", "English"),
+        "uk": ("United Kingdom", "English"),
+        "de": ("Germany", "German"),
+        "no": ("Norway", "Norwegian"),
+        "dk": ("Denmark", "Danish"),
+        "fi": ("Finland", "Finnish"),
+        "fr": ("France", "French"),
+        "nl": ("Netherlands", "Dutch"),
     }
-    market_name, language = market_language.get(market.lower(), ("Sweden", "sv"))
+    market_name, language = market_language.get(market.lower(), ("Sweden", "Swedish"))
 
     context_result = None
 

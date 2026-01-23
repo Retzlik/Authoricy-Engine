@@ -1166,11 +1166,19 @@ class ContextIntelligence(Base):
     discovered_markets = Column(JSONB, default=[])  # [{region, language, opportunity_score, ...}, ...]
     should_expand_markets = Column(Boolean, default=False)
     suggested_markets = Column(JSONB, default=[])
+    # Additional market validation fields
+    should_adjust_market = Column(Boolean, default=False)  # Should adjust primary market
+    suggested_market = Column(String(50), nullable=True)  # Suggested primary market
+    language_mismatch = Column(Boolean, default=False)  # Site vs declared language mismatch
 
     # Competitor validation
     validated_competitors = Column(JSONB, default=[])  # [{domain, type, threat_level, ...}, ...]
     discovered_competitors = Column(JSONB, default=[])
     rejected_competitors = Column(JSONB, default=[])  # Domains incorrectly suggested
+    # Competitor counts for quick access
+    direct_competitors_count = Column(Integer, default=0)
+    seo_competitors_count = Column(Integer, default=0)
+    emerging_threats_count = Column(Integer, default=0)
 
     # Business context synthesis
     buyer_journey_type = Column(String(50))
@@ -1186,6 +1194,7 @@ class ContextIntelligence(Base):
     # Quality metrics
     overall_confidence = Column(Float)
     website_analysis_confidence = Column(Float)
+    context_confidence = Column(Float)  # Business context confidence
     execution_time_seconds = Column(Float)
     errors = Column(JSONB, default=[])
     warnings = Column(JSONB, default=[])

@@ -282,7 +282,7 @@ class DataForSEOClient:
         self,
         keywords: List[str],
         location_code: int = 2840,
-        language_code: str = "en",
+        language_name: str = "English",
     ) -> Optional[List[Dict[str, Any]]]:
         """
         Get search volume and competition data for keywords.
@@ -292,7 +292,7 @@ class DataForSEOClient:
         Args:
             keywords: List of keywords to analyze
             location_code: DataForSEO location code
-            language_code: Language code
+            language_name: Language name (e.g., "English", "Swedish") - Labs API uses language_name
 
         Returns:
             List of keyword data dicts with search_volume, competition, etc.
@@ -307,7 +307,7 @@ class DataForSEOClient:
                 [{
                     "keywords": keywords[:1000],  # API limit
                     "location_code": location_code,
-                    "language_code": language_code,
+                    "language_name": language_name,  # Labs API uses language_name, not language_code
                 }]
             )
 
@@ -340,7 +340,7 @@ class DataForSEOClient:
         self,
         domain: str,
         location_code: int = 2840,
-        language_code: str = "en",
+        language_name: str = "English",
         limit: int = 20,
     ) -> Optional[List[Dict[str, Any]]]:
         """
@@ -351,7 +351,7 @@ class DataForSEOClient:
         Args:
             domain: Target domain
             location_code: DataForSEO location code
-            language_code: Language code
+            language_name: Language name (e.g., "English", "Swedish") - Labs API uses language_name
             limit: Max competitors to return
 
         Returns:
@@ -363,7 +363,7 @@ class DataForSEOClient:
                 [{
                     "target": domain,
                     "location_code": location_code,
-                    "language_code": language_code,
+                    "language_name": language_name,  # Labs API uses language_name, not language_code
                     "limit": limit,
                 }]
             )
@@ -422,13 +422,13 @@ async def test_client():
         return
     
     async with DataForSEOClient(login=login, password=password) as client:
-        # Test with a simple endpoint
+        # Test with a simple endpoint (Labs API uses language_name, not language_code)
         result = await client.post(
             "dataforseo_labs/google/domain_rank_overview/live",
             [{
                 "target": "example.com",
                 "location_name": "United States",
-                "language_code": "en",
+                "language_name": "English",  # FIXED: was language_code
             }]
         )
         
