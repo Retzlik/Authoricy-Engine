@@ -408,17 +408,17 @@ async def fetch_domain_rank_overview(
         }]
     )
 
-    data = result.get("tasks", [{}])[0].get("result", [{}])[0]
+    data = safe_get_result(result, get_items=False)
 
     return CompetitorMetrics(
         domain=domain,
-        organic_traffic=data.get("metrics", {}).get("organic", {}).get("etv", 0),
-        organic_keywords=data.get("metrics", {}).get("organic", {}).get("count", 0),
-        paid_traffic=data.get("metrics", {}).get("paid", {}).get("etv", 0),
-        paid_keywords=data.get("metrics", {}).get("paid", {}).get("count", 0),
-        domain_rank=data.get("rank", 0),
-        backlinks=data.get("backlinks_info", {}).get("backlinks", 0),
-        referring_domains=data.get("backlinks_info", {}).get("referring_domains", 0),
+        organic_traffic=(data.get("metrics") or {}).get("organic", {}).get("etv") or 0,
+        organic_keywords=(data.get("metrics") or {}).get("organic", {}).get("count") or 0,
+        paid_traffic=(data.get("metrics") or {}).get("paid", {}).get("etv") or 0,
+        paid_keywords=(data.get("metrics") or {}).get("paid", {}).get("count") or 0,
+        domain_rank=data.get("rank") or 0,
+        backlinks=(data.get("backlinks_info") or {}).get("backlinks") or 0,
+        referring_domains=(data.get("backlinks_info") or {}).get("referring_domains") or 0,
     )
 
 
@@ -446,17 +446,17 @@ async def fetch_domain_intersection(
         }]
     )
 
-    task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
-    items = task_result.get("items", [])
+    task_result = safe_get_result(result, get_items=False)
+    items = task_result.get("items") or []
 
     shared = 0
     opportunities = []
 
-    for item in items:
-        kw_data = item.get("keyword_data", {})
-        kw_info = kw_data.get("keyword_info", {})
-        first_serp = item.get("first_domain_serp_element", {})
-        second_serp = item.get("second_domain_serp_element", {})
+    for item in items or []:
+        kw_data = item.get("keyword_data") or {}
+        kw_info = kw_data.get("keyword_info") or {}
+        first_serp = item.get("first_domain_serp_element") or {}
+        second_serp = item.get("second_domain_serp_element") or {}
 
         # Both ranking = shared
         if first_serp and second_serp:
@@ -503,16 +503,16 @@ async def fetch_serp_competitors(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     competitors = []
     for item in items:
         competitors.append({
             "domain": item.get("domain", ""),
-            "visibility": item.get("visibility", 0),
-            "relevant_serp_items": item.get("relevant_serp_items", 0),
-            "keywords_count": item.get("keywords_count", 0),
-            "avg_position": item.get("avg_position", 0),
+            "visibility": item.get("visibility") or 0,
+            "relevant_serp_items": item.get("relevant_serp_items") or 0,
+            "keywords_count": item.get("keywords_count") or 0,
+            "avg_position": item.get("avg_position") or 0,
         })
 
     return competitors
@@ -575,16 +575,17 @@ async def fetch_anchors(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
-    total_backlinks = result.get("tasks", [{}])[0].get("result", [{}])[0].get("total_count", 1)
+    task_result = safe_get_result(result, get_items=False)
+    items = task_result.get("items") or []
+    total_backlinks = task_result.get("total_count") or 1
 
     anchors = []
-    for item in items:
-        bl_count = item.get("backlinks", 0)
+    for item in items or []:
+        bl_count = item.get("backlinks") or 0
         anchors.append({
             "anchor": item.get("anchor", ""),
             "backlinks": bl_count,
-            "referring_domains": item.get("referring_domains", 0),
+            "referring_domains": item.get("referring_domains") or 0,
             "percentage": round(bl_count / total_backlinks * 100, 2) if total_backlinks else 0,
         })
 
@@ -609,16 +610,16 @@ async def fetch_referring_domains(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     domains = []
     for item in items:
         domains.append({
             "domain": item.get("domain", ""),
-            "backlinks": item.get("backlinks", 0),
-            "domain_rank": item.get("rank", 0),
+            "backlinks": item.get("backlinks") or 0,
+            "domain_rank": item.get("rank") or 0,
             "first_seen": item.get("first_seen", ""),
-            "is_broken": item.get("broken_backlinks", 0) > 0,
+            "is_broken": (item.get("broken_backlinks") or 0) > 0,
         })
 
     return domains
@@ -710,7 +711,7 @@ async def fetch_link_velocity(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     velocity_data = {
         "months": [],
@@ -721,16 +722,16 @@ async def fetch_link_velocity(
         "avg_monthly_lost": 0,
     }
 
-    for item in items:
+    for item in items or []:
         month_data = {
             "date": item.get("date", ""),
-            "new_backlinks": item.get("new_backlinks", 0),
-            "lost_backlinks": item.get("lost_backlinks", 0),
-            "new_referring_domains": item.get("new_referring_domains", 0),
-            "lost_referring_domains": item.get("lost_referring_domains", 0),
+            "new_backlinks": item.get("new_backlinks") or 0,
+            "lost_backlinks": item.get("lost_backlinks") or 0,
+            "new_referring_domains": item.get("new_referring_domains") or 0,
+            "lost_referring_domains": item.get("lost_referring_domains") or 0,
         }
         velocity_data["months"].append(month_data)
-        velocity_data["total_new"] += item.get("new_backlinks", 0)
+        velocity_data["total_new"] += item.get("new_backlinks") or 0
         velocity_data["total_lost"] += item.get("lost_backlinks", 0)
 
     num_months = len(items) or 1
@@ -760,14 +761,14 @@ async def fetch_referring_networks(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     networks = [
         {
             "network": item.get("network_address", ""),
-            "backlinks": item.get("backlinks", 0),
-            "referring_domains": item.get("referring_domains", 0),
-            "referring_ips": item.get("referring_ips", 0),
+            "backlinks": item.get("backlinks") or 0,
+            "referring_domains": item.get("referring_domains") or 0,
+            "referring_ips": item.get("referring_ips") or 0,
         }
         for item in items
     ]
@@ -804,7 +805,7 @@ async def fetch_broken_backlinks(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     broken_links = [
         {
@@ -812,7 +813,7 @@ async def fetch_broken_backlinks(
             "source_domain": item.get("domain_from", ""),
             "target_url": item.get("url_to", ""),
             "anchor": item.get("anchor", ""),
-            "domain_rank": item.get("domain_from_rank", 0),
+            "domain_rank": item.get("domain_from_rank") or 0,
             "first_seen": item.get("first_seen", ""),
             "last_seen": item.get("last_seen", ""),
         }
@@ -843,14 +844,14 @@ async def fetch_backlink_history(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     history = [
         {
             "date": item.get("date", ""),
-            "backlinks": item.get("backlinks", 0),
-            "referring_domains": item.get("referring_domains", 0),
-            "rank": item.get("rank", 0),
+            "backlinks": item.get("backlinks") or 0,
+            "referring_domains": item.get("referring_domains") or 0,
+            "rank": item.get("rank") or 0,
         }
         for item in items
     ]
@@ -905,15 +906,15 @@ async def fetch_backlink_competitors(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     competitors = [
         {
             "domain": item.get("domain", ""),
-            "rank": item.get("rank", 0),
-            "backlinks": item.get("backlinks", 0),
-            "referring_domains": item.get("referring_domains", 0),
-            "intersecting_domains": item.get("intersecting_referring_domains", 0),
+            "rank": item.get("rank") or 0,
+            "backlinks": item.get("backlinks") or 0,
+            "referring_domains": item.get("referring_domains") or 0,
+            "intersecting_domains": item.get("intersecting_referring_domains") or 0,
         }
         for item in items
     ]

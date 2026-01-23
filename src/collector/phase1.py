@@ -22,6 +22,8 @@ import asyncio
 from typing import Dict, Any, List
 import logging
 
+from src.collector.client import safe_get_result
+
 logger = logging.getLogger(__name__)
 
 
@@ -147,15 +149,15 @@ async def fetch_historical_overview(client, domain: str, market: str, language: 
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = safe_get_result(result, get_items=True)
 
         return [
             {
                 "date": item.get("date"),
-                "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
-                "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+                "organic_keywords": (item.get("metrics") or {}).get("organic", {}).get("count") or 0,
+                "organic_traffic": (item.get("metrics") or {}).get("organic", {}).get("etv") or 0,
             }
-            for item in items[-12:]  # Last 12 months
+            for item in (items or [])[-12:]  # Last 12 months
         ]
     except Exception as e:
         logger.error(f"Historical overview failed: {e}")
@@ -175,13 +177,13 @@ async def fetch_subdomains(client, domain: str, market: str, language: str) -> L
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = safe_get_result(result, get_items=True)
 
         return [
             {
                 "subdomain": item.get("target"),
-                "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
-                "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+                "organic_keywords": (item.get("metrics") or {}).get("organic", {}).get("count") or 0,
+                "organic_traffic": (item.get("metrics") or {}).get("organic", {}).get("etv") or 0,
             }
             for item in items
         ]
@@ -203,13 +205,13 @@ async def fetch_relevant_pages(client, domain: str, market: str, language: str) 
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = safe_get_result(result, get_items=True)
 
         return [
             {
                 "page": item.get("page_address"),
-                "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
-                "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+                "organic_keywords": (item.get("metrics") or {}).get("organic", {}).get("count") or 0,
+                "organic_traffic": (item.get("metrics") or {}).get("organic", {}).get("etv") or 0,
                 "main_keyword": item.get("main_keyword"),
             }
             for item in items
@@ -286,14 +288,14 @@ async def fetch_backlink_summary(client, domain: str) -> Dict:
             [{"target": domain}]
         )
 
-        item = result.get("tasks", [{}])[0].get("result", [{}])[0]
+        item = safe_get_result(result, get_items=False)
 
         return {
-            "total_backlinks": item.get("backlinks", 0),
-            "referring_domains": item.get("referring_domains", 0),
-            "referring_ips": item.get("referring_ips", 0),
-            "dofollow_backlinks": item.get("backlinks_nofollow", 0),
-            "domain_rank": item.get("rank", 0),
+            "total_backlinks": item.get("backlinks") or 0,
+            "referring_domains": item.get("referring_domains") or 0,
+            "referring_ips": item.get("referring_ips") or 0,
+            "dofollow_backlinks": item.get("backlinks_nofollow") or 0,
+            "domain_rank": item.get("rank") or 0,
         }
     except Exception as e:
         logger.error(f"Backlink summary failed: {e}")
@@ -311,8 +313,8 @@ async def fetch_lighthouse(client, url: str) -> Dict:
             }]
         )
 
-        item = result.get("tasks", [{}])[0].get("result", [{}])[0]
-        categories = item.get("categories", {})
+        item = safe_get_result(result, get_items=False)
+        categories = item.get("categories") or {}
 
         return {
             "performance_score": categories.get("performance", {}).get("score", 0),
@@ -360,7 +362,7 @@ async def fetch_domain_whois(client, domain: str) -> Dict:
             [{"target": domain}]
         )
 
-        item = result.get("tasks", [{}])[0].get("result", [{}])[0]
+        item = safe_get_result(result, get_items=False)
 
         return {
             "domain": item.get("domain", domain),
@@ -369,7 +371,7 @@ async def fetch_domain_whois(client, domain: str) -> Dict:
             "expiry_date": item.get("expiry_date", ""),
             "registrar": item.get("registrar", ""),
             "registered": item.get("registered", False),
-            "domain_age_days": item.get("metrics", {}).get("age_days", 0),
+            "domain_age_days": (item.get("metrics") or {}).get("age_days") or 0,
         }
     except Exception as e:
         logger.error(f"WHOIS fetch failed: {e}")
@@ -394,13 +396,13 @@ async def fetch_page_intersection(client, domain: str, market: str, language: st
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = safe_get_result(result, get_items=True)
 
         return [
             {
-                "keyword": item.get("keyword_data", {}).get("keyword", ""),
-                "search_volume": item.get("keyword_data", {}).get("keyword_info", {}).get("search_volume", 0),
-                "intersections": item.get("intersections", [])
+                "keyword": (item.get("keyword_data") or {}).get("keyword", ""),
+                "search_volume": ((item.get("keyword_data") or {}).get("keyword_info") or {}).get("search_volume") or 0,
+                "intersections": item.get("intersections") or []
             }
             for item in items[:50]
         ]
@@ -422,14 +424,14 @@ async def fetch_categories_for_domain(client, domain: str, market: str, language
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = safe_get_result(result, get_items=True)
 
         return [
             {
                 "category": item.get("category", ""),
-                "category_code": item.get("category_code", 0),
-                "keywords_count": item.get("metrics", {}).get("organic", {}).get("count", 0),
-                "traffic_share": item.get("metrics", {}).get("organic", {}).get("etv", 0),
+                "category_code": item.get("category_code") or 0,
+                "keywords_count": (item.get("metrics") or {}).get("organic", {}).get("count") or 0,
+                "traffic_share": (item.get("metrics") or {}).get("organic", {}).get("etv") or 0,
             }
             for item in items
         ]

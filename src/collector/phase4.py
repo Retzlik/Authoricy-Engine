@@ -341,20 +341,22 @@ async def fetch_ai_keyword_data(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    # Safe parsing
+    tasks = result.get("tasks") or [{}]
+    items = tasks[0].get("result") or []
 
     keyword_data = []
-    for item in items:
-        kw_info = item.get("keyword_info", {})
+    for item in items or []:
+        kw_info = item.get("keyword_info") or {}
 
         keyword_data.append({
             "keyword": item.get("keyword", ""),
-            "search_volume": kw_info.get("search_volume", 0),
-            "cpc": kw_info.get("cpc", 0),
-            "competition": kw_info.get("competition", 0),
+            "search_volume": kw_info.get("search_volume") or 0,
+            "cpc": kw_info.get("cpc") or 0,
+            "competition": kw_info.get("competition") or 0,
             "competition_level": kw_info.get("competition_level", ""),
             # AI-specific metrics (when available)
-            "monthly_searches": kw_info.get("monthly_searches", []),
+            "monthly_searches": kw_info.get("monthly_searches") or [],
         })
 
     return keyword_data
@@ -427,12 +429,12 @@ async def fetch_brand_mentions(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     mentions = []
     for item in items:
-        content_info = item.get("content_info", {})
-        sentiment = content_info.get("sentiment_connotations", {})
+        content_info = item.get("content_info") or {}
+        sentiment = content_info.get("sentiment_connotations") or {}
 
         # Determine overall sentiment
         positive = sentiment.get("positive", 0)
@@ -474,27 +476,27 @@ async def fetch_sentiment_summary(
         }]
     )
 
-    task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+    task_result = safe_get_result(result, get_items=False)
 
-    sentiment_data = task_result.get("sentiment_connotations", {})
-    connotation_types = task_result.get("connotation_types", {})
+    sentiment_data = task_result.get("sentiment_connotations") or {}
+    connotation_types = task_result.get("connotation_types") or {}
 
     return {
-        "total_mentions": task_result.get("total_count", 0),
+        "total_mentions": task_result.get("total_count") or 0,
         "sentiment_distribution": {
-            "positive": connotation_types.get("positive", 0),
-            "negative": connotation_types.get("negative", 0),
-            "neutral": connotation_types.get("neutral", 0),
+            "positive": connotation_types.get("positive") or 0,
+            "negative": connotation_types.get("negative") or 0,
+            "neutral": connotation_types.get("neutral") or 0,
         },
         "sentiment_scores": {
-            "joy": sentiment_data.get("joy", 0),
-            "sadness": sentiment_data.get("sadness", 0),
-            "anger": sentiment_data.get("anger", 0),
-            "fear": sentiment_data.get("fear", 0),
-            "surprise": sentiment_data.get("surprise", 0),
-            "trust": sentiment_data.get("trust", 0),
+            "joy": sentiment_data.get("joy") or 0,
+            "sadness": sentiment_data.get("sadness") or 0,
+            "anger": sentiment_data.get("anger") or 0,
+            "fear": sentiment_data.get("fear") or 0,
+            "surprise": sentiment_data.get("surprise") or 0,
+            "trust": sentiment_data.get("trust") or 0,
         },
-        "top_domains": task_result.get("top_domains", [])[:10],
+        "top_domains": (task_result.get("top_domains") or [])[:10],
     }
 
 
@@ -518,15 +520,17 @@ async def fetch_trends_data(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    # Safe parsing
+    tasks = result.get("tasks") or [{}]
+    items = tasks[0].get("result") or []
 
     trend_data = []
 
-    for item in items:
+    for item in items or []:
         if item.get("type") == "google_trends_graph":
-            for line in item.get("lines", []):
+            for line in item.get("lines") or []:
                 keyword = line.get("keyword", "")
-                values = line.get("values", [])
+                values = line.get("values") or []
 
                 if values:
                     # Calculate trend direction
@@ -578,8 +582,8 @@ async def fetch_live_serp_ai_overview(
                 }]
             )
 
-            task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
-            items = task_result.get("items", [])
+            task_result = safe_get_result(result, get_items=False)
+            items = task_result.get("items") or []
 
             # Check for AI overview presence
             has_ai_overview = any(
@@ -633,12 +637,12 @@ async def fetch_content_ratings(
             }]
         )
 
-        task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+        task_result = safe_get_result(result, get_items=False)
 
         return {
-            "total_count": task_result.get("total_count", 0),
-            "rating_distribution": task_result.get("rating_distribution", {}),
-            "average_rating": task_result.get("metrics", {}).get("average_rating", 0),
+            "total_count": task_result.get("total_count") or 0,
+            "rating_distribution": task_result.get("rating_distribution") or {},
+            "average_rating": (task_result.get("metrics") or {}).get("average_rating") or 0,
         }
     except Exception as e:
         logger.warning(f"Failed to fetch content ratings: {e}")
@@ -666,16 +670,18 @@ async def fetch_search_volume_live(
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [])
+        # Safe parsing
+        tasks = result.get("tasks") or [{}]
+        items = tasks[0].get("result") or []
 
         volume_data = []
-        for item in items:
+        for item in items or []:
             volume_data.append({
                 "keyword": item.get("keyword", ""),
-                "search_volume": item.get("search_volume", 0),
-                "competition": item.get("competition", 0),
-                "cpc": item.get("cpc", 0),
-                "monthly_searches": item.get("monthly_searches", []),
+                "search_volume": item.get("search_volume") or 0,
+                "competition": item.get("competition") or 0,
+                "cpc": item.get("cpc") or 0,
+                "monthly_searches": item.get("monthly_searches") or [],
             })
 
         return volume_data
@@ -703,7 +709,9 @@ async def fetch_technical_audit(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    # Safe parsing
+    tasks = result.get("tasks") or [{}]
+    items = tasks[0].get("result") or []
 
     if not items:
         return TechnicalAudit(

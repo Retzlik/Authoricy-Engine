@@ -415,15 +415,17 @@ async def fetch_search_intent(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    # Safe parsing
+    tasks = result.get("tasks") or [{}]
+    items = tasks[0].get("result") or []
 
     intent_map = {}
-    for item in items:
+    for item in items or []:
         keyword = item.get("keyword", "")
         intent_map[keyword] = {
-            "intent": item.get("keyword_intent", {}).get("label", "unknown"),
-            "probability": item.get("keyword_intent", {}).get("probability", 0),
-            "secondary_intents": item.get("secondary_keyword_intents", [])
+            "intent": (item.get("keyword_intent") or {}).get("label", "unknown"),
+            "probability": (item.get("keyword_intent") or {}).get("probability") or 0,
+            "secondary_intents": item.get("secondary_keyword_intents") or []
         }
 
     return intent_map
@@ -450,17 +452,17 @@ async def fetch_keyword_suggestions(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     suggestions = []
     for item in items:
-        kw_info = item.get("keyword_info", {})
+        kw_info = item.get("keyword_info") or {}
 
         suggestions.append({
             "keyword": item.get("keyword", ""),
-            "search_volume": kw_info.get("search_volume", 0),
-            "cpc": kw_info.get("cpc", 0),
-            "competition": kw_info.get("competition", 0),
+            "search_volume": kw_info.get("search_volume") or 0,
+            "cpc": kw_info.get("cpc") or 0,
+            "competition": kw_info.get("competition") or 0,
         })
 
     return suggestions
@@ -489,19 +491,19 @@ async def fetch_related_keywords(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     related = []
     for item in items:
-        kw_data = item.get("keyword_data", {})
-        kw_info = kw_data.get("keyword_info", {})
+        kw_data = item.get("keyword_data") or {}
+        kw_info = kw_data.get("keyword_info") or {}
 
         related.append({
             "keyword": kw_data.get("keyword", ""),
-            "search_volume": kw_info.get("search_volume", 0),
-            "cpc": kw_info.get("cpc", 0),
-            "competition": kw_info.get("competition", 0),
-            "depth": item.get("depth", 0),
+            "search_volume": kw_info.get("search_volume") or 0,
+            "cpc": kw_info.get("cpc") or 0,
+            "competition": kw_info.get("competition") or 0,
+            "depth": item.get("depth") or 0,
         })
 
     return related
@@ -529,13 +531,13 @@ async def fetch_keyword_ideas(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+    items = safe_get_result(result, get_items=True)
 
     ideas = []
     for item in items:
-        kw_info = item.get("keyword_info", {})
-        search_volume = kw_info.get("search_volume", 0)
-        competition = kw_info.get("competition", 0.5)
+        kw_info = item.get("keyword_info") or {}
+        search_volume = kw_info.get("search_volume") or 0
+        competition = kw_info.get("competition") or 0.5
 
         # Calculate opportunity score: volume / (competition * 100)
         # Higher = better opportunity
@@ -578,12 +580,14 @@ async def fetch_bulk_difficulty(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    # Safe parsing
+    tasks = result.get("tasks") or [{}]
+    items = tasks[0].get("result") or []
 
     difficulty_map = {}
-    for item in items:
+    for item in items or []:
         keyword = item.get("keyword", "")
-        difficulty = item.get("keyword_difficulty", 0)
+        difficulty = item.get("keyword_difficulty") or 0
         difficulty_map[keyword] = difficulty
 
     return difficulty_map
@@ -608,12 +612,14 @@ async def fetch_historical_search_volume(
         }]
     )
 
-    items = result.get("tasks", [{}])[0].get("result", [])
+    # Safe parsing
+    tasks = result.get("tasks") or [{}]
+    items = tasks[0].get("result") or []
 
     historical_data = []
-    for item in items:
+    for item in items or []:
         keyword = item.get("keyword", "")
-        monthly_searches = item.get("keyword_info", {}).get("monthly_searches", [])
+        monthly_searches = (item.get("keyword_info") or {}).get("monthly_searches") or []
 
         historical_data.append({
             "keyword": keyword,
@@ -660,15 +666,15 @@ async def fetch_serp_elements(
         }]
     )
 
-    task_result = result.get("tasks", [{}])[0].get("result", [{}])[0]
+    task_result = safe_get_result(result, get_items=False)
 
     serp_elements = {
-        "organic_results": task_result.get("organic_results_count", 0),
-        "featured_snippets": task_result.get("featured_snippets_count", 0),
-        "people_also_ask": task_result.get("people_also_ask_count", 0),
-        "local_packs": task_result.get("local_pack_count", 0),
-        "knowledge_graphs": task_result.get("knowledge_graph_count", 0),
-        "items": task_result.get("items", [])[:50],
+        "organic_results": task_result.get("organic_results_count") or 0,
+        "featured_snippets": task_result.get("featured_snippets_count") or 0,
+        "people_also_ask": task_result.get("people_also_ask_count") or 0,
+        "local_packs": task_result.get("local_pack_count") or 0,
+        "knowledge_graphs": task_result.get("knowledge_graph_count") or 0,
+        "items": (task_result.get("items") or [])[:50],
     }
 
     return [serp_elements]
@@ -698,16 +704,16 @@ async def fetch_questions_for_keywords(
             }]
         )
 
-        items = result.get("tasks", [{}])[0].get("result", [{}])[0].get("items", [])
+        items = safe_get_result(result, get_items=True)
 
         questions = [
             {
                 "seed_keyword": keyword,
-                "question": item.get("keyword_data", {}).get("keyword", ""),
-                "search_volume": item.get("keyword_data", {}).get("keyword_info", {}).get("search_volume", 0),
+                "question": (item.get("keyword_data") or {}).get("keyword", ""),
+                "search_volume": ((item.get("keyword_data") or {}).get("keyword_info") or {}).get("search_volume") or 0,
             }
             for item in items
-            if "?" in item.get("keyword_data", {}).get("keyword", "")
+            if "?" in (item.get("keyword_data") or {}).get("keyword", "")
         ]
 
         all_questions.extend(questions)
