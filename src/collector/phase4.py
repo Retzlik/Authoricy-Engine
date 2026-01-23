@@ -686,12 +686,12 @@ async def fetch_technical_audit(
 
     Uses On-Page Instant Pages API.
     """
+    # Note: accept_language parameter not supported by instant_pages endpoint
     result = await client.post(
         "on_page/instant_pages",
         [{
             "url": url,
             "enable_javascript": True,
-            "accept_language": language,
         }]
     )
 

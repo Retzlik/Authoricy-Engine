@@ -648,13 +648,13 @@ async def fetch_serp_elements(
     Fetch SERP element distribution for keywords.
     Shows what SERP features appear for each keyword (featured snippets, PAA, etc.)
     """
+    # Note: item_types parameter not supported by serp_competitors endpoint
     result = await client.post(
         "dataforseo_labs/google/serp_competitors/live",
         [{
             "keywords": keywords[:200],  # Max 200 keywords
             "location_name": market,
             "language_name": language,  # FIXED: was language_code
-            "item_types": ["organic", "featured_snippet", "people_also_ask", "local_pack", "knowledge_graph"]
         }]
     )
 
@@ -760,10 +760,11 @@ async def fetch_bulk_traffic_estimation(
     Estimate traffic potential for keywords at different positions.
     Useful for opportunity sizing.
     """
+    # Note: bulk_traffic_estimation uses 'keywords', not 'targets'
     result = await client.post(
         "dataforseo_labs/google/bulk_traffic_estimation/live",
         [{
-            "targets": keywords[:200],  # Max 200 keywords
+            "keywords": keywords[:200],  # Max 200 keywords - FIXED: was 'targets'
             "location_name": market,
             "language_name": language  # FIXED: was language_code
         }]
