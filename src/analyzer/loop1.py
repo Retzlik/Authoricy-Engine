@@ -32,7 +32,35 @@ SYSTEM_PROMPT = """You are an expert SEO analyst with 15 years of experience at 
 3. **Flag anomalies.** Unusual patterns, sudden changes, outliers.
 4. **Benchmark everything.** Compare to competitors, industry averages, or best practices.
 5. **Be honest about limitations.** Note where data is incomplete or uncertain.
-6. **Use the exact data provided.** Do not hallucinate or assume values not in the data."""
+6. **Use the exact data provided.** Do not hallucinate or assume values not in the data.
+
+## DATA UNDERSTANDING REQUIREMENTS
+
+You will receive a `data_dictionary` section explaining:
+- What each field means and how to interpret it
+- The data source and reliability level (HIGH/MEDIUM/LOW)
+- Scoring formulas used for calculated fields like opportunity_score
+- Known limitations and caveats
+
+You will also receive a `data_quality` section containing:
+- Overall quality score and per-phase completeness
+- Truncation warnings (data may be sampled, not complete)
+- Missing data indicators
+- Confidence levels for different metric types
+
+**ALWAYS:**
+- Consult the data_dictionary before interpreting any field
+- Note truncation warnings - if "ranked_keywords_shown: 1000" but "total_claimed_keywords: 15000", you're seeing 6.7% of the data
+- Adjust confidence in conclusions based on data_quality.confidence_indicators
+- Include data limitations in your "Data Quality Notes" section
+- Use _field_counts to understand sample sizes vs. actual totals
+
+**FIELD INTERPRETATION GUIDE:**
+- `opportunity_score`: Pre-calculated as search_volume × (1 - difficulty/100) × intent_multiplier. Higher = better.
+- `competitor_type`: 'direct' means keyword overlap >30%, 'emerging' means >20% traffic growth
+- `domain_rank`: DataForSEO scale 0-1000, not 0-100. 300+ is strong.
+- Traffic estimates: Use for RELATIVE comparison only, typically 60-80% of actual
+- Position tiers: 1-3 = high CTR (20-30%), 4-10 = moderate (5-10%), 11-20 = low (1-3%)"""
 
 
 USER_PROMPT_TEMPLATE = """# INPUT DATA
@@ -47,6 +75,28 @@ USER_PROMPT_TEMPLATE = """# INPUT DATA
 - **Size Tier:** {size_tier} (based on {keyword_count} keywords)
 - **Competitive Intensity:** {competitive_intensity}
 - **Technical Maturity:** {technical_maturity}
+
+## Data Quality Summary
+- **Overall Quality Score:** {quality_score:.1f}%
+- **Phase Completeness:** Phase1={phase1_score:.0%}, Phase2={phase2_score:.0%}, Phase3={phase3_score:.0%}, Phase4={phase4_score:.0%}
+- **Truncation Warnings:** {truncation_count} fields may be truncated
+- **Missing Data:** {missing_count} data points unavailable
+- **Collection Errors:** {error_count}
+
+### Confidence Indicators
+{confidence_indicators}
+
+### Data Limitations to Consider
+{data_limitations}
+
+---
+
+## DATA DICTIONARY (Reference for field interpretation)
+```json
+{data_dictionary_summary}
+```
+
+---
 
 ## Phase 1: Foundation Data
 ```json
@@ -242,6 +292,8 @@ class DataInterpreter:
         """
         metadata = analysis_data.get("metadata", {})
         summary = analysis_data.get("summary", {})
+        data_quality = analysis_data.get("data_quality", {})
+        data_dictionary = analysis_data.get("data_dictionary", {})
 
         # Prepare data for prompt (truncate if needed to fit context)
         foundation_data = self._prepare_data(
@@ -257,6 +309,37 @@ class DataInterpreter:
             analysis_data.get("phase4_ai_technical", {}), max_chars=20000
         )
 
+        # Extract quality metrics
+        phase_scores = data_quality.get("phase_scores", {})
+        confidence_indicators = data_quality.get("confidence_indicators", {})
+        truncation_warnings = data_quality.get("truncation_warnings", [])
+
+        # Format confidence indicators for prompt
+        confidence_text = "\n".join([
+            f"- **{key}**: {value}"
+            for key, value in confidence_indicators.items()
+        ]) if confidence_indicators else "- No confidence indicators available"
+
+        # Format data limitations
+        limitations = data_dictionary.get("_data_limitations", {})
+        limitations_text = "\n".join([
+            f"- **{key}**: {value}"
+            for key, value in limitations.items()
+        ]) if limitations else "- Standard data limitations apply"
+
+        # Create condensed data dictionary summary for prompt
+        # Include scoring formulas and key field interpretations
+        dictionary_summary = {
+            "scoring_formulas": data_dictionary.get("_scoring_formulas", {}),
+            "key_field_scales": {
+                "domain_rank": "0-1000 scale. <100=low, 100-300=moderate, 300+=strong",
+                "keyword_difficulty": "0-100 scale. 0-30=easy, 30-60=moderate, 60+=hard",
+                "position_tiers": "1-3=high CTR (20-30%), 4-10=moderate (5-10%), 11-20=low (1-3%)",
+                "traffic_reliability": "Estimated, typically 60-80% of actual analytics",
+            },
+            "competitor_type_rules": data_dictionary.get("competitors", {}).get("competitor_type", {}).get("classification_rules", {}),
+        }
+
         # Format prompt
         prompt = USER_PROMPT_TEMPLATE.format(
             domain=metadata.get("domain", "unknown"),
@@ -267,6 +350,19 @@ class DataInterpreter:
             keyword_count=summary.get("total_organic_keywords", 0),
             competitive_intensity=classification.competitive_intensity,
             technical_maturity=classification.technical_maturity,
+            # Data quality metrics
+            quality_score=data_quality.get("overall_score", 0.0),
+            phase1_score=phase_scores.get("phase1_foundation", 0.0),
+            phase2_score=phase_scores.get("phase2_keywords", 0.0),
+            phase3_score=phase_scores.get("phase3_competitive", 0.0),
+            phase4_score=phase_scores.get("phase4_ai_technical", 0.0),
+            truncation_count=len(truncation_warnings),
+            missing_count=len(data_quality.get("missing_data", [])),
+            error_count=len(metadata.get("errors", [])),
+            confidence_indicators=confidence_text,
+            data_limitations=limitations_text,
+            data_dictionary_summary=json.dumps(dictionary_summary, indent=2),
+            # Phase data
             foundation_data=foundation_data,
             keyword_data=keyword_data,
             competitive_data=competitive_data,
@@ -349,20 +445,37 @@ Use the same data and format as before, but improve the areas mentioned.
         return json.dumps(truncated, indent=2, default=str)
 
     def _truncate_data(self, data: Any, max_chars: int) -> Any:
-        """Recursively truncate data to fit within limits."""
+        """
+        Recursively truncate data to fit within limits.
+
+        Provides clear metadata about truncation so agents understand
+        they're seeing a sample, not the complete dataset.
+        """
         if isinstance(data, dict):
             result = {}
             for key, value in data.items():
+                # Skip internal metadata fields (start with _)
+                if key.startswith("_"):
+                    result[key] = value
+                    continue
+
                 if isinstance(value, list) and len(value) > 10:
-                    # Truncate long lists
+                    # Truncate long lists with clear metadata
                     result[key] = value[:10]
-                    result[f"_{key}_truncated"] = f"... and {len(value) - 10} more items"
+                    result[f"_{key}_metadata"] = {
+                        "shown": 10,
+                        "total_in_sample": len(value),
+                        "truncation_note": f"Showing top 10 of {len(value)} items in sample. Full dataset may be larger.",
+                        "analysis_impact": "Conclusions should account for unseen data. Focus on patterns, not exhaustive analysis."
+                    }
                 elif isinstance(value, dict):
                     result[key] = self._truncate_data(value, max_chars // 2)
                 else:
                     result[key] = value
             return result
         elif isinstance(data, list):
-            return data[:10]
+            if len(data) > 10:
+                return data[:10]  # Truncation metadata added at dict level
+            return data
         else:
             return data
