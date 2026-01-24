@@ -672,11 +672,11 @@ class ReportBuilder:
 
         def status(score):
             if score >= 0.9:
-                return "✓ Good"
+                return '<span style="color: #22c55e; font-weight: bold;">[OK]</span> Good'
             elif score >= 0.5:
-                return "⚠ Needs Work"
+                return '<span style="color: #f59e0b; font-weight: bold;">[!]</span> Needs Work'
             else:
-                return "✗ Poor"
+                return '<span style="color: #ef4444; font-weight: bold;">[X]</span> Poor'
 
         return f"""
         <div class="page">

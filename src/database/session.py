@@ -193,6 +193,29 @@ def get_db_session() -> Session:
 # DATABASE INITIALIZATION
 # =============================================================================
 
+def _ensure_enum_values(conn, enum_name: str, required_values: list) -> None:
+    """
+    Ensure a PostgreSQL enum has all required values.
+    Adds missing values without breaking existing data.
+    """
+    try:
+        # Get existing values
+        result = conn.execute(text(f"""
+            SELECT enumlabel FROM pg_enum
+            WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = '{enum_name}')
+        """))
+        existing_values = {row[0] for row in result}
+
+        # Add missing values
+        for value in required_values:
+            if value not in existing_values:
+                logger.info(f"Adding missing value '{value}' to enum '{enum_name}'")
+                conn.execute(text(f"ALTER TYPE {enum_name} ADD VALUE IF NOT EXISTS '{value}'"))
+
+    except Exception as e:
+        logger.warning(f"Could not update enum {enum_name}: {e}")
+
+
 def init_db(drop_all: bool = False) -> None:
     """
     Initialize database - create extensions and all tables.
@@ -219,6 +242,19 @@ def init_db(drop_all: bool = False) -> None:
             logger.info("PostgreSQL extensions created/verified")
         except Exception as e:
             logger.warning(f"Could not create extensions (might need superuser): {e}")
+
+        # Ensure enums have all required values
+        logger.info("Ensuring enum values are up to date...")
+        try:
+            with engine.connect() as conn:
+                # ValidatedCompetitorType enum values
+                _ensure_enum_values(conn, "validatedcompetitortype", [
+                    "direct", "seo", "content", "emerging", "aspirational", "not_competitor"
+                ])
+                conn.commit()
+            logger.info("Enum values verified/updated")
+        except Exception as e:
+            logger.warning(f"Could not verify enum values: {e}")
 
     if drop_all:
         logger.warning("Dropping all database tables!")

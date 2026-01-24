@@ -46,38 +46,54 @@ logger = logging.getLogger(__name__)
 
 CLASSIFICATION_SYSTEM_PROMPT = """You are an expert competitive analyst. Your task is to classify competitors based on their relationship to a target business.
 
-## Competitor Types:
+## Competitor Types (in order of priority):
 
 1. **DIRECT**: Same product/service, same target market
-   - They solve the same problem for the same customers
-   - Customers would choose between them
-   - Example: Asana vs Monday.com
+   - They solve the SAME problem for the SAME customers
+   - Customers would directly choose between them
+   - Must sell similar products/services in the same market
+   - Example: Asana vs Monday.com (both project management SaaS)
 
-2. **SEO**: Ranks for same keywords but different business
-   - They appear in search results but aren't actual business competitors
-   - Example: Wikipedia, Reddit, news sites, educational content
-   - Should be tracked for SEO but not as business threats
-
-3. **CONTENT**: Competes for attention, not customers
-   - Industry blogs, news sites, influencers
-   - Potential partners rather than competitors
-   - Example: Industry publications, review sites
-
-4. **EMERGING**: New player gaining traction
-   - Recently founded or recently pivoted
+2. **EMERGING**: New player becoming a direct competitor
+   - Similar business model, entering the same market
    - Growing fast (20%+ growth)
    - May become direct competitor soon
 
-5. **ASPIRATIONAL**: Industry leader to learn from
+3. **ASPIRATIONAL**: Industry leader to learn from
    - Much larger, established market leader
    - Defines the category
-   - Goal is to learn, not directly compete
+   - Similar business, but different scale
 
-6. **NOT_COMPETITOR**: Incorrectly suggested
-   - No real competitive relationship
-   - Should be ignored in analysis
+4. **CONTENT**: Industry content creators
+   - Industry blogs, news sites, influencers
+   - Related content but don't sell competing products
+   - Potential partners rather than competitors
+   - Example: Review sites, industry publications
 
-Be precise and evidence-based in your classification."""
+5. **SEO**: Only use this for ACTUAL SEO competitors
+   - Same industry/vertical AND ranks for overlapping keywords
+   - Different business model but relevant to the industry
+   - Example: A B2B software company and a B2B consulting firm in same industry
+   - NOT for: dictionaries, generic tools, unrelated sites
+
+6. **NOT_COMPETITOR**: Use this LIBERALLY for unrelated sites
+   - Different industry entirely
+   - No product/service overlap
+   - Only appears because of generic/ambiguous keywords
+   - Examples that are ALWAYS not_competitor:
+     * Dictionaries, language tools (synonymer.se, ordkollen.se)
+     * Testing/quiz platforms (testproffs.se)
+     * Government sites, news sites, Wikipedia
+     * Generic utilities (weather, maps, converters)
+     * Social media platforms
+   - When in doubt, classify as NOT_COMPETITOR
+
+## CRITICAL RULES:
+- If the domain serves a COMPLETELY different purpose than the target business, use NOT_COMPETITOR
+- Don't classify random sites as "SEO competitors" just because they might rank for some keywords
+- A true SEO competitor must be in the same or adjacent industry
+
+Be strict and conservative. When unsure, prefer NOT_COMPETITOR over SEO."""
 
 
 CLASSIFICATION_USER_PROMPT = """Classify these potential competitors for the target business.
@@ -95,6 +111,15 @@ CLASSIFICATION_USER_PROMPT = """Classify these potential competitors for the tar
 
 ---
 
+IMPORTANT: Be STRICT about classification. Ask yourself for each domain:
+1. Does this business sell similar products/services? If NO → NOT_COMPETITOR
+2. Would customers consider this as an alternative? If NO → NOT_COMPETITOR
+3. Is it a generic utility (dictionary, testing platform, government)? → NOT_COMPETITOR
+4. Is it truly in the same industry/vertical? If NO → NOT_COMPETITOR
+
+Only classify as DIRECT if they genuinely compete for the same customers.
+Only classify as SEO if they're in the same industry but different business model.
+
 For EACH competitor, return a JSON object in this array:
 ```json
 [
@@ -102,7 +127,7 @@ For EACH competitor, return a JSON object in this array:
         "domain": "competitor1.com",
         "competitor_type": "direct|seo|content|emerging|aspirational|not_competitor",
         "threat_level": "critical|high|medium|low|none",
-        "classification_reason": "Brief explanation of why this classification",
+        "classification_reason": "One sentence explaining WHY - be specific about business relationship",
         "strengths": ["strength1", "strength2"],
         "weaknesses": ["weakness1", "weakness2"],
         "confidence": 0.0 to 1.0
@@ -110,7 +135,7 @@ For EACH competitor, return a JSON object in this array:
 ]
 ```
 
-Be thorough and precise. Classify EVERY competitor in the list."""
+Be conservative. When uncertain, prefer NOT_COMPETITOR. Classify EVERY competitor in the list."""
 
 
 # =============================================================================
@@ -118,30 +143,129 @@ Be thorough and precise. Classify EVERY competitor in the list."""
 # =============================================================================
 
 
-def get_discovery_queries(domain: str, brand_name: Optional[str] = None) -> List[Dict[str, str]]:
-    """Generate search queries for competitor discovery."""
+def get_discovery_queries(
+    domain: str,
+    brand_name: Optional[str] = None,
+    industry: Optional[str] = None,
+    offerings: Optional[List[str]] = None,
+    language: str = "en",
+    market: str = "us",
+) -> List[Dict[str, str]]:
+    """
+    Generate search queries for competitor discovery.
+
+    Uses industry-aware, localized queries for better results.
+
+    Args:
+        domain: Target domain
+        brand_name: Brand/company name
+        industry: Business industry/category
+        offerings: Main products/services offered
+        language: Primary language (sv, en, de, etc.)
+        market: Primary market (se, us, uk, etc.)
+    """
     # Extract brand name from domain if not provided
     if not brand_name:
         brand_name = domain.split('.')[0].replace('-', ' ').title()
 
-    return [
-        {
-            "query": f"{brand_name} alternatives",
-            "purpose": "Find direct competitors customers consider",
+    queries = []
+
+    # Localized query templates by language
+    QUERY_TEMPLATES = {
+        "en": {
+            "alternatives": f"{brand_name} alternatives",
+            "vs": f"{brand_name} vs",
+            "competitors": f"{brand_name} competitors",
+            "best_alternatives": f"best {brand_name} alternatives 2024",
+            "industry_products": "best {industry} products",
+            "buy_product": "buy {product} online",
+            "product_reviews": "{product} reviews comparison",
         },
-        {
-            "query": f"{brand_name} vs",
-            "purpose": "Find head-to-head competitors",
+        "sv": {
+            "alternatives": f"{brand_name} alternativ",
+            "vs": f"{brand_name} vs",
+            "competitors": f"{brand_name} konkurrenter",
+            "best_alternatives": f"bästa alternativ till {brand_name}",
+            "industry_products": "bästa {industry} produkter Sverige",
+            "buy_product": "köpa {product}",
+            "product_reviews": "jämför {product}",
         },
-        {
-            "query": f"{brand_name} competitors",
-            "purpose": "Find known competitors",
+        "de": {
+            "alternatives": f"{brand_name} Alternativen",
+            "vs": f"{brand_name} vs",
+            "competitors": f"{brand_name} Konkurrenten",
+            "best_alternatives": f"beste {brand_name} Alternativen",
+            "industry_products": "beste {industry} Produkte",
+            "buy_product": "{product} kaufen",
+            "product_reviews": "{product} Vergleich",
         },
-        {
-            "query": f"best {brand_name} alternatives 2024",
-            "purpose": "Find current market alternatives",
+        "no": {
+            "alternatives": f"{brand_name} alternativer",
+            "vs": f"{brand_name} vs",
+            "competitors": f"{brand_name} konkurrenter",
+            "best_alternatives": f"beste alternativ til {brand_name}",
+            "industry_products": "beste {industry} produkter Norge",
+            "buy_product": "kjøp {product}",
+            "product_reviews": "sammenlign {product}",
         },
-    ]
+        "da": {
+            "alternatives": f"{brand_name} alternativer",
+            "vs": f"{brand_name} vs",
+            "competitors": f"{brand_name} konkurrenter",
+            "best_alternatives": f"bedste alternativ til {brand_name}",
+            "industry_products": "bedste {industry} produkter Danmark",
+            "buy_product": "køb {product}",
+            "product_reviews": "sammenlign {product}",
+        },
+        "fi": {
+            "alternatives": f"{brand_name} vaihtoehtoja",
+            "vs": f"{brand_name} vs",
+            "competitors": f"{brand_name} kilpailijat",
+            "best_alternatives": f"parhaat {brand_name} vaihtoehdot",
+            "industry_products": "parhaat {industry} tuotteet Suomi",
+            "buy_product": "osta {product}",
+            "product_reviews": "vertaile {product}",
+        },
+    }
+
+    # Get templates for the language, fallback to English
+    templates = QUERY_TEMPLATES.get(language, QUERY_TEMPLATES["en"])
+
+    # Core brand queries (always include)
+    queries.extend([
+        {"query": templates["alternatives"], "purpose": "Find direct competitor alternatives"},
+        {"query": templates["vs"], "purpose": "Find head-to-head competitors"},
+        {"query": templates["competitors"], "purpose": "Find known competitors"},
+    ])
+
+    # Industry-specific queries (if industry known)
+    if industry:
+        # Clean industry for search
+        industry_clean = industry.lower().replace("_", " ")
+        queries.append({
+            "query": templates["industry_products"].format(industry=industry_clean),
+            "purpose": f"Find top {industry} products/services"
+        })
+
+    # Product-specific queries (if offerings known)
+    if offerings:
+        # Use top 2 offerings for discovery
+        for product in offerings[:2]:
+            product_clean = product.lower()
+            queries.append({
+                "query": templates["buy_product"].format(product=product_clean),
+                "purpose": f"Find competitors selling {product}"
+            })
+
+    # Add English fallback queries if primary language is not English
+    if language != "en":
+        en_templates = QUERY_TEMPLATES["en"]
+        queries.extend([
+            {"query": en_templates["alternatives"], "purpose": "Find global alternatives (English)"},
+            {"query": en_templates["competitors"], "purpose": "Find global competitors (English)"},
+        ])
+
+    return queries
 
 
 # =============================================================================
@@ -232,7 +356,11 @@ class CompetitorDiscovery:
 
         # 3. Discover via SERP analysis (if we have DataForSEO client)
         if self.dataforseo_client:
-            discovered = await self._discover_from_serp(domain, market)
+            discovered = await self._discover_from_serp(
+                domain=domain,
+                market=market,
+                website_analysis=website_analysis,
+            )
             for comp in discovered:
                 comp_domain = comp.get("domain", "")
                 # Filter out platforms from SERP results
@@ -323,16 +451,45 @@ class CompetitorDiscovery:
         self,
         domain: str,
         market: str,
+        website_analysis: Optional[WebsiteAnalysis] = None,
     ) -> List[Dict[str, Any]]:
-        """Discover competitors from SERP analysis."""
+        """
+        Discover competitors from SERP analysis.
+
+        Uses industry-aware, localized queries based on website analysis.
+        """
         discovered = []
 
         if not self.dataforseo_client:
             return discovered
 
-        queries = get_discovery_queries(domain)
+        # Extract context from website analysis for smarter queries
+        brand_name = None
+        industry = None
+        offerings = None
+        language = self._market_to_language(market)
 
-        for query_info in queries[:2]:  # Limit queries to control API costs
+        if website_analysis:
+            brand_name = domain.split('.')[0].replace('-', ' ').title()
+            industry = website_analysis.business_model.value if website_analysis.business_model else None
+            offerings = [o.name for o in website_analysis.offerings[:3]] if website_analysis.offerings else None
+            if website_analysis.primary_language and website_analysis.primary_language != "unknown":
+                language = website_analysis.primary_language
+
+        # Generate industry-aware, localized queries
+        queries = get_discovery_queries(
+            domain=domain,
+            brand_name=brand_name,
+            industry=industry,
+            offerings=offerings,
+            language=language,
+            market=market,
+        )
+
+        logger.info(f"SERP discovery using {len(queries)} queries (language={language}, market={market})")
+
+        # Run up to 4 queries for better coverage (was 2)
+        for query_info in queries[:4]:
             try:
                 # Use DataForSEO SERP API
                 serp_results = await self.dataforseo_client.get_serp_results(

@@ -131,23 +131,48 @@ async def fetch_domain_overview(client, domain: str, market: str, language: str)
         # Log what we actually received
         logger.info(f"Domain overview: Got {len(task_result)} result items for {domain}")
 
-        item = task_result[0] if task_result else {}
-        metrics = item.get("metrics")
+        # The API response structure is: task_result[0] = {items: [{metrics: {...}}]}
+        # NOT: task_result[0] = {metrics: {...}}
+        wrapper = task_result[0] if task_result else {}
+
+        # First try: metrics at wrapper level (some endpoints)
+        metrics = wrapper.get("metrics")
+
+        # Second try: metrics inside items array (domain_rank_overview structure)
+        if not metrics:
+            items = wrapper.get("items", [])
+            if items and isinstance(items, list) and len(items) > 0:
+                first_item = items[0] if isinstance(items[0], dict) else {}
+                metrics = first_item.get("metrics")
+                if metrics:
+                    logger.info(f"Domain overview: Found metrics inside items array for {domain}")
 
         if not metrics:
-            # Log what keys ARE present in the item
-            logger.warning(f"Domain overview: No 'metrics' key for {domain}. Available keys: {list(item.keys())}")
+            # Log what keys ARE present for debugging
+            logger.warning(f"Domain overview: No 'metrics' found for {domain}. Wrapper keys: {list(wrapper.keys())}")
+            items = wrapper.get("items", [])
+            if items:
+                logger.warning(f"Domain overview: items[0] keys: {list(items[0].keys()) if items else 'empty'}")
             return {}
 
         organic = metrics.get("organic", {})
-        logger.info(f"Domain overview metrics for {domain}: count={organic.get('count')}, etv={organic.get('etv')}")
+        paid = metrics.get("paid", {})
+
+        logger.info(
+            f"Domain overview metrics for {domain}: "
+            f"keywords={organic.get('count')}, traffic={organic.get('etv')}, "
+            f"paid_keywords={paid.get('count', 0)}"
+        )
 
         return {
             "organic_keywords": organic.get("count", 0),
             "organic_traffic": organic.get("etv", 0),
-            "paid_keywords": metrics.get("paid", {}).get("count", 0),
+            "paid_keywords": paid.get("count", 0),
             "rank": organic.get("pos_1", 0),
             "visibility": organic.get("is_lost", 0),
+            # Add more useful metrics
+            "featured_snippets": organic.get("is_featured_snippet", 0),
+            "local_pack": organic.get("is_local_pack", 0),
         }
     except Exception as e:
         logger.error(f"Domain overview failed for {domain}: {e}")

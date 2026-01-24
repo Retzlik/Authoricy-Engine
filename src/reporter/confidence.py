@@ -170,7 +170,7 @@ class ReportConfidence:
 
         return f"""
         <div style="background: {color}; color: white; padding: 20px; margin: 20px 0; border-radius: 8px;">
-            <strong>⚠️ Report Confidence: {level} ({score:.0f}%)</strong>
+            <strong>[!] Report Confidence: {level} ({score:.0f}%)</strong>
             <p style="margin-top: 10px;">Some data was unavailable. The following sections use estimated or generic content:</p>
             <ul style="margin-top: 10px;">{missing_list}</ul>
             <p style="margin-top: 10px; font-size: 10pt;">This may indicate issues with data collection. Contact support if this persists.</p>
@@ -268,7 +268,7 @@ def data_missing_html(data_name: str, section: str) -> str:
     """
     return f"""
     <div style="background: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin: 10px 0; border-radius: 4px;">
-        <strong>📊 Data Unavailable: {data_name}</strong>
+        <strong>[DATA] Unavailable: {data_name}</strong>
         <p style="margin-top: 5px; font-size: 10pt; color: #856404;">
             This section requires data that wasn't collected or analyzed.
             The analysis may need to be re-run with complete data.

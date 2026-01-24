@@ -1302,9 +1302,25 @@ def store_context_intelligence(
         ContextIntelligence,
         ValidatedCompetitorRecord,
         MarketOpportunityRecord,
+        ValidatedCompetitorType,
     )
-    # Note: CompetitorType from context.models is used implicitly via comp.competitor_type.value
-    # The values match ValidatedCompetitorType in database/models.py
+
+    def _convert_competitor_type(type_value: Optional[str]) -> ValidatedCompetitorType:
+        """Convert string competitor type to enum, with safe fallback."""
+        if not type_value:
+            return ValidatedCompetitorType.DIRECT
+        type_upper = type_value.upper()
+        try:
+            return ValidatedCompetitorType[type_upper]
+        except KeyError:
+            # Map common variations
+            mapping = {
+                "SEO_COMPETITOR": ValidatedCompetitorType.SEO,
+                "CONTENT_COMPETITOR": ValidatedCompetitorType.CONTENT,
+                "BUSINESS": ValidatedCompetitorType.DIRECT,
+                "UNKNOWN": ValidatedCompetitorType.SEO,  # Default to SEO for unknowns
+            }
+            return mapping.get(type_upper, ValidatedCompetitorType.SEO)
 
     with get_db_context() as db:
         # Clean up existing market opportunities for this domain to avoid duplicate key errors
@@ -1371,12 +1387,16 @@ def store_context_intelligence(
             )
 
             for comp in all_competitors:
+                # Convert competitor type string to enum
+                comp_type_str = comp.competitor_type.value if comp.competitor_type else "direct"
+                comp_type_enum = _convert_competitor_type(comp_type_str)
+
                 comp_record = ValidatedCompetitorRecord(
                     domain_id=domain_id,
                     context_intelligence_id=context_id,
                     competitor_domain=comp.domain,
                     competitor_name=comp.name,
-                    competitor_type=comp.competitor_type.value if comp.competitor_type else "direct",
+                    competitor_type=comp_type_enum,
                     threat_level=comp.threat_level.value if comp.threat_level else "medium",
                     discovery_method=comp.discovery_method.value if comp.discovery_method else "dataforseo_suggested",
                     user_provided=comp.user_provided,
@@ -1397,7 +1417,7 @@ def store_context_intelligence(
                     domain_id=domain_id,
                     context_intelligence_id=context_id,
                     competitor_domain=rejected.get("domain", ""),
-                    competitor_type="not_competitor",
+                    competitor_type=ValidatedCompetitorType.NOT_COMPETITOR,
                     threat_level="none",
                     discovery_method="user_provided",
                     user_provided=True,
