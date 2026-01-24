@@ -615,8 +615,22 @@ async def run_analysis(
             orchestrator = DataCollectionOrchestrator(client)
 
             # Determine collection config based on context
-            if context_result and context_result.collection_config:
-                # Use intelligent collection config
+            if context_result and context_result.resolved_market:
+                # Use resolved market directly - already has full names for DataForSEO
+                rm = context_result.resolved_market
+                market_full = rm.location_name  # "United Kingdom", "United States", etc.
+                language_full = rm.language_name  # "English", "Swedish", etc.
+
+                logger.info(
+                    f"[{job_id}] Using ResolvedMarket: {rm.code} ({rm.name}) "
+                    f"[source={rm.source.value}, confidence={rm.confidence.value}]"
+                )
+
+                if rm.has_conflict:
+                    logger.warning(f"[{job_id}] Market conflict: {rm.conflict_details}")
+
+            elif context_result and context_result.collection_config:
+                # Fallback to collection_config (legacy path)
                 config = context_result.collection_config
                 collection_market = config.primary_market
                 collection_language = config.primary_language
