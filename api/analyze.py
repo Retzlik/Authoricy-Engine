@@ -299,6 +299,17 @@ async def run_migration():
         "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS seo_competitors_count INTEGER DEFAULT 0",
         "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS emerging_threats_count INTEGER DEFAULT 0",
         "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS context_confidence FLOAT",
+        # Phase 5: Resolved market columns (single source of truth)
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_market_code VARCHAR(10)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_market_name VARCHAR(100)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_location_code INTEGER",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_language_code VARCHAR(10)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_language_name VARCHAR(50)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_market_source VARCHAR(30)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_market_confidence VARCHAR(20)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_detection_confidence FLOAT",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_has_conflict BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_conflict_details TEXT",
     ]
 
     # Enum migrations - PostgreSQL enum ADD VALUE can't be in transaction

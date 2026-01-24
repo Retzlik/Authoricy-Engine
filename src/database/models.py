@@ -1137,6 +1137,18 @@ class ContextIntelligence(Base):
     declared_goal = Column(Enum(PrimaryGoalType))
     user_provided_competitors = Column(JSONB, default=[])
 
+    # Resolved market (Phase 2 - single source of truth)
+    resolved_market_code = Column(String(10))  # "uk", "us", "se", etc.
+    resolved_market_name = Column(String(100))  # "United Kingdom", "United States", etc.
+    resolved_location_code = Column(Integer)  # DataForSEO location_code (2826 for UK)
+    resolved_language_code = Column(String(10))  # "en", "sv", etc.
+    resolved_language_name = Column(String(50))  # "English", "Swedish", etc.
+    resolved_market_source = Column(String(30))  # "user_provided", "auto_detected", "default"
+    resolved_market_confidence = Column(String(20))  # "high", "medium", "low", "conflict"
+    resolved_detection_confidence = Column(Float)  # 0-1, original detection confidence
+    resolved_has_conflict = Column(Boolean, default=False)  # User vs detection conflict
+    resolved_conflict_details = Column(Text)  # Explanation of conflict
+
     # Website analysis results
     detected_business_model = Column(Enum(BusinessModelType))
     detected_company_stage = Column(String(50))
