@@ -23,6 +23,7 @@ from .models import (
     PrimaryGoal,
 )
 from .market_detection import MarketDetector, MarketDetectionResult
+from .market_resolver import MarketResolver, ResolvedMarket, resolve_market
 from .website_analyzer import WebsiteAnalyzer
 from .competitor_discovery import CompetitorDiscovery
 from .market_validator import MarketValidator
@@ -107,6 +108,7 @@ class ContextIntelligenceOrchestrator:
 
         # Initialize agents
         self.market_detector = MarketDetector(timeout=10.0)
+        self.market_resolver = MarketResolver()
         self.website_analyzer = WebsiteAnalyzer(claude_client)
         self.competitor_discovery = CompetitorDiscovery(claude_client, dataforseo_client)
         self.market_validator = MarketValidator(claude_client, dataforseo_client)
@@ -138,15 +140,12 @@ class ContextIntelligenceOrchestrator:
 
         result = ContextIntelligenceResult(domain=request.domain)
 
-        # Resolve effective market (user input takes priority, then detection)
-        effective_market = request.primary_market
-
         try:
-            # Phase 0: Market Detection (NEW - detect market from website signals)
+            # Phase 0: Market Detection (detect market from website signals)
             logger.info("Phase 0: Detecting market from website signals...")
             result.market_detection = await self.market_detector.detect(request.domain)
 
-            if result.market_detection:
+            if result.market_detection and result.market_detection.primary:
                 md = result.market_detection
                 logger.info(
                     f"Market detection complete: {md.primary.code} ({md.primary.name}) "
@@ -155,34 +154,29 @@ class ContextIntelligenceOrchestrator:
                     f"is_multi_market={md.is_multi_market_site}"
                 )
 
-                # Use detected market if:
-                # 1. User didn't provide explicit market (still has default)
-                # 2. Detection has high confidence
-                if not request.primary_market or request.primary_market.lower() in ["", "auto", "detect"]:
-                    if md.primary.confidence >= 0.6:
-                        effective_market = md.primary.code
-                        logger.info(f"Using detected market: {effective_market}")
-                    else:
-                        # Low confidence, default to US
-                        effective_market = "us"
-                        logger.info(f"Low confidence detection, defaulting to: {effective_market}")
-                else:
-                    # User explicitly provided market - validate against detection
-                    if md.primary.code != request.primary_market.lower():
-                        if md.primary.confidence > 0.8:
-                            logger.warning(
-                                f"User-provided market '{request.primary_market}' conflicts with "
-                                f"detected market '{md.primary.code}' (confidence: {md.primary.confidence:.0%})"
-                            )
-                            result.warnings.append(
-                                f"Detected market ({md.primary.name}) differs from selected market. "
-                                f"Detection confidence: {md.primary.confidence:.0%}"
-                            )
-                    # Always respect user's explicit choice
-                    effective_market = request.primary_market
+            # Phase 1: Market Resolution (merge user input + detection)
+            logger.info("Phase 1: Resolving market...")
+            result.resolved_market = self.market_resolver.resolve(
+                user_market=request.primary_market,
+                detection_result=result.market_detection,
+            )
 
-            # Phase 1: Website Analysis (runs first, other phases depend on it)
-            logger.info("Phase 1: Analyzing website...")
+            # Log resolution result
+            rm = result.resolved_market
+            logger.info(
+                f"Market resolved: {rm.code} ({rm.name}) "
+                f"[source={rm.source.value}, confidence={rm.confidence.value}]"
+            )
+
+            if rm.has_conflict:
+                result.warnings.append(rm.conflict_details)
+                logger.warning(f"Market conflict: {rm.conflict_details}")
+
+            # Use resolved market code for downstream phases
+            effective_market = rm.code
+
+            # Phase 2: Website Analysis
+            logger.info("Phase 2: Analyzing website...")
             result.website_analysis = await self.website_analyzer.analyze(request.domain)
 
             if result.website_analysis:
@@ -191,8 +185,8 @@ class ContextIntelligenceOrchestrator:
                     f"confidence={result.website_analysis.analysis_confidence:.2f}"
                 )
 
-            # Phase 2 & 3: Run competitor discovery and market validation in parallel
-            logger.info("Phase 2 & 3: Discovering competitors and validating market (parallel)...")
+            # Phase 3 & 4: Run competitor discovery and market validation in parallel
+            logger.info("Phase 3 & 4: Discovering competitors and validating market (parallel)...")
 
             competitor_task = self.competitor_discovery.discover_and_validate(
                 domain=request.domain,
@@ -229,8 +223,8 @@ class ContextIntelligenceOrchestrator:
                     f"opportunities={len(result.market_validation.discovered_opportunities)}"
                 )
 
-            # Phase 4: Business profiling (synthesizes all previous phases)
-            logger.info("Phase 4: Profiling business context...")
+            # Phase 5: Business profiling (synthesizes all previous phases)
+            logger.info("Phase 5: Profiling business context...")
             result.business_context = await self.business_profiler.profile(
                 domain=request.domain,
                 stated_goal=request.primary_goal,
@@ -298,13 +292,13 @@ class ContextIntelligenceOrchestrator:
         effective_market: str = "",
     ) -> IntelligentCollectionConfig:
         """Generate the intelligent collection configuration."""
-        # Use effective market (resolved from detection + user input)
-        primary_market = effective_market or request.primary_market or "us"
-
-        # Get language from market detection if available, otherwise derive from market
-        if result.market_detection and result.market_detection.primary:
-            default_language = result.market_detection.primary.language_code or "en"
+        # Use resolved market as single source of truth
+        if result.resolved_market:
+            primary_market = result.resolved_market.code
+            default_language = result.resolved_market.language_code
         else:
+            # Fallback (shouldn't happen if resolver ran)
+            primary_market = effective_market or request.primary_market or "us"
             market_languages = {
                 "se": "sv", "us": "en", "uk": "en", "de": "de",
                 "no": "no", "dk": "da", "fi": "fi", "fr": "fr", "nl": "nl",

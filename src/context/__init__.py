@@ -27,7 +27,7 @@ Usage:
     # Use result.to_analysis_context() for enhanced analysis prompts
 """
 
-# Market detection (Phase 1 - NEW)
+# Market detection (Phase 1)
 from .market_detection import (
     MarketDetector,
     MarketSignal,
@@ -37,6 +37,16 @@ from .market_detection import (
     detect_market,
     MARKET_CONFIG,
     SIGNAL_WEIGHTS,
+)
+
+# Market resolution (Phase 2)
+from .market_resolver import (
+    MarketResolver,
+    ResolvedMarket,
+    ResolutionSource,
+    ResolutionConfidence,
+    resolve_market,
+    normalize_market_input,
 )
 
 # Core models
@@ -81,7 +91,7 @@ from .orchestrator import (
 
 
 __all__ = [
-    # Market detection (Phase 1 - NEW)
+    # Market detection (Phase 1)
     "MarketDetector",
     "MarketSignal",
     "SignalKind",
@@ -90,6 +100,13 @@ __all__ = [
     "detect_market",
     "MARKET_CONFIG",
     "SIGNAL_WEIGHTS",
+    # Market resolution (Phase 2)
+    "MarketResolver",
+    "ResolvedMarket",
+    "ResolutionSource",
+    "ResolutionConfidence",
+    "resolve_market",
+    "normalize_market_input",
     # Enums
     "PrimaryGoal",
     "BusinessModel",

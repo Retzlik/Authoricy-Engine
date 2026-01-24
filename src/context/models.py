@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .market_detection import MarketDetectionResult
+    from .market_resolver import ResolvedMarket
 
 
 # =============================================================================
@@ -431,8 +432,11 @@ class ContextIntelligenceResult:
     """
     domain: str
 
-    # Market detection (Phase 0 - NEW)
+    # Market detection (Phase 0)
     market_detection: Optional["MarketDetectionResult"] = None
+
+    # Resolved market (Phase 2) - single source of truth for market
+    resolved_market: Optional["ResolvedMarket"] = None
 
     # Website analysis
     website_analysis: Optional[WebsiteAnalysis] = None
@@ -467,12 +471,29 @@ class ContextIntelligenceResult:
         """
         context = {
             "domain": self.domain,
+            "resolved_market": {},
             "market_detection": {},
             "business_context": {},
             "competitor_context": {},
             "market_context": {},
             "collection_focus": {},
         }
+
+        # Resolved market (Phase 2) - single source of truth
+        if self.resolved_market:
+            rm = self.resolved_market
+            context["resolved_market"] = {
+                "code": rm.code,
+                "name": rm.name,
+                "location_code": rm.location_code,
+                "location_name": rm.location_name,
+                "language_code": rm.language_code,
+                "language_name": rm.language_name,
+                "source": rm.source.value,
+                "confidence": rm.confidence.value,
+                "has_conflict": rm.has_conflict,
+                "is_multi_market_site": rm.is_multi_market_site,
+            }
 
         # Market detection (Phase 0)
         if self.market_detection:
