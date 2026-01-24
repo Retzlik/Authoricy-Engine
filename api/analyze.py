@@ -144,13 +144,20 @@ class AnalysisRequest(BaseModel):
     skip_context_intelligence: bool = False  # Skip the context gathering phase
     priority: str = "normal"  # normal, high
 
-    # Data collection depth
-    max_seed_keywords: int = Field(
-        default=5,
+    # Data collection depth (controls thoroughness vs cost)
+    collection_depth: Literal["testing", "basic", "balanced", "comprehensive", "enterprise"] = Field(
+        default="testing",
+        description="Collection depth preset: testing (~$0.30), basic (~$1-2), balanced (~$3-5), "
+                    "comprehensive (~$8-15), enterprise (~$20-30). Controls keyword discovery, "
+                    "intent classification, SERP analysis, and more."
+    )
+
+    # Optional override for specific limits (applied on top of preset)
+    max_seed_keywords: Optional[int] = Field(
+        default=None,
         ge=1,
-        le=50,
-        description="Number of seed keywords for expansion. 5=fast/cheap, 20=balanced, 50=comprehensive. "
-                    "More seeds = broader keyword universe, better topic clusters, higher API cost."
+        le=100,
+        description="[OPTIONAL] Override max seed keywords from preset. Leave null to use preset default."
     )
 
     def get_resolved_market(self) -> str:
@@ -413,7 +420,7 @@ async def trigger_analysis(
 
     logger.info(
         f"Analysis requested: {domain} -> {request.email} (job: {job_id}), "
-        f"goal={request.primary_goal}, market={resolved_market}"
+        f"goal={request.primary_goal}, market={resolved_market}, depth={request.collection_depth}"
     )
 
     # Add background task
@@ -430,7 +437,8 @@ async def trigger_analysis(
         known_competitors=request.known_competitors,
         skip_ai_analysis=request.skip_ai_analysis,
         skip_context_intelligence=request.skip_context_intelligence,
-        max_seed_keywords=request.max_seed_keywords,
+        collection_depth=request.collection_depth,
+        max_seed_keywords_override=request.max_seed_keywords,
         # Legacy support (for language only now)
         market=None,  # Already resolved above
         language=request.language,
@@ -470,7 +478,8 @@ async def run_analysis(
     known_competitors: Optional[List[str]],
     skip_ai_analysis: bool,
     skip_context_intelligence: bool,
-    max_seed_keywords: int = 5,
+    collection_depth: str = "testing",
+    max_seed_keywords_override: Optional[int] = None,
     # Legacy support
     market: Optional[str] = None,
     language: Optional[str] = None,
@@ -718,7 +727,17 @@ async def run_analysis(
                     f"This will cause wrong data. Expected: 'United Kingdom', 'United States', etc."
                 )
 
-            logger.info(f"[{job_id}] Using max_seed_keywords={max_seed_keywords} for keyword expansion")
+            # Create depth config from preset with optional override
+            from src.collector.depth import CollectionDepth
+            if max_seed_keywords_override:
+                depth = CollectionDepth.from_preset_with_overrides(
+                    collection_depth,
+                    max_seed_keywords=max_seed_keywords_override
+                )
+            else:
+                depth = CollectionDepth.from_preset(collection_depth)
+
+            logger.info(f"[{job_id}] Using depth={depth.name}: {depth.summary()}")
 
             result = await orchestrator.collect(CollectionConfig(
                 domain=domain,
@@ -726,7 +745,7 @@ async def run_analysis(
                 language=language_full,
                 brand_name=company_name,
                 skip_ai_analysis=skip_ai_analysis,
-                max_seed_keywords=max_seed_keywords,
+                depth=depth,
             ))
 
             if not result.success:
