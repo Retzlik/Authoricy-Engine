@@ -161,7 +161,7 @@ class ReportConfidence:
         if score >= 80:
             return ""  # No warning needed
 
-        color = "#f72585" if score < 50 else "#ff9500"
+        level_class = "low" if score < 50 else "medium"
 
         missing_list = "".join(
             f"<li>{item}</li>"
@@ -169,11 +169,13 @@ class ReportConfidence:
         )
 
         return f"""
-        <div style="background: {color}; color: white; padding: 20px; margin: 20px 0; border-radius: 8px;">
-            <strong>⚠️ Report Confidence: {level} ({score:.0f}%)</strong>
-            <p style="margin-top: 10px;">Some data was unavailable. The following sections use estimated or generic content:</p>
-            <ul style="margin-top: 10px;">{missing_list}</ul>
-            <p style="margin-top: 10px; font-size: 10pt;">This may indicate issues with data collection. Contact support if this persists.</p>
+        <div class="confidence-banner {level_class}">
+            <div class="confidence-score">{score:.0f}%</div>
+            <div>
+                <strong style="font-size: 12pt;">Report Confidence: {level}</strong>
+                <p style="margin-top: 8px; margin-bottom: 0;">Some data was unavailable. The following sections may use estimated or generic content:</p>
+                <ul style="margin-top: 8px; margin-bottom: 0; font-size: 9pt;">{missing_list}</ul>
+            </div>
         </div>
         """
 
@@ -267,12 +269,12 @@ def data_missing_html(data_name: str, section: str) -> str:
     This makes it OBVIOUS when reports are missing data.
     """
     return f"""
-    <div style="background: #fff3cd; border: 1px solid #ffc107; padding: 15px; margin: 10px 0; border-radius: 4px;">
-        <strong>📊 Data Unavailable: {data_name}</strong>
-        <p style="margin-top: 5px; font-size: 10pt; color: #856404;">
-            This section requires data that wasn't collected or analyzed.
-            The analysis may need to be re-run with complete data.
-        </p>
+    <div class="data-missing">
+        <div class="data-missing-icon">[!]</div>
+        <div class="data-missing-title">{data_name} Unavailable</div>
+        <div class="data-missing-desc">
+            This data wasn't collected or analyzed. Re-run analysis if this persists.
+        </div>
     </div>
     """
 
@@ -282,9 +284,9 @@ def partial_data_html(data_name: str, available: str, missing: str) -> str:
     Show what data we have and what's missing.
     """
     return f"""
-    <div style="background: #e7f5ff; border: 1px solid #74c0fc; padding: 15px; margin: 10px 0; border-radius: 4px;">
-        <strong>ℹ️ Partial Data: {data_name}</strong>
-        <p style="margin-top: 5px; font-size: 10pt;">
+    <div class="highlight-box info">
+        <div class="highlight-title">Partial Data: {data_name}</div>
+        <p>
             <strong>Available:</strong> {available}<br>
             <strong>Missing:</strong> {missing}
         </p>

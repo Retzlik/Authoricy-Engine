@@ -3,7 +3,7 @@
 
 FROM python:3.12-slim
 
-# Install WeasyPrint system dependencies
+# Install WeasyPrint system dependencies and fonts
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
@@ -12,8 +12,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     libglib2.0-0 \
     shared-mime-info \
+    # Base fonts
     fonts-liberation \
-    && rm -rf /var/lib/apt/lists/*
+    # Noto fonts for comprehensive Unicode support
+    fonts-noto-core \
+    fonts-noto-ui-core \
+    # Symbol and emoji fonts
+    fonts-symbola \
+    fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/* \
+    && fc-cache -f -v
 
 # Set working directory
 WORKDIR /app

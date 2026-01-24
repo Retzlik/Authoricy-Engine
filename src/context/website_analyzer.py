@@ -9,8 +9,12 @@ Analyzes the target website to understand:
 - Content maturity
 - Technical sophistication
 - Monetization model
+
+Uses sitemap-first discovery for efficient page finding,
+with fallback to localized URL patterns.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -25,11 +29,60 @@ from .models import (
     DetectedOffering,
     WebsiteAnalysis,
 )
+from .sitemap_parser import SitemapParser, SitemapResult
 
 if TYPE_CHECKING:
     from src.analyzer.client import ClaudeClient
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# LOCALIZED URL PATTERNS (Fallback when no sitemap)
+# =============================================================================
+
+LOCALIZED_PATHS = {
+    "about": {
+        "en": ["/about", "/about-us", "/company", "/who-we-are"],
+        "sv": ["/om-oss", "/om", "/foretaget", "/om-foretaget", "/about"],
+        "de": ["/uber-uns", "/ueber-uns", "/unternehmen", "/about"],
+        "fr": ["/a-propos", "/qui-sommes-nous", "/about"],
+        "no": ["/om-oss", "/om", "/bedrift", "/about"],
+        "da": ["/om-os", "/virksomhed", "/om", "/about"],
+        "fi": ["/tietoa-meista", "/yritys", "/meista", "/about"],
+        "nl": ["/over-ons", "/bedrijf", "/about"],
+    },
+    "pricing": {
+        "en": ["/pricing", "/prices", "/plans", "/packages"],
+        "sv": ["/priser", "/prislistor", "/prislista", "/paket", "/pricing"],
+        "de": ["/preise", "/preisliste", "/pakete", "/pricing"],
+        "fr": ["/tarifs", "/prix", "/forfaits", "/pricing"],
+        "no": ["/priser", "/prisliste", "/pakker", "/pricing"],
+        "da": ["/priser", "/prisliste", "/pakker", "/pricing"],
+        "fi": ["/hinnat", "/hinnasto", "/paketit", "/pricing"],
+        "nl": ["/prijzen", "/tarieven", "/pakketten", "/pricing"],
+    },
+    "products": {
+        "en": ["/products", "/services", "/solutions", "/offerings"],
+        "sv": ["/produkter", "/tjanster", "/losningar", "/sortiment"],
+        "de": ["/produkte", "/dienstleistungen", "/loesungen"],
+        "fr": ["/produits", "/services", "/solutions"],
+        "no": ["/produkter", "/tjenester", "/losninger"],
+        "da": ["/produkter", "/services", "/loesninger"],
+        "fi": ["/tuotteet", "/palvelut", "/ratkaisut"],
+        "nl": ["/producten", "/diensten", "/oplossingen"],
+    },
+    "contact": {
+        "en": ["/contact", "/contact-us", "/get-in-touch"],
+        "sv": ["/kontakt", "/kontakta-oss", "/contact"],
+        "de": ["/kontakt", "/kontaktieren-sie-uns", "/contact"],
+        "fr": ["/contact", "/contactez-nous"],
+        "no": ["/kontakt", "/kontakt-oss", "/contact"],
+        "da": ["/kontakt", "/contact"],
+        "fi": ["/yhteystiedot", "/ota-yhteytta", "/contact"],
+        "nl": ["/contact", "/neem-contact-op"],
+    },
+}
 
 
 # =============================================================================
@@ -249,15 +302,25 @@ class WebsiteAnalyzer:
 
     This is the first step in Context Intelligence - understanding
     what the business actually is before analyzing its SEO.
+
+    Uses sitemap-first discovery for efficient page finding,
+    with fallback to localized URL patterns.
     """
 
     def __init__(self, claude_client: Optional["ClaudeClient"] = None):
         self.claude_client = claude_client
         self.fetcher = WebsiteFetcher()
+        self.sitemap_parser = SitemapParser()
+        self._sitemap_result: Optional[SitemapResult] = None
 
     async def analyze(self, domain: str) -> WebsiteAnalysis:
         """
         Analyze a website and extract business intelligence.
+
+        Uses sitemap-first discovery:
+        1. Try to fetch and parse sitemap.xml
+        2. Extract page URLs from sitemap
+        3. Fallback to localized URL guessing if no sitemap
 
         Args:
             domain: The domain to analyze (e.g., "example.com")
@@ -278,25 +341,50 @@ class WebsiteAnalyzer:
         result = WebsiteAnalysis(domain=domain)
 
         try:
-            # Fetch pages in parallel
-            homepage_content = await self.fetcher.fetch_page(base_url)
-            about_content = await self._fetch_about_page(base_url)
-            pricing_content = await self._fetch_pricing_page(base_url)
+            # Step 1: Discover pages via sitemap (efficient, comprehensive)
+            self._sitemap_result = await self.sitemap_parser.parse(base_url)
 
-            # Detect features
+            if self._sitemap_result.sitemap_found:
+                logger.info(
+                    f"Sitemap found for {domain}: {self._sitemap_result.total_pages} pages, "
+                    f"about={len(self._sitemap_result.about_pages)}, "
+                    f"pricing={len(self._sitemap_result.pricing_pages)}, "
+                    f"products={len(self._sitemap_result.product_pages)}"
+                )
+
+                # Use sitemap data to enrich result
+                result.has_blog = self._sitemap_result.has_blog
+                result.has_ecommerce = self._sitemap_result.has_shop
+
+                # Use detected languages from sitemap
+                if self._sitemap_result.detected_languages:
+                    result.detected_languages = list(self._sitemap_result.detected_languages)
+                    result.primary_language = result.detected_languages[0]
+            else:
+                logger.info(f"No sitemap found for {domain}, using URL pattern fallback")
+
+            # Step 2: Fetch key pages content
+            homepage_content = await self.fetcher.fetch_page(base_url)
+
+            # Detect primary language from homepage for fallback paths
+            if not result.detected_languages or result.detected_languages == ["unknown"]:
+                languages = await self.fetcher.detect_languages(base_url)
+                result.detected_languages = languages
+                result.primary_language = languages[0] if languages else "en"
+
+            # Fetch about and pricing pages using sitemap or fallback
+            about_content = await self._fetch_page_smart("about", base_url, result.primary_language)
+            pricing_content = await self._fetch_page_smart("pricing", base_url, result.primary_language)
+
+            # Detect additional features from homepage
             features = await self.fetcher.detect_page_features(base_url)
-            result.has_blog = features.get("has_blog", False)
-            result.has_pricing_page = features.get("has_pricing", False)
+            result.has_blog = result.has_blog or features.get("has_blog", False)
+            result.has_pricing_page = bool(pricing_content) or features.get("has_pricing", False)
             result.has_demo_form = features.get("has_demo_form", False)
             result.has_contact_form = features.get("has_contact_form", False)
-            result.has_ecommerce = features.get("has_ecommerce", False)
+            result.has_ecommerce = result.has_ecommerce or features.get("has_ecommerce", False)
 
-            # Detect languages
-            languages = await self.fetcher.detect_languages(base_url)
-            result.detected_languages = languages
-            result.primary_language = languages[0] if languages else "unknown"
-
-            # If we have Claude client, use AI to analyze content
+            # Step 3: AI analysis of content
             if self.claude_client and homepage_content:
                 ai_analysis = await self._analyze_with_ai(
                     domain=domain,
@@ -304,7 +392,8 @@ class WebsiteAnalyzer:
                     about_content=about_content,
                     pricing_content=pricing_content,
                     features=features,
-                    languages=languages,
+                    languages=result.detected_languages,
+                    sitemap_insights=self._get_sitemap_insights(),
                 )
 
                 if ai_analysis:
@@ -319,26 +408,79 @@ class WebsiteAnalyzer:
 
         finally:
             await self.fetcher.close()
+            await self.sitemap_parser.close()
 
         return result
 
-    async def _fetch_about_page(self, base_url: str) -> Optional[str]:
-        """Try to fetch the about page."""
-        about_paths = ["/about", "/about-us", "/company", "/who-we-are", "/om-oss"]
-        for path in about_paths:
+    async def _fetch_page_smart(
+        self,
+        page_type: str,
+        base_url: str,
+        language: str
+    ) -> Optional[str]:
+        """
+        Fetch a page using sitemap first, then fallback to localized paths.
+
+        Args:
+            page_type: Type of page ("about", "pricing", "products", "contact")
+            base_url: Base URL of the site
+            language: Primary language for fallback paths
+
+        Returns:
+            Page content or None
+        """
+        # Strategy 1: Use sitemap URLs if available
+        if self._sitemap_result and self._sitemap_result.sitemap_found:
+            sitemap_pages = getattr(self._sitemap_result, f"{page_type}_pages", [])
+            if sitemap_pages:
+                # Try the first matching page from sitemap
+                for url in sitemap_pages[:2]:  # Try up to 2 pages
+                    content = await self.fetcher.fetch_page(url)
+                    if content and len(content) > 200:
+                        logger.debug(f"Found {page_type} page from sitemap: {url}")
+                        return content
+
+        # Strategy 2: Fallback to localized URL patterns
+        localized_paths = LOCALIZED_PATHS.get(page_type, {})
+
+        # Try primary language paths first
+        paths_to_try = localized_paths.get(language, [])
+
+        # Add English as fallback if not already primary
+        if language != "en":
+            paths_to_try = paths_to_try + localized_paths.get("en", [])
+
+        # Deduplicate while preserving order
+        seen = set()
+        unique_paths = []
+        for path in paths_to_try:
+            if path not in seen:
+                seen.add(path)
+                unique_paths.append(path)
+
+        for path in unique_paths:
             content = await self.fetcher.fetch_page(f"{base_url}{path}")
             if content and len(content) > 200:
+                logger.debug(f"Found {page_type} page from fallback: {path}")
                 return content
+
         return None
 
-    async def _fetch_pricing_page(self, base_url: str) -> Optional[str]:
-        """Try to fetch the pricing page."""
-        pricing_paths = ["/pricing", "/plans", "/prices", "/priser"]
-        for path in pricing_paths:
-            content = await self.fetcher.fetch_page(f"{base_url}{path}")
-            if content and len(content) > 200:
-                return content
-        return None
+    def _get_sitemap_insights(self) -> Dict[str, Any]:
+        """Extract insights from sitemap for AI analysis."""
+        if not self._sitemap_result or not self._sitemap_result.sitemap_found:
+            return {}
+
+        return {
+            "total_pages": self._sitemap_result.total_pages,
+            "has_blog": self._sitemap_result.has_blog,
+            "has_shop": self._sitemap_result.has_shop,
+            "has_multilingual": self._sitemap_result.has_multilingual,
+            "detected_languages": list(self._sitemap_result.detected_languages),
+            "product_page_count": len(self._sitemap_result.product_pages),
+            "blog_page_count": len(self._sitemap_result.blog_pages),
+            "category_count": len(self._sitemap_result.category_pages),
+        }
 
     async def _analyze_with_ai(
         self,
@@ -348,9 +490,23 @@ class WebsiteAnalyzer:
         pricing_content: Optional[str],
         features: Dict[str, bool],
         languages: List[str],
+        sitemap_insights: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Use Claude to analyze website content."""
         try:
+            # Format sitemap insights for the prompt
+            sitemap_info = ""
+            if sitemap_insights:
+                sitemap_info = f"""
+## Sitemap Analysis:
+- Total indexed pages: {sitemap_insights.get('total_pages', 'Unknown')}
+- Product pages: {sitemap_insights.get('product_page_count', 0)}
+- Blog posts: {sitemap_insights.get('blog_page_count', 0)}
+- Category pages: {sitemap_insights.get('category_count', 0)}
+- Multilingual: {sitemap_insights.get('has_multilingual', False)}
+- Detected languages: {', '.join(sitemap_insights.get('detected_languages', []))}
+"""
+
             prompt = ANALYSIS_USER_PROMPT.format(
                 domain=domain,
                 homepage_content=homepage_content[:8000],
@@ -361,6 +517,10 @@ class WebsiteAnalyzer:
                 has_demo=features.get("has_demo_form", False),
                 languages=", ".join(languages),
             )
+
+            # Add sitemap insights to the prompt
+            if sitemap_info:
+                prompt = prompt.replace("## Other Signals:", f"{sitemap_info}\n## Other Signals:")
 
             response = await self.claude_client.analyze_with_retry(
                 prompt=prompt,

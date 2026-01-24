@@ -1,18 +1,25 @@
 """
-SEO Strategy Report Builder (40-60 pages)
+SEO Strategy Report Builder - Premium Edition
 
-THE ONLY REPORT - Comprehensive tactical playbook with confidence tracking.
+Enterprise-grade PDF report with visual data storytelling.
 
-v7: Single report with confidence tracking - makes missing data VISIBLE.
+Features:
+- Premium cover page with gradient branding
+- SVG trend charts for historical data
+- Visual score gauges and progress bars
+- Professional metric cards
+- AI content sections with visual badges
+- Confidence tracking with visual indicators
 """
 
 import logging
 from pathlib import Path
-from typing import Dict, Any, Tuple, Optional, TYPE_CHECKING
+from typing import Dict, Any, Tuple, Optional, List, TYPE_CHECKING
 from datetime import datetime
 import html
 
 from .confidence import ReportConfidence, data_missing_html
+from .charts import ChartGenerator
 
 if TYPE_CHECKING:
     from ..agents.base import AgentOutput
@@ -22,14 +29,14 @@ logger = logging.getLogger(__name__)
 
 class ReportBuilder:
     """
-    Builds THE report - comprehensive strategy guide with confidence tracking.
-
-    This is the ONLY report we generate. No more external vs internal.
+    Builds premium SEO strategy reports with visual data storytelling.
     """
 
     def __init__(self, template_dir: Path):
         self.template_dir = template_dir
         self.confidence = ReportConfidence()
+        self.charts = ChartGenerator()
+        self.section_num = 0
 
     def build(
         self,
@@ -37,13 +44,13 @@ class ReportBuilder:
         analysis_data: Dict[str, Any],
     ) -> Tuple[str, ReportConfidence]:
         """
-        Build complete HTML report with confidence tracking.
+        Build complete HTML report with premium design.
 
         Returns:
             Tuple of (HTML document, ReportConfidence)
         """
-        # Reset confidence tracking
         self.confidence = ReportConfidence()
+        self.section_num = 0
 
         metadata = analysis_data.get("metadata", {})
         domain = metadata.get("domain", "Unknown")
@@ -54,7 +61,7 @@ class ReportBuilder:
         self.confidence.track("analysis_result", "global", "agent", analysis_result is not None)
 
         sections = [
-            self._build_cover(domain, market),
+            self._build_cover(domain, market, analysis_data),
             self._build_executive_summary(analysis_result, analysis_data),
             self._build_domain_analysis(analysis_data),
             self._build_keyword_analysis(analysis_data),
@@ -67,7 +74,7 @@ class ReportBuilder:
             self._build_methodology(domain),
         ]
 
-        # Add confidence warning banner after cover if score is low
+        # Add confidence warning after cover if score is low
         confidence_warning = self.confidence.generate_warning_html()
         if confidence_warning:
             sections.insert(1, f'<div class="page">{confidence_warning}</div>')
@@ -78,191 +85,124 @@ class ReportBuilder:
             f"Report confidence: {conf_data['confidence_level']} ({conf_data['confidence_score']:.0f}%), "
             f"fallbacks: {conf_data['fallback_count']}, missing: {len(conf_data['missing_required'])}"
         )
-        if conf_data['missing_required']:
-            logger.warning(f"Missing data: {conf_data['missing_required'][:5]}")
 
         return self._wrap_html(sections, domain), self.confidence
 
     def _wrap_html(self, sections: list, domain: str) -> str:
         """Wrap sections in HTML document."""
         content = "\n".join(sections)
+        css_path = self.template_dir / "components" / "styles.css"
+
+        # Read external CSS
+        css_content = ""
+        if css_path.exists():
+            css_content = css_path.read_text()
+
         return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>{html.escape(domain)} - SEO Strategy Report</title>
-    <style>{self._get_styles()}</style>
+    <style>{css_content}</style>
 </head>
 <body>
     {content}
 </body>
 </html>"""
 
-    def _get_styles(self) -> str:
-        """CSS styles for the report."""
-        return """
-        @page {
-            size: A4;
-            margin: 2cm;
-            @bottom-center {
-                content: counter(page) " / " counter(pages);
-                font-size: 10px;
-                color: #666;
-            }
-        }
+    def _next_section(self) -> int:
+        """Get next section number."""
+        self.section_num += 1
+        return self.section_num
 
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+    def _section_header(self, title: str) -> str:
+        """Create a visual section header."""
+        num = self._next_section()
+        return f'''
+        <div class="section-header">
+            <h1><span class="section-number">{num}</span>{html.escape(title)}</h1>
+        </div>
+        '''
 
-        body {
-            font-family: 'Helvetica Neue', Arial, sans-serif;
-            font-size: 10pt;
-            line-height: 1.5;
-            color: #333;
-        }
+    def _progress_bar(self, value: float, max_val: float = 100, color_class: str = "") -> str:
+        """Generate a progress bar HTML."""
+        pct = min(100, (value / max_val) * 100) if max_val > 0 else 0
+        fill_class = color_class if color_class else ("success" if pct >= 70 else "warning" if pct >= 40 else "danger")
+        return f'''
+        <div class="progress-bar">
+            <div class="fill {fill_class}" style="width: {pct:.0f}%"></div>
+        </div>
+        '''
 
-        .page {
-            page-break-after: always;
-            min-height: 100vh;
-            padding: 20px 0;
-        }
-        .page:last-child { page-break-after: avoid; }
+    def _score_badge(self, score: float) -> str:
+        """Generate a status badge based on score."""
+        if score >= 0.9:
+            return '<span class="status-badge good">Excellent</span>'
+        elif score >= 0.7:
+            return '<span class="status-badge good">Good</span>'
+        elif score >= 0.5:
+            return '<span class="status-badge warning">Fair</span>'
+        else:
+            return '<span class="status-badge poor">Poor</span>'
 
-        .cover {
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            text-align: center;
-            min-height: 100vh;
-        }
-
-        h1 { font-size: 22pt; color: #1a1a2e; margin-bottom: 20px; }
-        h2 { font-size: 16pt; color: #2d3436; margin: 25px 0 15px; }
-        h3 { font-size: 12pt; color: #2d3436; margin: 20px 0 10px; }
-
-        p { margin-bottom: 12px; }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 15px 0;
-            font-size: 9pt;
-        }
-
-        th, td {
-            padding: 8px 10px;
-            text-align: left;
-            border-bottom: 1px solid #eee;
-        }
-
-        th { background: #f8f9fa; font-weight: 600; }
-
-        .metric-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 15px;
-            margin: 20px 0;
-        }
-
-        .metric-card {
-            background: #f8f9fa;
-            padding: 15px;
-            text-align: center;
-            border-radius: 8px;
-        }
-
-        .metric-card .value {
-            font-size: 20pt;
-            font-weight: bold;
-            color: #4361ee;
-        }
-
-        .metric-card .label {
-            font-size: 9pt;
-            color: #666;
-            margin-top: 5px;
-        }
-
-        .highlight-box {
-            background: #f8f9fa;
-            border-left: 4px solid #4361ee;
-            padding: 15px 20px;
-            margin: 20px 0;
-        }
-
-        .highlight-box.warning { border-left-color: #f72585; }
-        .highlight-box.success { border-left-color: #06d6a0; }
-
-        .finding {
-            margin: 15px 0;
-            padding: 15px;
-            background: #fafafa;
-            border-radius: 8px;
-        }
-
-        .finding-title {
-            font-weight: 600;
-            color: #1a1a2e;
-            margin-bottom: 8px;
-        }
-
-        ul, ol { margin: 10px 0 10px 20px; }
-        li { margin: 5px 0; }
-
-        .data-box {
-            background: #f8f9fa;
-            padding: 15px;
-            margin: 15px 0;
-            border-radius: 4px;
-            white-space: pre-wrap;
-            font-size: 9pt;
-        }
-
-        .roadmap-phase {
-            margin: 20px 0;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 8px;
-        }
-
-        .roadmap-phase h3 { color: #4361ee; margin-bottom: 10px; }
-
-        .roadmap-item {
-            margin: 8px 0;
-            padding-left: 20px;
-            position: relative;
-        }
-        .roadmap-item:before {
-            content: "→";
-            position: absolute;
-            left: 0;
-            color: #4361ee;
-        }
-
-        .logo { font-size: 14pt; font-weight: bold; color: #4361ee; }
-        .confidential {
-            font-size: 9pt;
-            color: #888;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        """
+    def _format_number(self, num: Any) -> str:
+        """Format number with commas and appropriate precision."""
+        if num is None:
+            return "N/A"
+        try:
+            num = float(num)
+            if num >= 1_000_000:
+                return f"{num/1_000_000:.1f}M"
+            elif num >= 1_000:
+                return f"{num/1_000:.1f}K"
+            elif num == int(num):
+                return f"{int(num):,}"
+            else:
+                return f"{num:,.1f}"
+        except (TypeError, ValueError):
+            return str(num)
 
     # =========================================================================
-    # COVER
+    # COVER PAGE - Premium Design
     # =========================================================================
 
-    def _build_cover(self, domain: str, market: str) -> str:
-        """Build cover page."""
+    def _build_cover(self, domain: str, market: str, analysis_data: Dict) -> str:
+        """Build premium cover page with gradient and branding."""
         date = datetime.now().strftime("%B %Y")
+        summary = analysis_data.get("summary", {})
+
+        # Quick stats for cover
+        keywords = summary.get("total_organic_keywords") or summary.get("ranked_keywords_count") or 0
+        traffic = summary.get("total_organic_traffic") or 0
+
         return f"""
         <div class="page cover">
-            <div class="logo">AUTHORICY</div>
-            <h1 style="font-size: 32pt; margin-top: 20px;">{html.escape(domain)}</h1>
-            <p style="font-size: 16pt; color: #666;">SEO Strategy Report</p>
-            <p style="margin-top: 40px; color: #888;">Market: {html.escape(market)}</p>
-            <p style="color: #888;">{date}</p>
-            <div class="confidential" style="margin-top: 60px;">Confidential</div>
+            <div class="cover-content">
+                <div class="logo">AUTHORICY</div>
+                <div class="domain-title">{html.escape(domain)}</div>
+                <div class="report-type">SEO Strategy Report</div>
+
+                <div class="cover-meta">
+                    <div class="meta-item">
+                        <div class="meta-label">Market</div>
+                        <div class="meta-value">{html.escape(market.upper())}</div>
+                    </div>
+                    <div class="meta-item">
+                        <div class="meta-label">Date</div>
+                        <div class="meta-value">{date}</div>
+                    </div>
+                    <div class="meta-item">
+                        <div class="meta-label">Keywords</div>
+                        <div class="meta-value">{self._format_number(keywords)}</div>
+                    </div>
+                    <div class="meta-item">
+                        <div class="meta-label">Traffic</div>
+                        <div class="meta-value">{self._format_number(traffic)}/mo</div>
+                    </div>
+                </div>
+
+                <div class="confidential-badge">Confidential</div>
+            </div>
         </div>
         """
 
@@ -271,7 +211,7 @@ class ReportBuilder:
     # =========================================================================
 
     def _build_executive_summary(self, analysis_result: Any, analysis_data: Dict) -> str:
-        """Build executive summary with real AI analysis."""
+        """Build executive summary with key metrics and AI insights."""
         summary = analysis_data.get("summary", {})
 
         # Get executive summary from AI
@@ -284,12 +224,20 @@ class ReportBuilder:
         )
 
         if exec_summary:
-            summary_html = f'<div class="data-box">{html.escape(exec_summary[:4000])}</div>'
+            summary_html = f'''
+            <div class="ai-content">
+                <div class="ai-content-header">
+                    <span class="ai-badge">AI Analysis</span>
+                    <span style="color: #7c3aed; font-weight: 600;">Executive Summary</span>
+                </div>
+                <div style="white-space: pre-wrap; line-height: 1.7;">{html.escape(exec_summary[:4000])}</div>
+            </div>
+            '''
         else:
             self.confidence.track_fallback("executive_summary", "executive_summary", "missing")
             summary_html = data_missing_html("AI Executive Summary", "Executive Summary")
 
-        # Key metrics from raw data - use multiple sources for robustness
+        # Key metrics
         keywords = summary.get("total_organic_keywords") or summary.get("ranked_keywords_count") or 0
         traffic = summary.get("total_organic_traffic") or 0
         dr = summary.get("domain_rank") or 0
@@ -297,22 +245,20 @@ class ReportBuilder:
         backlinks = summary.get("total_backlinks") or 0
         ref_domains = summary.get("referring_domains_count") or 0
 
-        # Track as having data if ANY metric is available (more inclusive)
-        has_any_metrics = (keywords > 0 or traffic > 0 or backlinks > 0 or
-                          ref_domains > 0 or competitors > 0 or dr > 0)
+        has_any_metrics = (keywords > 0 or traffic > 0 or backlinks > 0 or ref_domains > 0)
         self.confidence.track("summary_metrics", "executive_summary", "raw_data", has_any_metrics)
 
         return f"""
         <div class="page">
-            <h1>Executive Summary</h1>
+            {self._section_header("Executive Summary")}
 
             <div class="metric-grid">
                 <div class="metric-card">
-                    <div class="value">{keywords:,}</div>
+                    <div class="value">{self._format_number(keywords)}</div>
                     <div class="label">Ranking Keywords</div>
                 </div>
                 <div class="metric-card">
-                    <div class="value">{traffic:,.0f}</div>
+                    <div class="value">{self._format_number(traffic)}</div>
                     <div class="label">Monthly Traffic</div>
                 </div>
                 <div class="metric-card">
@@ -322,6 +268,21 @@ class ReportBuilder:
                 <div class="metric-card">
                     <div class="value">{competitors}</div>
                     <div class="label">Competitors</div>
+                </div>
+            </div>
+
+            <div class="metric-grid metric-grid-3" style="margin-top: 10px;">
+                <div class="metric-card">
+                    <div class="value">{self._format_number(backlinks)}</div>
+                    <div class="label">Total Backlinks</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value">{self._format_number(ref_domains)}</div>
+                    <div class="label">Referring Domains</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value">{self.confidence.confidence_score:.0f}%</div>
+                    <div class="label">Data Confidence</div>
                 </div>
             </div>
 
@@ -335,11 +296,11 @@ class ReportBuilder:
     # =========================================================================
 
     def _build_domain_analysis(self, analysis_data: Dict) -> str:
-        """Build domain analysis with real data."""
+        """Build domain analysis with trend charts."""
         phase1 = analysis_data.get("phase1_foundation", {})
         overview = phase1.get("domain_overview", {})
         historical = phase1.get("historical_data", [])
-        top_pages = phase1.get("top_pages", [])[:20]
+        top_pages = phase1.get("top_pages", [])[:15]
         tech = phase1.get("technologies", [])
 
         # Domain metrics
@@ -347,64 +308,90 @@ class ReportBuilder:
         org_traffic = overview.get('organic_traffic') or 0
         paid_kw = overview.get('paid_keywords') or 0
 
-        # Track data presence - check for actual content, not just dict existence
-        has_overview_data = bool(overview) and (org_kw > 0 or org_traffic > 0 or paid_kw > 0)
-        has_overview = self.confidence.track("domain_overview", "domain_analysis", "raw_data", has_overview_data or len(top_pages) > 0)
-        has_historical = self.confidence.track("historical_data", "domain_analysis", "raw_data", len(historical) > 0)
-        has_pages = self.confidence.track("top_pages", "domain_analysis", "raw_data", len(top_pages) > 0)
+        has_overview_data = bool(overview) and (org_kw > 0 or org_traffic > 0)
+        self.confidence.track("domain_overview", "domain_analysis", "raw_data", has_overview_data or len(top_pages) > 0)
+        self.confidence.track("historical_data", "domain_analysis", "raw_data", len(historical) > 0)
+        self.confidence.track("top_pages", "domain_analysis", "raw_data", len(top_pages) > 0)
 
-        # Historical trend
-        hist_rows = ""
-        if historical:
-            for h in historical[-12:]:
-                h_kw = h.get('organic_keywords') or 0
-                h_traffic = h.get('organic_traffic') or 0
-                hist_rows += f"<tr><td>{h.get('date', 'N/A')}</td><td>{h_kw:,}</td><td>{h_traffic:,.0f}</td></tr>"
+        # Generate trend chart if we have historical data
+        chart_html = ""
+        if historical and len(historical) >= 3:
+            chart_data = [
+                {"date": h.get('date', ''), "value": h.get('organic_traffic') or h.get('organic_keywords') or 0}
+                for h in historical[-12:]
+            ]
+            chart_svg = self.charts.generate_trend_chart(
+                chart_data, x_key="date", y_key="value",
+                width=550, height=200, color="#4361ee"
+            )
+            chart_html = f'''
+            <div class="chart-container">
+                <div class="chart-title">Organic Traffic Trend (12 Months)</div>
+                {chart_svg}
+            </div>
+            '''
         else:
-            hist_rows = f'<tr><td colspan="3">{data_missing_html("Historical Data", "Domain Analysis")}</td></tr>'
+            chart_html = data_missing_html("Historical Trend Data", "Domain Analysis")
 
-        # Top pages
+        # Top pages table
         page_rows = ""
         if top_pages:
             for p in top_pages:
                 p_kw = p.get('organic_keywords') or 0
                 p_traffic = p.get('organic_traffic') or 0
-                page_rows += f"<tr><td>{html.escape(str(p.get('page', ''))[:60])}</td><td>{p_kw:,}</td><td>{p_traffic:,.0f}</td></tr>"
+                page_url = str(p.get('page', ''))[:55]
+                page_rows += f"""<tr>
+                    <td class="keyword">{html.escape(page_url)}</td>
+                    <td class="num">{p_kw:,}</td>
+                    <td class="num">{p_traffic:,.0f}</td>
+                </tr>"""
         else:
             page_rows = f'<tr><td colspan="3">{data_missing_html("Top Pages", "Domain Analysis")}</td></tr>'
 
         # Technologies
         tech_html = ""
         if tech:
-            tech_items = "".join(f"<li>{html.escape(t.get('name', 'Unknown'))} ({html.escape(t.get('category', ''))})</li>" for t in tech[:15])
+            tech_items = "".join(
+                f"<li><strong>{html.escape(t.get('name', 'Unknown'))}</strong> ({html.escape(t.get('category', ''))})</li>"
+                for t in tech[:12]
+            )
             tech_html = f"<ul>{tech_items}</ul>"
         else:
             tech_html = data_missing_html("Technology Stack", "Domain Analysis")
 
         return f"""
         <div class="page">
-            <h1>Domain Analysis</h1>
+            {self._section_header("Domain Analysis")}
 
-            <h2>Current Metrics</h2>
-            <table>
-                <tr><th>Metric</th><th>Value</th></tr>
-                <tr><td>Organic Keywords</td><td>{org_kw:,}</td></tr>
-                <tr><td>Organic Traffic (monthly)</td><td>{org_traffic:,.0f}</td></tr>
-                <tr><td>Paid Keywords</td><td>{paid_kw:,}</td></tr>
-            </table>
+            <h2>Current Organic Performance</h2>
+            <div class="metric-grid metric-grid-3">
+                <div class="metric-card">
+                    <div class="value">{self._format_number(org_kw)}</div>
+                    <div class="label">Organic Keywords</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value">{self._format_number(org_traffic)}</div>
+                    <div class="label">Organic Traffic</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value">{self._format_number(paid_kw)}</div>
+                    <div class="label">Paid Keywords</div>
+                </div>
+            </div>
 
-            <h2>12-Month Historical Trend</h2>
-            <table>
-                <tr><th>Date</th><th>Keywords</th><th>Traffic</th></tr>
-                {hist_rows}
-            </table>
+            <h2>Historical Performance</h2>
+            {chart_html}
         </div>
 
         <div class="page">
             <h2>Top Performing Pages</h2>
             <table>
-                <tr><th>Page</th><th>Keywords</th><th>Traffic</th></tr>
-                {page_rows}
+                <thead>
+                    <tr><th>Page URL</th><th class="num">Keywords</th><th class="num">Traffic</th></tr>
+                </thead>
+                <tbody>
+                    {page_rows}
+                </tbody>
             </table>
 
             <h2>Technology Stack</h2>
@@ -417,43 +404,64 @@ class ReportBuilder:
     # =========================================================================
 
     def _build_keyword_analysis(self, analysis_data: Dict) -> str:
-        """Build keyword analysis with real data."""
+        """Build keyword analysis with visual indicators."""
         phase2 = analysis_data.get("phase2_keywords", {})
-        ranked = phase2.get("ranked_keywords", [])[:50]
-        gaps = phase2.get("keyword_gaps", [])[:30]
+        ranked = phase2.get("ranked_keywords", [])[:40]
+        gaps = phase2.get("keyword_gaps", [])[:25]
         clusters = phase2.get("keyword_clusters", [])
 
-        # Track data
-        has_ranked = self.confidence.track("ranked_keywords", "keywords", "raw_data", len(ranked) > 0)
-        has_gaps = self.confidence.track("keyword_gaps", "keywords", "raw_data", len(gaps) > 0)
+        self.confidence.track("ranked_keywords", "keywords", "raw_data", len(ranked) > 0)
+        self.confidence.track("keyword_gaps", "keywords", "raw_data", len(gaps) > 0)
 
-        # Ranked keywords table
+        # Ranked keywords table with position indicators
         ranked_rows = ""
         if ranked:
             for kw in ranked:
-                pos = kw.get('position') or kw.get('rank_absolute') or '-'
+                pos = kw.get('position') or kw.get('rank_absolute') or 0
                 vol = kw.get('search_volume') or 0
                 traffic = kw.get('etv') or kw.get('traffic') or 0
+                keyword = str(kw.get('keyword', ''))[:45]
+
+                # Position color coding
+                if pos <= 3:
+                    pos_badge = '<span class="status-badge good">Top 3</span>'
+                elif pos <= 10:
+                    pos_badge = f'<span class="status-badge good">#{pos}</span>'
+                elif pos <= 20:
+                    pos_badge = f'<span class="status-badge warning">#{pos}</span>'
+                else:
+                    pos_badge = f'<span class="status-badge poor">#{pos}</span>'
+
                 ranked_rows += f"""<tr>
-                    <td>{html.escape(str(kw.get('keyword', '')))}</td>
-                    <td>{pos}</td>
-                    <td>{vol:,}</td>
-                    <td>{traffic:,.0f}</td>
+                    <td class="keyword">{html.escape(keyword)}</td>
+                    <td>{pos_badge}</td>
+                    <td class="num">{vol:,}</td>
+                    <td class="num">{traffic:,.0f}</td>
                 </tr>"""
         else:
             self.confidence.track_fallback("ranked_keywords", "keywords", "missing")
             ranked_rows = f'<tr><td colspan="4">{data_missing_html("Ranked Keywords", "Keyword Analysis")}</td></tr>'
 
-        # Gap keywords table
+        # Gap keywords with difficulty bar
         gap_rows = ""
         if gaps:
             for g in gaps:
                 vol = g.get('search_volume') or 0
                 diff = g.get('difficulty') or g.get('keyword_difficulty') or 0
+                keyword = str(g.get('keyword', ''))[:45]
+
+                # Difficulty color
+                diff_class = "success" if diff < 30 else "warning" if diff < 60 else "danger"
+
                 gap_rows += f"""<tr>
-                    <td>{html.escape(str(g.get('keyword', '')))}</td>
-                    <td>{vol:,}</td>
-                    <td>{diff:.0f}</td>
+                    <td class="keyword">{html.escape(keyword)}</td>
+                    <td class="num">{vol:,}</td>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span>{diff:.0f}</span>
+                            {self._progress_bar(diff, 100, diff_class)}
+                        </div>
+                    </td>
                 </tr>"""
         else:
             self.confidence.track_fallback("keyword_gaps", "keywords", "missing")
@@ -461,13 +469,17 @@ class ReportBuilder:
 
         return f"""
         <div class="page">
-            <h1>Keyword Analysis</h1>
+            {self._section_header("Keyword Analysis")}
 
             <h2>Current Keyword Portfolio</h2>
-            <p>Top 50 ranking keywords by traffic value:</p>
+            <p>Top ranking keywords by traffic value:</p>
             <table>
-                <tr><th>Keyword</th><th>Position</th><th>Volume</th><th>Traffic</th></tr>
-                {ranked_rows}
+                <thead>
+                    <tr><th>Keyword</th><th>Position</th><th class="num">Volume</th><th class="num">Traffic</th></tr>
+                </thead>
+                <tbody>
+                    {ranked_rows}
+                </tbody>
             </table>
         </div>
 
@@ -475,12 +487,19 @@ class ReportBuilder:
             <h2>Keyword Gap Opportunities</h2>
             <p>High-opportunity keywords where competitors rank but you don't:</p>
             <table>
-                <tr><th>Keyword</th><th>Volume</th><th>Difficulty</th></tr>
-                {gap_rows}
+                <thead>
+                    <tr><th>Keyword</th><th class="num">Volume</th><th>Difficulty</th></tr>
+                </thead>
+                <tbody>
+                    {gap_rows}
+                </tbody>
             </table>
 
-            <h2>Keyword Clusters</h2>
-            <p><strong>{len(clusters)}</strong> topical clusters identified for content strategy.</p>
+            <div class="highlight-box info" style="margin-top: 25px;">
+                <div class="highlight-title">Topical Clusters Identified</div>
+                <p><strong>{len(clusters)}</strong> content clusters identified for strategic content planning.
+                Targeting topical clusters helps build authority and capture more search traffic.</p>
+            </div>
         </div>
         """
 
@@ -489,28 +508,38 @@ class ReportBuilder:
     # =========================================================================
 
     def _build_competitive_analysis(self, analysis_data: Dict, analysis_result: Any) -> str:
-        """Build competitive analysis with real data."""
+        """Build competitive analysis with visual competitor comparison."""
         phase1 = analysis_data.get("phase1_foundation", {})
-        phase3 = analysis_data.get("phase3_competitive", {})
         competitors = phase1.get("competitors", [])[:10]
 
-        # Track data
-        has_competitors = self.confidence.track("competitors", "competitive", "raw_data", len(competitors) > 0)
+        self.confidence.track("competitors", "competitive", "raw_data", len(competitors) > 0)
 
-        # Competitor table
+        # Competitor table with type badges
         comp_rows = ""
         if competitors:
+            type_colors = {
+                'direct': 'danger',
+                'seo': 'warning',
+                'content': 'good',
+                'emerging': 'warning',
+                'aspirational': 'good',
+            }
             for c in competitors:
-                comp_type = c.get('competitor_type', 'unknown')
+                comp_type = str(c.get('competitor_type', 'unknown')).lower()
                 common_kw = c.get('common_keywords') or c.get('se_keywords') or 0
                 traffic = c.get('organic_traffic') or c.get('etv') or 0
                 dr = c.get('domain_rating') or c.get('rank') or '-'
+                domain = str(c.get('domain', ''))[:35]
+
+                badge_class = type_colors.get(comp_type, 'warning')
+                type_badge = f'<span class="status-badge {badge_class}">{comp_type.upper()}</span>'
+
                 comp_rows += f"""<tr>
-                    <td>{html.escape(str(c.get('domain', '')))}</td>
-                    <td>{comp_type}</td>
-                    <td>{common_kw:,}</td>
-                    <td>{traffic:,.0f}</td>
-                    <td>{dr}</td>
+                    <td class="keyword">{html.escape(domain)}</td>
+                    <td>{type_badge}</td>
+                    <td class="num">{common_kw:,}</td>
+                    <td class="num">{self._format_number(traffic)}</td>
+                    <td class="num">{dr}</td>
                 </tr>"""
         else:
             self.confidence.track_fallback("competitors", "competitive", "missing")
@@ -521,7 +550,15 @@ class ReportBuilder:
         if analysis_result and hasattr(analysis_result, 'loop1_findings'):
             findings = analysis_result.loop1_findings
             if findings and len(findings) > 100:
-                comp_insights = f'<div class="data-box">{html.escape(findings[:2000])}</div>'
+                comp_insights = f'''
+                <div class="ai-content">
+                    <div class="ai-content-header">
+                        <span class="ai-badge">AI Analysis</span>
+                        <span style="color: #7c3aed; font-weight: 600;">Competitive Intelligence</span>
+                    </div>
+                    <div style="white-space: pre-wrap; line-height: 1.7;">{html.escape(findings[:2500])}</div>
+                </div>
+                '''
                 self.confidence.track("competitive_insights", "competitive", "agent", True)
             else:
                 self.confidence.track("competitive_insights", "competitive", "agent", False)
@@ -532,13 +569,26 @@ class ReportBuilder:
 
         return f"""
         <div class="page">
-            <h1>Competitive Analysis</h1>
+            {self._section_header("Competitive Analysis")}
 
-            <h2>Competitor Profiles</h2>
+            <h2>Competitor Landscape</h2>
             <table>
-                <tr><th>Competitor</th><th>Type</th><th>Shared Keywords</th><th>Traffic</th><th>DR</th></tr>
-                {comp_rows}
+                <thead>
+                    <tr><th>Competitor</th><th>Type</th><th class="num">Shared KW</th><th class="num">Traffic</th><th class="num">DR</th></tr>
+                </thead>
+                <tbody>
+                    {comp_rows}
+                </tbody>
             </table>
+
+            <div class="highlight-box" style="margin-top: 25px;">
+                <div class="highlight-title">Competitor Type Legend</div>
+                <p>
+                    <span class="status-badge danger">DIRECT</span> Same product/service offering &nbsp;
+                    <span class="status-badge warning">SEO</span> Competing for keywords &nbsp;
+                    <span class="status-badge good">CONTENT</span> Content overlap
+                </p>
+            </div>
 
             <h2>Competitive Position Analysis</h2>
             {comp_insights}
@@ -550,16 +600,14 @@ class ReportBuilder:
     # =========================================================================
 
     def _build_backlink_analysis(self, analysis_data: Dict, analysis_result: Any) -> str:
-        """Build backlink analysis with real data."""
+        """Build backlink analysis with visual metrics."""
         phase1 = analysis_data.get("phase1_foundation", {})
         phase3 = analysis_data.get("phase3_competitive", {})
         backlinks = phase1.get("backlink_summary", {})
-        top_links = phase3.get("top_backlinks", [])[:15]
-        referring_domains = phase3.get("referring_domains", [])[:15]
+        top_links = phase3.get("top_backlinks", [])[:12]
 
-        # Track data
-        has_backlinks = self.confidence.track("backlink_summary", "backlinks", "raw_data", bool(backlinks))
-        has_top_links = self.confidence.track("top_backlinks", "backlinks", "raw_data", len(top_links) > 0)
+        self.confidence.track("backlink_summary", "backlinks", "raw_data", bool(backlinks))
+        self.confidence.track("top_backlinks", "backlinks", "raw_data", len(top_links) > 0)
 
         # Summary metrics
         total_bl = backlinks.get('total_backlinks') or 0
@@ -571,41 +619,59 @@ class ReportBuilder:
         if top_links:
             for bl in top_links:
                 source = bl.get('domain_from') or bl.get('source_domain') or ''
-                dr = bl.get('domain_from_rank') or bl.get('rank') or '-'
+                dr = bl.get('domain_from_rank') or bl.get('rank') or 0
                 anchor = bl.get('anchor') or ''
+
+                # DR badge
+                dr_class = "good" if dr >= 50 else "warning" if dr >= 20 else "poor"
+
                 link_rows += f"""<tr>
-                    <td>{html.escape(str(source)[:40])}</td>
-                    <td>{dr}</td>
-                    <td>{html.escape(str(anchor)[:30])}</td>
+                    <td class="keyword">{html.escape(str(source)[:40])}</td>
+                    <td><span class="status-badge {dr_class}">DR {dr}</span></td>
+                    <td>{html.escape(str(anchor)[:35])}</td>
                 </tr>"""
         else:
             link_rows = f'<tr><td colspan="3">{data_missing_html("Top Backlinks", "Backlink Analysis")}</td></tr>'
 
+        # Calculate link quality score (if we have data)
+        quality_score = min(100, (domain_rank * 1.5)) if domain_rank else 0
+
         return f"""
         <div class="page">
-            <h1>Backlink Analysis</h1>
+            {self._section_header("Backlink Analysis")}
 
             <h2>Link Profile Summary</h2>
-            <div class="metric-grid">
+            <div class="metric-grid metric-grid-3">
                 <div class="metric-card">
-                    <div class="value">{total_bl:,}</div>
+                    <div class="value">{self._format_number(total_bl)}</div>
                     <div class="label">Total Backlinks</div>
                 </div>
                 <div class="metric-card">
-                    <div class="value">{ref_domains:,}</div>
+                    <div class="value">{self._format_number(ref_domains)}</div>
                     <div class="label">Referring Domains</div>
                 </div>
                 <div class="metric-card">
                     <div class="value">{domain_rank}</div>
                     <div class="label">Domain Rating</div>
+                    {self._progress_bar(quality_score, 100)}
                 </div>
             </div>
 
             <h2>Top Referring Domains</h2>
             <table>
-                <tr><th>Source Domain</th><th>DR</th><th>Anchor Text</th></tr>
-                {link_rows}
+                <thead>
+                    <tr><th>Source Domain</th><th>Authority</th><th>Anchor Text</th></tr>
+                </thead>
+                <tbody>
+                    {link_rows}
+                </tbody>
             </table>
+
+            <div class="insight-box" style="margin-top: 25px;">
+                <h3>Link Building Opportunity</h3>
+                <p>Focus on acquiring links from domains with DR 40+ for maximum impact.
+                Quality over quantity - one link from a DR 60+ site is worth 10+ low-quality links.</p>
+            </div>
         </div>
         """
 
@@ -615,7 +681,6 @@ class ReportBuilder:
 
     def _build_content_strategy(self, analysis_result: Any, analysis_data: Dict) -> str:
         """Build content strategy from AI analysis."""
-        # Get Loop 3 enrichment (content strategy)
         content_strategy = None
         if analysis_result:
             content_strategy = getattr(analysis_result, 'loop3_enrichment', None)
@@ -625,17 +690,31 @@ class ReportBuilder:
         )
 
         if content_strategy and len(str(content_strategy)) > 100:
-            strategy_html = f'<div class="data-box">{html.escape(str(content_strategy)[:4000])}</div>'
+            strategy_html = f'''
+            <div class="ai-content">
+                <div class="ai-content-header">
+                    <span class="ai-badge">AI Analysis</span>
+                    <span style="color: #7c3aed; font-weight: 600;">Content Strategy Recommendations</span>
+                </div>
+                <div style="white-space: pre-wrap; line-height: 1.7;">{html.escape(str(content_strategy)[:4000])}</div>
+            </div>
+            '''
         else:
             self.confidence.track_fallback("content_strategy", "content", "missing")
             strategy_html = data_missing_html("AI Content Strategy", "Content Strategy")
 
         return f"""
         <div class="page">
-            <h1>Content Strategy</h1>
+            {self._section_header("Content Strategy")}
 
             <h2>Strategic Content Recommendations</h2>
             {strategy_html}
+
+            <div class="highlight-box success" style="margin-top: 25px;">
+                <div class="highlight-title">Content Pillars</div>
+                <p>Build topical authority by creating comprehensive content pillars around your core topics.
+                Each pillar should link to related cluster content to maximize internal linking value.</p>
+            </div>
         </div>
         """
 
@@ -644,15 +723,13 @@ class ReportBuilder:
     # =========================================================================
 
     def _build_technical_analysis(self, analysis_data: Dict, analysis_result: Any) -> str:
-        """Build technical SEO analysis."""
+        """Build technical SEO analysis with visual scores."""
         phase1 = analysis_data.get("phase1_foundation", {})
-        phase4 = analysis_data.get("phase4_ai_technical", {})
         technical = phase1.get("technical_baseline", {})
 
-        # Track data
-        has_technical = self.confidence.track("technical_baseline", "technical", "raw_data", bool(technical))
+        self.confidence.track("technical_baseline", "technical", "raw_data", bool(technical))
 
-        # Scores
+        # Scores (normalize to 0-1 if needed)
         perf = technical.get('performance_score') or 0
         access = technical.get('accessibility_score') or 0
         bp = technical.get('best_practices_score') or 0
@@ -663,41 +740,79 @@ class ReportBuilder:
         fid = technical.get('fid') or 'N/A'
         cls_val = technical.get('cls') or 'N/A'
 
-        if isinstance(lcp, (int, float)):
-            lcp = f"{lcp:.1f}s"
-        if isinstance(fid, (int, float)):
-            fid = f"{fid:.0f}ms"
-        if isinstance(cls_val, (int, float)):
-            cls_val = f"{cls_val:.3f}"
+        def format_cwv(val, suffix=""):
+            if isinstance(val, (int, float)):
+                return f"{val:.2f}{suffix}"
+            return str(val)
 
-        def status(score):
+        def score_to_class(score):
             if score >= 0.9:
-                return "✓ Good"
+                return "excellent"
+            elif score >= 0.7:
+                return "good"
             elif score >= 0.5:
-                return "⚠ Needs Work"
-            else:
-                return "✗ Poor"
+                return "fair"
+            return "poor"
 
         return f"""
         <div class="page">
-            <h1>Technical SEO Analysis</h1>
+            {self._section_header("Technical SEO Analysis")}
 
-            <h2>Lighthouse Scores</h2>
-            <table>
-                <tr><th>Metric</th><th>Score</th><th>Status</th></tr>
-                <tr><td>Performance</td><td>{perf:.0%}</td><td>{status(perf)}</td></tr>
-                <tr><td>Accessibility</td><td>{access:.0%}</td><td>{status(access)}</td></tr>
-                <tr><td>Best Practices</td><td>{bp:.0%}</td><td>{status(bp)}</td></tr>
-                <tr><td>SEO</td><td>{seo:.0%}</td><td>{status(seo)}</td></tr>
-            </table>
+            <h2>Performance Scores</h2>
+            <div class="metric-grid">
+                <div class="metric-card">
+                    <div class="value {score_to_class(perf)}">{perf:.0%}</div>
+                    <div class="label">Performance</div>
+                    {self._progress_bar(perf * 100, 100)}
+                </div>
+                <div class="metric-card">
+                    <div class="value {score_to_class(access)}">{access:.0%}</div>
+                    <div class="label">Accessibility</div>
+                    {self._progress_bar(access * 100, 100)}
+                </div>
+                <div class="metric-card">
+                    <div class="value {score_to_class(bp)}">{bp:.0%}</div>
+                    <div class="label">Best Practices</div>
+                    {self._progress_bar(bp * 100, 100)}
+                </div>
+                <div class="metric-card">
+                    <div class="value {score_to_class(seo)}">{seo:.0%}</div>
+                    <div class="label">SEO</div>
+                    {self._progress_bar(seo * 100, 100)}
+                </div>
+            </div>
 
             <h2>Core Web Vitals</h2>
             <table>
-                <tr><th>Metric</th><th>Value</th><th>Good</th><th>Needs Work</th></tr>
-                <tr><td>LCP (Largest Contentful Paint)</td><td>{lcp}</td><td>&lt; 2.5s</td><td>&gt; 4.0s</td></tr>
-                <tr><td>FID (First Input Delay)</td><td>{fid}</td><td>&lt; 100ms</td><td>&gt; 300ms</td></tr>
-                <tr><td>CLS (Cumulative Layout Shift)</td><td>{cls_val}</td><td>&lt; 0.1</td><td>&gt; 0.25</td></tr>
+                <thead>
+                    <tr><th>Metric</th><th>Value</th><th>Target (Good)</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>LCP</strong> (Largest Contentful Paint)</td>
+                        <td class="num">{format_cwv(lcp, 's') if isinstance(lcp, (int, float)) else lcp}</td>
+                        <td class="num">&lt; 2.5s</td>
+                        <td>{self._score_badge(0.9 if isinstance(lcp, (int, float)) and lcp < 2.5 else 0.5 if isinstance(lcp, (int, float)) and lcp < 4 else 0.3)}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>FID</strong> (First Input Delay)</td>
+                        <td class="num">{format_cwv(fid, 'ms') if isinstance(fid, (int, float)) else fid}</td>
+                        <td class="num">&lt; 100ms</td>
+                        <td>{self._score_badge(0.9 if isinstance(fid, (int, float)) and fid < 100 else 0.5 if isinstance(fid, (int, float)) and fid < 300 else 0.3)}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>CLS</strong> (Cumulative Layout Shift)</td>
+                        <td class="num">{format_cwv(cls_val)}</td>
+                        <td class="num">&lt; 0.1</td>
+                        <td>{self._score_badge(0.9 if isinstance(cls_val, (int, float)) and cls_val < 0.1 else 0.5 if isinstance(cls_val, (int, float)) and cls_val < 0.25 else 0.3)}</td>
+                    </tr>
+                </tbody>
             </table>
+
+            <div class="highlight-box warning" style="margin-top: 25px;">
+                <div class="highlight-title">Technical SEO Priority</div>
+                <p>Core Web Vitals are now a ranking factor. Focus on improving LCP and CLS for better user experience and search visibility.</p>
+            </div>
         </div>
         """
 
@@ -710,22 +825,22 @@ class ReportBuilder:
         phase4 = analysis_data.get("phase4_ai_technical", {})
         ai_visibility = phase4.get("ai_visibility", {})
 
-        # Track data
-        has_ai_data = self.confidence.track("ai_visibility_data", "ai_visibility", "raw_data", bool(ai_visibility))
+        self.confidence.track("ai_visibility_data", "ai_visibility", "raw_data", bool(ai_visibility))
 
-        # Extract metrics if available
         ai_score = ai_visibility.get("visibility_score") or ai_visibility.get("ai_visibility_score") or "N/A"
         mentions = ai_visibility.get("mention_count") or 0
 
         return f"""
         <div class="page">
-            <h1>AI Visibility Analysis</h1>
+            {self._section_header("AI Visibility & GEO")}
 
             <h2>Why AI Visibility Matters</h2>
-            <p>As AI-powered search (Google AI Overviews, ChatGPT, Perplexity) becomes more prevalent,
-            being cited in AI-generated responses is increasingly critical for brand visibility.</p>
+            <div class="highlight-box info">
+                <p>As AI-powered search (Google AI Overviews, ChatGPT, Perplexity, Claude) becomes more prevalent,
+                being cited in AI-generated responses is increasingly critical for brand visibility and traffic.</p>
+            </div>
 
-            <div class="metric-grid" style="grid-template-columns: repeat(2, 1fr);">
+            <div class="metric-grid metric-grid-2">
                 <div class="metric-card">
                     <div class="value">{ai_score}</div>
                     <div class="label">AI Visibility Score</div>
@@ -737,13 +852,21 @@ class ReportBuilder:
             </div>
 
             <h2>GEO (Generative Engine Optimization)</h2>
-            <p>To improve AI visibility, focus on:</p>
-            <ul>
-                <li>Creating comprehensive, factual content that AI can cite</li>
-                <li>Structuring content with clear headings and FAQ sections</li>
-                <li>Building topical authority in your niche</li>
-                <li>Implementing schema markup for entity recognition</li>
-            </ul>
+            <div class="roadmap-phase">
+                <h3>Key Optimization Strategies</h3>
+                <div class="roadmap-item">Create comprehensive, factual content that AI systems can confidently cite</div>
+                <div class="roadmap-item">Structure content with clear headings, FAQ sections, and schema markup</div>
+                <div class="roadmap-item">Build topical authority through content depth and internal linking</div>
+                <div class="roadmap-item">Implement structured data for enhanced entity recognition</div>
+                <div class="roadmap-item">Optimize for featured snippets and knowledge panels</div>
+            </div>
+
+            <div class="insight-box" style="margin-top: 25px;">
+                <h3>Future-Proof Your SEO</h3>
+                <p>Traditional SEO and GEO work together. Content optimized for search engines
+                is more likely to be cited by AI systems. Focus on E-E-A-T (Experience, Expertise,
+                Authoritativeness, Trustworthiness) to succeed in both paradigms.</p>
+            </div>
         </div>
         """
 
@@ -753,7 +876,6 @@ class ReportBuilder:
 
     def _build_strategic_roadmap(self, analysis_result: Any) -> str:
         """Build strategic roadmap from AI analysis."""
-        # Get Loop 2 strategy
         strategy = None
         if analysis_result:
             strategy = getattr(analysis_result, 'loop2_strategy', None)
@@ -763,17 +885,31 @@ class ReportBuilder:
         )
 
         if strategy and len(str(strategy)) > 100:
-            strategy_html = f'<div class="data-box">{html.escape(str(strategy)[:5000])}</div>'
+            strategy_html = f'''
+            <div class="ai-content">
+                <div class="ai-content-header">
+                    <span class="ai-badge">AI Analysis</span>
+                    <span style="color: #7c3aed; font-weight: 600;">Strategic Recommendations</span>
+                </div>
+                <div style="white-space: pre-wrap; line-height: 1.7;">{html.escape(str(strategy)[:5000])}</div>
+            </div>
+            '''
         else:
             self.confidence.track_fallback("strategic_roadmap", "roadmap", "missing")
             strategy_html = data_missing_html("AI Strategic Recommendations", "Strategic Roadmap")
 
         return f"""
         <div class="page">
-            <h1>Strategic Roadmap</h1>
+            {self._section_header("Strategic Roadmap")}
 
             <h2>AI-Generated Strategy</h2>
             {strategy_html}
+
+            <div class="cta-box" style="margin-top: 40px;">
+                <h3>Ready to Implement?</h3>
+                <p>Contact Authoricy to discuss how we can help execute this strategy
+                and drive measurable improvements in your organic search performance.</p>
+            </div>
         </div>
         """
 
@@ -784,32 +920,47 @@ class ReportBuilder:
     def _build_methodology(self, domain: str) -> str:
         """Build methodology section."""
         date = datetime.now().strftime("%B %d, %Y")
+        year = datetime.now().year
+
         return f"""
         <div class="page">
-            <h1>Methodology</h1>
+            {self._section_header("Methodology")}
 
             <h2>Data Sources</h2>
-            <ul>
-                <li><strong>Organic Rankings:</strong> DataForSEO API</li>
-                <li><strong>Backlink Data:</strong> DataForSEO Backlinks API</li>
-                <li><strong>Technical Audits:</strong> Lighthouse & On-Page Analysis</li>
-                <li><strong>AI Analysis:</strong> Claude AI (Anthropic)</li>
-            </ul>
-
-            <h2>Analysis Pipeline</h2>
             <table>
-                <tr><th>Phase</th><th>Description</th></tr>
-                <tr><td>Data Collection</td><td>60+ API endpoints across 4 phases</td></tr>
-                <tr><td>Quality Validation</td><td>Data quality scoring before AI analysis</td></tr>
-                <tr><td>AI Analysis</td><td>4-loop analysis architecture</td></tr>
-                <tr><td>Report Generation</td><td>Confidence-tracked report building</td></tr>
+                <thead>
+                    <tr><th>Data Type</th><th>Source</th><th>Coverage</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>Organic Rankings</td><td>DataForSEO API</td><td>Real-time SERP data</td></tr>
+                    <tr><td>Backlink Data</td><td>DataForSEO Backlinks API</td><td>Web-scale link index</td></tr>
+                    <tr><td>Technical Audits</td><td>Lighthouse & On-Page Analysis</td><td>Full site crawl</td></tr>
+                    <tr><td>AI Analysis</td><td>Claude AI (Anthropic)</td><td>Strategic insights</td></tr>
+                </tbody>
             </table>
 
-            <h2>Data Freshness</h2>
-            <p>Data collected on {date}. Rankings and traffic estimates may fluctuate.</p>
+            <h2>Analysis Pipeline</h2>
+            <div class="roadmap-phase">
+                <div class="roadmap-item"><span class="phase-badge">Phase 1</span> Foundation data collection (domain overview, backlinks, competitors)</div>
+                <div class="roadmap-item"><span class="phase-badge">Phase 2</span> Keyword intelligence (rankings, gaps, opportunities)</div>
+                <div class="roadmap-item"><span class="phase-badge">Phase 3</span> Competitive deep-dive (SERP analysis, content gaps)</div>
+                <div class="roadmap-item"><span class="phase-badge">Phase 4</span> Technical & AI visibility assessment</div>
+                <div class="roadmap-item"><span class="phase-badge">AI Loop</span> 4-stage AI analysis with quality validation</div>
+            </div>
 
-            <div class="confidential" style="margin-top: 40px; text-align: center;">
-                © {datetime.now().year} Authoricy. All rights reserved.
+            <h2>Report Confidence</h2>
+            <div class="highlight-box">
+                <div class="highlight-title">Data Quality Score: {self.confidence.confidence_score:.0f}%</div>
+                <p>This report's confidence level is <strong>{self.confidence.confidence_level}</strong>.
+                Confidence is calculated based on data completeness, freshness, and AI analysis quality.</p>
+            </div>
+
+            <div style="margin-top: 50px; text-align: center; color: #94a3b8;">
+                <p>Data collected on {date}</p>
+                <p style="margin-top: 30px; font-size: 9pt;">
+                    &copy; {year} Authoricy. All rights reserved.<br>
+                    This report is confidential and intended solely for the recipient.
+                </p>
             </div>
         </div>
         """
