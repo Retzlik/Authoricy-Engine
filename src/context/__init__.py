@@ -2,17 +2,23 @@
 Context Intelligence Package
 
 Provides pre-collection intelligence gathering for SEO analysis:
+- Market detection from website signals (NEW - Phase 1)
 - Website analysis to understand the business
 - Competitor discovery and classification
 - Market validation and opportunity discovery
 - Business profiling and goal alignment
 
 Usage:
-    from src.context import gather_context_intelligence, PrimaryGoal
+    from src.context import detect_market, gather_context_intelligence, PrimaryGoal
 
+    # Phase 1: Detect market from website signals
+    detection = await detect_market("example.com")
+    print(f"Detected: {detection.primary.name} ({detection.primary.confidence:.0%})")
+
+    # Phase 2+: Full context intelligence
     result = await gather_context_intelligence(
         domain="example.com",
-        primary_market="se",
+        primary_market=detection.primary.code,  # Use detected market
         primary_goal=PrimaryGoal.LEADS,
         known_competitors=["competitor1.com", "competitor2.com"],
     )
@@ -20,6 +26,28 @@ Usage:
     # Use result.collection_config for focused data collection
     # Use result.to_analysis_context() for enhanced analysis prompts
 """
+
+# Market detection (Phase 1)
+from .market_detection import (
+    MarketDetector,
+    MarketSignal,
+    SignalKind,
+    DetectedMarket,
+    MarketDetectionResult,
+    detect_market,
+    MARKET_CONFIG,
+    SIGNAL_WEIGHTS,
+)
+
+# Market resolution (Phase 2)
+from .market_resolver import (
+    MarketResolver,
+    ResolvedMarket,
+    ResolutionSource,
+    ResolutionConfidence,
+    resolve_market,
+    normalize_market_input,
+)
 
 # Core models
 from .models import (
@@ -63,6 +91,22 @@ from .orchestrator import (
 
 
 __all__ = [
+    # Market detection (Phase 1)
+    "MarketDetector",
+    "MarketSignal",
+    "SignalKind",
+    "DetectedMarket",
+    "MarketDetectionResult",
+    "detect_market",
+    "MARKET_CONFIG",
+    "SIGNAL_WEIGHTS",
+    # Market resolution (Phase 2)
+    "MarketResolver",
+    "ResolvedMarket",
+    "ResolutionSource",
+    "ResolutionConfidence",
+    "resolve_market",
+    "normalize_market_input",
     # Enums
     "PrimaryGoal",
     "BusinessModel",

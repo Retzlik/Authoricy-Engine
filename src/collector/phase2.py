@@ -324,7 +324,10 @@ async def fetch_ranked_keywords(
     Returns keywords with: position, volume, CPC, URL, traffic
     """
     # DEBUG: Log the exact request parameters
-    logger.info(f"Fetching ranked keywords for {domain}: market={market}, language={language}, limit={limit}")
+    logger.info(
+        f"[MARKET DEBUG] ranked_keywords request: "
+        f"domain={domain}, market='{market}', language='{language}', limit={limit}"
+    )
 
     # Note: order_by removed - not supported by this endpoint
     result = await client.post(

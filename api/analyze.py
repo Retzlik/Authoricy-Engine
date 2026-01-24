@@ -106,8 +106,8 @@ class AnalysisRequest(BaseModel):
     company_name: Optional[str] = None
 
     # REQUIRED: Primary market and goal
-    primary_market: str = Field(
-        default="se",
+    primary_market: Optional[str] = Field(
+        default=None,
         description="Primary market code (e.g., 'se', 'us', 'de', 'uk')"
     )
     primary_goal: Literal["traffic", "leads", "authority", "balanced"] = Field(
@@ -132,7 +132,7 @@ class AnalysisRequest(BaseModel):
     # Legacy fields (for backwards compatibility)
     market: Optional[str] = Field(
         default=None,
-        description="[DEPRECATED] Use primary_market instead. Full market name for legacy support."
+        description="[DEPRECATED] Use primary_market instead. Accepts market code or full name."
     )
     language: Optional[str] = Field(
         default=None,
@@ -143,6 +143,56 @@ class AnalysisRequest(BaseModel):
     skip_ai_analysis: bool = False
     skip_context_intelligence: bool = False  # Skip the context gathering phase
     priority: str = "normal"  # normal, high
+
+    def get_resolved_market(self) -> str:
+        """
+        Resolve market from primary_market or legacy market field.
+
+        Handles:
+        - primary_market: "uk", "us", "se", etc.
+        - market (legacy): "uk", "United Kingdom", "UK", etc.
+
+        Returns lowercase market code, defaults to "us" if nothing provided.
+        """
+        # Market name to code mapping (for legacy full names)
+        MARKET_NAME_TO_CODE = {
+            "united states": "us", "usa": "us", "america": "us",
+            "united kingdom": "uk", "britain": "uk", "great britain": "uk", "england": "uk",
+            "sweden": "se", "sverige": "se",
+            "germany": "de", "deutschland": "de",
+            "france": "fr",
+            "norway": "no", "norge": "no",
+            "denmark": "dk", "danmark": "dk",
+            "finland": "fi", "suomi": "fi",
+            "netherlands": "nl", "holland": "nl",
+            "spain": "es", "españa": "es",
+            "italy": "it", "italia": "it",
+            "australia": "au",
+            "canada": "ca",
+        }
+
+        # Valid market codes
+        VALID_CODES = {"us", "uk", "se", "de", "fr", "no", "dk", "fi", "nl", "es", "it", "au", "ca", "global"}
+
+        # Try primary_market first
+        if self.primary_market:
+            code = self.primary_market.lower().strip()
+            if code in VALID_CODES:
+                return code
+            # Maybe it's a full name
+            if code in MARKET_NAME_TO_CODE:
+                return MARKET_NAME_TO_CODE[code]
+
+        # Fall back to legacy market field
+        if self.market:
+            code = self.market.lower().strip()
+            if code in VALID_CODES:
+                return code
+            if code in MARKET_NAME_TO_CODE:
+                return MARKET_NAME_TO_CODE[code]
+
+        # Default to US (most common, English)
+        return "us"
 
 
 class AnalysisResponse(BaseModel):
@@ -249,6 +299,17 @@ async def run_migration():
         "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS seo_competitors_count INTEGER DEFAULT 0",
         "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS emerging_threats_count INTEGER DEFAULT 0",
         "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS context_confidence FLOAT",
+        # Phase 5: Resolved market columns (single source of truth)
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_market_code VARCHAR(10)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_market_name VARCHAR(100)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_location_code INTEGER",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_language_code VARCHAR(10)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_language_name VARCHAR(50)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_market_source VARCHAR(30)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_market_confidence VARCHAR(20)",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_detection_confidence FLOAT",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_has_conflict BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_conflict_details TEXT",
     ]
 
     # Enum migrations - PostgreSQL enum ADD VALUE can't be in transaction
@@ -327,20 +388,23 @@ async def trigger_analysis(
     domain = request.domain.lower().strip()
     domain = domain.replace("https://", "").replace("http://", "")
     domain = domain.replace("www.", "").rstrip("/")
-    
+
+    # Resolve market (handles legacy field mapping)
+    resolved_market = request.get_resolved_market()
+
     # Generate job ID
     job_id = str(uuid.uuid4())[:8]
-    
+
     # Create job status
     jobs[job_id] = JobStatus(
         job_id=job_id,
         domain=domain,
         status="pending",
     )
-    
+
     logger.info(
         f"Analysis requested: {domain} -> {request.email} (job: {job_id}), "
-        f"goal={request.primary_goal}, market={request.primary_market}"
+        f"goal={request.primary_goal}, market={resolved_market}"
     )
 
     # Add background task
@@ -350,15 +414,15 @@ async def trigger_analysis(
         domain=domain,
         email=request.email,
         company_name=request.company_name or domain.split(".")[0],
-        primary_market=request.primary_market,
+        primary_market=resolved_market,
         primary_goal=request.primary_goal,
         primary_language=request.primary_language,
         secondary_markets=request.secondary_markets,
         known_competitors=request.known_competitors,
         skip_ai_analysis=request.skip_ai_analysis,
         skip_context_intelligence=request.skip_context_intelligence,
-        # Legacy support
-        market=request.market,
+        # Legacy support (for language only now)
+        market=None,  # Already resolved above
         language=request.language,
     )
     
@@ -562,43 +626,87 @@ async def run_analysis(
             orchestrator = DataCollectionOrchestrator(client)
 
             # Determine collection config based on context
-            if context_result and context_result.collection_config:
-                # Use intelligent collection config
+            if context_result and context_result.resolved_market:
+                # Use resolved market directly - already has full names for DataForSEO
+                rm = context_result.resolved_market
+                market_full = rm.location_name  # "United Kingdom", "United States", etc.
+                language_full = rm.language_name  # "English", "Swedish", etc.
+
+                logger.info(
+                    f"[{job_id}] Using ResolvedMarket: {rm.code} ({rm.name}) "
+                    f"[source={rm.source.value}, confidence={rm.confidence.value}]"
+                )
+
+                if rm.has_conflict:
+                    logger.warning(f"[{job_id}] Market conflict: {rm.conflict_details}")
+
+            elif context_result and context_result.collection_config:
+                # Fallback to collection_config (legacy path)
                 config = context_result.collection_config
                 collection_market = config.primary_market
                 collection_language = config.primary_language
+
+                logger.info(
+                    f"[{job_id}] Context Intelligence market: '{collection_market}', "
+                    f"language: '{collection_language}'"
+                )
 
                 # Map market code to full name for DataForSEO
                 market_names = {
                     "se": "Sweden", "us": "United States", "de": "Germany",
                     "uk": "United Kingdom", "no": "Norway", "dk": "Denmark",
                     "fi": "Finland", "fr": "France", "nl": "Netherlands",
+                    "es": "Spain", "it": "Italy", "au": "Australia", "ca": "Canada",
+                    "ie": "Ireland", "nz": "New Zealand",
                 }
                 language_names = {
                     "sv": "Swedish", "en": "English", "de": "German",
                     "no": "Norwegian", "da": "Danish", "fi": "Finnish",
-                    "fr": "French", "nl": "Dutch",
+                    "fr": "French", "nl": "Dutch", "es": "Spanish", "it": "Italian",
                 }
 
-                market_full = market_names.get(collection_market, "Sweden")
-                language_full = language_names.get(collection_language, "Swedish")
+                # Check if market is already a full name (legacy handling)
+                known_full_names = set(market_names.values())
+                if collection_market in known_full_names:
+                    market_full = collection_market
+                else:
+                    market_full = market_names.get(collection_market.lower(), "United States")
+
+                # Same for language
+                known_language_names = set(language_names.values())
+                if collection_language in known_language_names:
+                    language_full = collection_language
+                else:
+                    language_full = language_names.get(collection_language.lower(), "English")
             else:
                 # Fallback to provided values - use primary_market if legacy market not set
                 market_names_fallback = {
                     "se": "Sweden", "us": "United States", "de": "Germany",
                     "uk": "United Kingdom", "no": "Norway", "dk": "Denmark",
                     "fi": "Finland", "fr": "France", "nl": "Netherlands",
+                    "es": "Spain", "it": "Italy", "au": "Australia", "ca": "Canada",
                 }
                 language_names_fallback = {
                     "sv": "Swedish", "en": "English", "de": "German",
                     "no": "Norwegian", "da": "Danish", "fi": "Finnish",
-                    "fr": "French", "nl": "Dutch",
+                    "fr": "French", "nl": "Dutch", "es": "Spanish", "it": "Italian",
                 }
-                market_full = market or market_names_fallback.get(primary_market, "Sweden")
-                language_full = language or language_names_fallback.get(primary_language or "sv", "Swedish")
+                market_full = market or market_names_fallback.get(primary_market, "United States")
+                language_full = language or language_names_fallback.get(primary_language or "en", "English")
 
             # Run data collection (Phase 1-4: 60 endpoints)
-            logger.info(f"[{job_id}] Phase 1-4: Collecting data from DataForSEO...")
+            logger.info(
+                f"[{job_id}] Phase 1-4: Collecting data from DataForSEO... "
+                f"MARKET='{market_full}' LANGUAGE='{language_full}'"
+            )
+
+            # Validate market is a full name, not a code
+            if len(market_full) <= 3:
+                logger.error(
+                    f"[{job_id}] CRITICAL: Market '{market_full}' appears to be a code, not a full name! "
+                    f"This will cause wrong data. Expected: 'United Kingdom', 'United States', etc."
+                )
+
             result = await orchestrator.collect(CollectionConfig(
                 domain=domain,
                 market=market_full,

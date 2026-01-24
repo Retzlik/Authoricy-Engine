@@ -22,6 +22,8 @@ from .models import (
     IntelligentCollectionConfig,
     PrimaryGoal,
 )
+from .market_detection import MarketDetector, MarketDetectionResult
+from .market_resolver import MarketResolver, ResolvedMarket, resolve_market
 from .website_analyzer import WebsiteAnalyzer
 from .competitor_discovery import CompetitorDiscovery
 from .market_validator import MarketValidator
@@ -105,6 +107,8 @@ class ContextIntelligenceOrchestrator:
         self.dataforseo_client = dataforseo_client
 
         # Initialize agents
+        self.market_detector = MarketDetector(timeout=10.0)
+        self.market_resolver = MarketResolver()
         self.website_analyzer = WebsiteAnalyzer(claude_client)
         self.competitor_discovery = CompetitorDiscovery(claude_client, dataforseo_client)
         self.market_validator = MarketValidator(claude_client, dataforseo_client)
@@ -137,8 +141,42 @@ class ContextIntelligenceOrchestrator:
         result = ContextIntelligenceResult(domain=request.domain)
 
         try:
-            # Phase 1: Website Analysis (runs first, other phases depend on it)
-            logger.info("Phase 1: Analyzing website...")
+            # Phase 0: Market Detection (detect market from website signals)
+            logger.info("Phase 0: Detecting market from website signals...")
+            result.market_detection = await self.market_detector.detect(request.domain)
+
+            if result.market_detection and result.market_detection.primary:
+                md = result.market_detection
+                logger.info(
+                    f"Market detection complete: {md.primary.code} ({md.primary.name}) "
+                    f"confidence={md.primary.confidence:.0%}, "
+                    f"needs_confirmation={md.needs_confirmation}, "
+                    f"is_multi_market={md.is_multi_market_site}"
+                )
+
+            # Phase 1: Market Resolution (merge user input + detection)
+            logger.info("Phase 1: Resolving market...")
+            result.resolved_market = self.market_resolver.resolve(
+                user_market=request.primary_market,
+                detection_result=result.market_detection,
+            )
+
+            # Log resolution result
+            rm = result.resolved_market
+            logger.info(
+                f"Market resolved: {rm.code} ({rm.name}) "
+                f"[source={rm.source.value}, confidence={rm.confidence.value}]"
+            )
+
+            if rm.has_conflict:
+                result.warnings.append(rm.conflict_details)
+                logger.warning(f"Market conflict: {rm.conflict_details}")
+
+            # Use resolved market code for downstream phases
+            effective_market = rm.code
+
+            # Phase 2: Website Analysis
+            logger.info("Phase 2: Analyzing website...")
             result.website_analysis = await self.website_analyzer.analyze(request.domain)
 
             if result.website_analysis:
@@ -147,20 +185,20 @@ class ContextIntelligenceOrchestrator:
                     f"confidence={result.website_analysis.analysis_confidence:.2f}"
                 )
 
-            # Phase 2 & 3: Run competitor discovery and market validation in parallel
-            logger.info("Phase 2 & 3: Discovering competitors and validating market (parallel)...")
+            # Phase 3 & 4: Run competitor discovery and market validation in parallel
+            logger.info("Phase 3 & 4: Discovering competitors and validating market (parallel)...")
 
             competitor_task = self.competitor_discovery.discover_and_validate(
                 domain=request.domain,
                 website_analysis=result.website_analysis,
                 user_provided_competitors=request.known_competitors,
                 dataforseo_competitors=dataforseo_competitors,
-                market=request.primary_market,
+                market=effective_market,  # Use resolved market
             )
 
             market_task = self.market_validator.validate_and_discover(
                 domain=request.domain,
-                declared_market=request.primary_market,
+                declared_market=effective_market,  # Use resolved market
                 declared_language=request.primary_language,
                 secondary_markets=request.secondary_markets,
                 website_analysis=result.website_analysis,
@@ -185,8 +223,8 @@ class ContextIntelligenceOrchestrator:
                     f"opportunities={len(result.market_validation.discovered_opportunities)}"
                 )
 
-            # Phase 4: Business profiling (synthesizes all previous phases)
-            logger.info("Phase 4: Profiling business context...")
+            # Phase 5: Business profiling (synthesizes all previous phases)
+            logger.info("Phase 5: Profiling business context...")
             result.business_context = await self.business_profiler.profile(
                 domain=request.domain,
                 stated_goal=request.primary_goal,
@@ -206,10 +244,18 @@ class ContextIntelligenceOrchestrator:
             result.collection_config = self._generate_collection_config(
                 request=request,
                 result=result,
+                effective_market=effective_market,
+            )
+
+            logger.info(
+                f"Collection config generated: market='{result.collection_config.primary_market}', "
+                f"language='{result.collection_config.primary_language}'"
             )
 
             # Calculate overall confidence
             confidences = []
+            if result.market_detection and result.market_detection.primary:
+                confidences.append(result.market_detection.primary.confidence)
             if result.website_analysis:
                 confidences.append(result.website_analysis.analysis_confidence)
             if result.business_context:
@@ -243,18 +289,26 @@ class ContextIntelligenceOrchestrator:
         self,
         request: ContextIntelligenceRequest,
         result: ContextIntelligenceResult,
+        effective_market: str = "",
     ) -> IntelligentCollectionConfig:
         """Generate the intelligent collection configuration."""
-        # Derive default language from market if not specified
-        market_languages = {
-            "se": "sv", "us": "en", "uk": "en", "de": "de",
-            "no": "no", "dk": "da", "fi": "fi", "fr": "fr", "nl": "nl",
-        }
-        default_language = market_languages.get(request.primary_market.lower(), "en")
+        # Use resolved market as single source of truth
+        if result.resolved_market:
+            primary_market = result.resolved_market.code
+            default_language = result.resolved_market.language_code
+        else:
+            # Fallback (shouldn't happen if resolver ran)
+            primary_market = effective_market or request.primary_market or "us"
+            market_languages = {
+                "se": "sv", "us": "en", "uk": "en", "de": "de",
+                "no": "no", "dk": "da", "fi": "fi", "fr": "fr", "nl": "nl",
+                "au": "en", "ca": "en", "ie": "en", "nz": "en",
+            }
+            default_language = market_languages.get(primary_market.lower(), "en")
 
         config = IntelligentCollectionConfig(
             domain=request.domain,
-            primary_market=request.primary_market,
+            primary_market=primary_market,
             primary_language=request.primary_language or default_language,
             primary_goal=request.primary_goal,
             business_context=result.business_context,

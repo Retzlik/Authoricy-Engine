@@ -104,6 +104,7 @@ CLASSIFICATION_USER_PROMPT = """Classify these potential competitors for the tar
 - Industry: {industry}
 - Offerings: {offerings}
 - Target Audience: {target_audience}
+- **Target Market: {target_market}** (this is the market/country we're analyzing)
 
 ## Potential Competitors to Classify:
 
@@ -116,9 +117,15 @@ IMPORTANT: Be STRICT about classification. Ask yourself for each domain:
 2. Would customers consider this as an alternative? If NO → NOT_COMPETITOR
 3. Is it a generic utility (dictionary, testing platform, government)? → NOT_COMPETITOR
 4. Is it truly in the same industry/vertical? If NO → NOT_COMPETITOR
+5. **Does this competitor actually operate in or target {target_market}?** If a competitor only operates in a completely different market (e.g., US-only competitor for UK analysis), consider lowering their threat level or marking as NOT_COMPETITOR.
 
-Only classify as DIRECT if they genuinely compete for the same customers.
+Only classify as DIRECT if they genuinely compete for the same customers IN THE TARGET MARKET.
 Only classify as SEO if they're in the same industry but different business model.
+
+**Market-specific guidance:**
+- Competitors with country-specific TLDs matching the target market (e.g., .co.uk for UK) are more likely to be relevant
+- Global brands that operate in {target_market} should still be classified normally
+- Competitors that ONLY operate in other markets should be NOT_COMPETITOR or have LOW threat level
 
 For EACH competitor, return a JSON object in this array:
 ```json
@@ -374,12 +381,13 @@ class CompetitorDiscovery:
             logger.warning(f"No competitors found for {domain}")
             return result
 
-        # 4. Classify all competitors using AI
+        # 4. Classify all competitors using AI (with market context)
         if self.claude_client and website_analysis:
             classifications = await self._classify_competitors(
                 domain=domain,
                 website_analysis=website_analysis,
                 competitors=list(all_competitors.values()),
+                market=market,
             )
 
             # Process classifications
@@ -546,24 +554,66 @@ class CompetitorDiscovery:
         }
         return market_languages.get(market.lower(), "en")
 
+    def _get_market_tld_hint(self, domain: str, market: str) -> str:
+        """Get market relevance hint based on TLD."""
+        # TLDs that indicate specific markets
+        market_tlds = {
+            "uk": [".co.uk", ".uk"],
+            "us": [".com", ".us"],
+            "se": [".se"],
+            "de": [".de"],
+            "fr": [".fr"],
+            "no": [".no"],
+            "dk": [".dk"],
+            "fi": [".fi"],
+            "nl": [".nl"],
+            "au": [".com.au", ".au"],
+            "ca": [".ca"],
+        }
+
+        domain_lower = domain.lower()
+        target_tlds = market_tlds.get(market.lower(), [])
+
+        # Check if TLD matches target market
+        for tld in target_tlds:
+            if domain_lower.endswith(tld):
+                return f"[LOCAL to {market.upper()}]"
+
+        # Check if TLD suggests a DIFFERENT market
+        for other_market, other_tlds in market_tlds.items():
+            if other_market != market.lower():
+                for tld in other_tlds:
+                    if domain_lower.endswith(tld) and tld != ".com":
+                        return f"[TLD suggests {other_market.upper()}, not {market.upper()}]"
+
+        # .com is global/neutral
+        if domain_lower.endswith(".com"):
+            return "[GLOBAL - .com]"
+
+        return ""
+
     async def _classify_competitors(
         self,
         domain: str,
         website_analysis: WebsiteAnalysis,
         competitors: List[Dict[str, Any]],
+        market: str = "us",
     ) -> List[Dict[str, Any]]:
-        """Use AI to classify competitors."""
+        """Use AI to classify competitors with market context."""
         if not self.claude_client:
             return []
 
-        # Format competitors list for prompt
+        # Format competitors list for prompt with market hints
         competitors_text = ""
         for i, comp in enumerate(competitors, 1):
             comp_domain = comp.get("domain", "unknown")
             source = comp.get("source", DiscoveryMethod.DATAFORSEO_SUGGESTED)
             metrics = comp.get("metrics", {})
 
-            competitors_text += f"\n{i}. **{comp_domain}**\n"
+            # Add market relevance hint based on TLD
+            market_hint = self._get_market_tld_hint(comp_domain, market)
+
+            competitors_text += f"\n{i}. **{comp_domain}** {market_hint}\n"
             competitors_text += f"   - Source: {source.value if isinstance(source, DiscoveryMethod) else source}\n"
 
             if metrics:
@@ -576,6 +626,14 @@ class CompetitorDiscovery:
             o.name for o in website_analysis.offerings
         ]) if website_analysis.offerings else "Unknown"
 
+        # Convert market code to readable name
+        market_names = {
+            "us": "United States", "uk": "United Kingdom", "se": "Sweden",
+            "de": "Germany", "fr": "France", "no": "Norway", "dk": "Denmark",
+            "fi": "Finland", "nl": "Netherlands", "au": "Australia", "ca": "Canada",
+        }
+        target_market_name = market_names.get(market.lower(), market)
+
         try:
             prompt = CLASSIFICATION_USER_PROMPT.format(
                 domain=domain,
@@ -584,6 +642,7 @@ class CompetitorDiscovery:
                 offerings=offerings_text,
                 target_audience=json.dumps(website_analysis.target_audience),
                 competitors_list=competitors_text,
+                target_market=target_market_name,
             )
 
             response = await self.claude_client.analyze_with_retry(

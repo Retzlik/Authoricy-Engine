@@ -1337,6 +1337,17 @@ def store_context_intelligence(
             declared_language=context_result.market_validation.declared_language if context_result.market_validation else None,
             declared_goal=context_result.business_context.primary_goal.value if context_result.business_context and context_result.business_context.primary_goal else None,
             user_provided_competitors=context_result.competitor_validation.user_provided if context_result.competitor_validation else [],
+            # Resolved market (Phase 2 - single source of truth)
+            resolved_market_code=context_result.resolved_market.code if context_result.resolved_market else None,
+            resolved_market_name=context_result.resolved_market.name if context_result.resolved_market else None,
+            resolved_location_code=context_result.resolved_market.location_code if context_result.resolved_market else None,
+            resolved_language_code=context_result.resolved_market.language_code if context_result.resolved_market else None,
+            resolved_language_name=context_result.resolved_market.language_name if context_result.resolved_market else None,
+            resolved_market_source=context_result.resolved_market.source.value if context_result.resolved_market else None,
+            resolved_market_confidence=context_result.resolved_market.confidence.value if context_result.resolved_market else None,
+            resolved_detection_confidence=context_result.resolved_market.detection_confidence if context_result.resolved_market else None,
+            resolved_has_conflict=context_result.resolved_market.has_conflict if context_result.resolved_market else False,
+            resolved_conflict_details=context_result.resolved_market.conflict_details if context_result.resolved_market else None,
             # Website analysis
             detected_business_model=context_result.website_analysis.business_model.value if context_result.website_analysis and context_result.website_analysis.business_model else None,
             detected_company_stage=context_result.website_analysis.company_stage.value if context_result.website_analysis and context_result.website_analysis.company_stage else None,
@@ -1512,4 +1523,17 @@ def get_context_intelligence(domain: str) -> Optional[Dict[str, Any]]:
             "seo_competitors_count": context.seo_competitors_count,
             "overall_confidence": context.overall_confidence,
             "created_at": context.created_at.isoformat() if context.created_at else None,
+            # Resolved market (Phase 2)
+            "resolved_market": {
+                "code": context.resolved_market_code,
+                "name": context.resolved_market_name,
+                "location_code": context.resolved_location_code,
+                "language_code": context.resolved_language_code,
+                "language_name": context.resolved_language_name,
+                "source": context.resolved_market_source,
+                "confidence": context.resolved_market_confidence,
+                "detection_confidence": context.resolved_detection_confidence,
+                "has_conflict": context.resolved_has_conflict,
+                "conflict_details": context.resolved_conflict_details,
+            } if context.resolved_market_code else None,
         }

@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 class CollectionConfig:
     """Configuration for data collection."""
     domain: str
-    market: str = "Sweden"
-    language: str = "Swedish"  # FIXED: was "sv" - must be full name like "Swedish", "English"
+    market: str = "United States"  # Default to US (English, most common)
+    language: str = "English"  # Must be full name like "Swedish", "English" (not code like "sv", "en")
     brand_name: Optional[str] = None
     industry: str = "General"
     competitors: Optional[List[str]] = None
@@ -38,6 +38,23 @@ class CollectionConfig:
     skip_technical_audits: bool = False
     skip_phases: Optional[List[int]] = None
     early_termination_threshold: int = 10  # Min keywords to continue
+
+    def __post_init__(self):
+        """Validate configuration after initialization."""
+        # Validate market is a full name, not a code
+        if len(self.market) <= 3:
+            logger.error(
+                f"[CONFIG ERROR] Market '{self.market}' appears to be a code, not a full name! "
+                f"DataForSEO requires full names like 'United Kingdom', 'United States'. "
+                f"This WILL cause wrong data to be returned!"
+            )
+
+        # Validate language is a full name, not a code
+        if len(self.language) <= 3:
+            logger.error(
+                f"[CONFIG ERROR] Language '{self.language}' appears to be a code, not a full name! "
+                f"DataForSEO requires full names like 'English', 'Swedish'."
+            )
 
 
 @dataclass
@@ -167,6 +184,22 @@ class DataCollectionOrchestrator:
         skip = config.skip_phases or []
         errors = []
         warnings = []
+
+        # Log market parameters prominently for debugging
+        logger.info(
+            f"[MARKET] Starting collection: domain={config.domain}, "
+            f"market='{config.market}', language='{config.language}'"
+        )
+
+        # Add warning if market/language look like codes (should be full names)
+        if len(config.market) <= 3 or len(config.language) <= 3:
+            warning_msg = (
+                f"CRITICAL: Market/language may be codes instead of full names! "
+                f"market='{config.market}', language='{config.language}'. "
+                f"DataForSEO expects 'United Kingdom' not 'uk', 'English' not 'en'."
+            )
+            logger.error(warning_msg)
+            warnings.append(warning_msg)
 
         logger.info(f"Starting collection for {config.domain}")
 
