@@ -258,13 +258,14 @@ class DataCollectionOrchestrator:
         if 2 not in skip:
             try:
                 from src.collector.phase2 import collect_keyword_data
-                logger.info("Phase 2: Collecting keyword data...")
+                logger.info(f"Phase 2: Collecting keyword data (max_seed_keywords={config.max_seed_keywords})...")
                 keywords_data = await collect_keyword_data(
                     self.client,
                     config.domain,
                     config.market,
                     config.language,
-                    seed_keywords=self._extract_seed_keywords(foundation)
+                    seed_keywords=self._extract_seed_keywords(foundation),
+                    max_seed_keywords=config.max_seed_keywords,
                 )
             except ImportError:
                 warnings.append("Phase 2 module not available, skipping...")

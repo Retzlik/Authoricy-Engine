@@ -144,6 +144,15 @@ class AnalysisRequest(BaseModel):
     skip_context_intelligence: bool = False  # Skip the context gathering phase
     priority: str = "normal"  # normal, high
 
+    # Data collection depth
+    max_seed_keywords: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description="Number of seed keywords for expansion. 5=fast/cheap, 20=balanced, 50=comprehensive. "
+                    "More seeds = broader keyword universe, better topic clusters, higher API cost."
+    )
+
     def get_resolved_market(self) -> str:
         """
         Resolve market from primary_market or legacy market field.
@@ -421,6 +430,7 @@ async def trigger_analysis(
         known_competitors=request.known_competitors,
         skip_ai_analysis=request.skip_ai_analysis,
         skip_context_intelligence=request.skip_context_intelligence,
+        max_seed_keywords=request.max_seed_keywords,
         # Legacy support (for language only now)
         market=None,  # Already resolved above
         language=request.language,
@@ -460,6 +470,7 @@ async def run_analysis(
     known_competitors: Optional[List[str]],
     skip_ai_analysis: bool,
     skip_context_intelligence: bool,
+    max_seed_keywords: int = 5,
     # Legacy support
     market: Optional[str] = None,
     language: Optional[str] = None,
@@ -707,12 +718,15 @@ async def run_analysis(
                     f"This will cause wrong data. Expected: 'United Kingdom', 'United States', etc."
                 )
 
+            logger.info(f"[{job_id}] Using max_seed_keywords={max_seed_keywords} for keyword expansion")
+
             result = await orchestrator.collect(CollectionConfig(
                 domain=domain,
                 market=market_full,
                 language=language_full,
                 brand_name=company_name,
                 skip_ai_analysis=skip_ai_analysis,
+                max_seed_keywords=max_seed_keywords,
             ))
 
             if not result.success:
