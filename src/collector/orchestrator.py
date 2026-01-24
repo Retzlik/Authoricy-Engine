@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 class CollectionConfig:
     """Configuration for data collection."""
     domain: str
-    market: str = "Sweden"
-    language: str = "Swedish"  # FIXED: was "sv" - must be full name like "Swedish", "English"
+    market: str = "United States"  # Default to US (English, most common)
+    language: str = "English"  # Must be full name like "Swedish", "English" (not code like "sv", "en")
     brand_name: Optional[str] = None
     industry: str = "General"
     competitors: Optional[List[str]] = None
