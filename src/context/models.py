@@ -11,7 +11,10 @@ Defines all types used by the Context Intelligence layer for:
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .market_detection import MarketDetectionResult
 
 
 # =============================================================================
@@ -428,6 +431,9 @@ class ContextIntelligenceResult:
     """
     domain: str
 
+    # Market detection (Phase 0 - NEW)
+    market_detection: Optional["MarketDetectionResult"] = None
+
     # Website analysis
     website_analysis: Optional[WebsiteAnalysis] = None
 
@@ -461,11 +467,30 @@ class ContextIntelligenceResult:
         """
         context = {
             "domain": self.domain,
+            "market_detection": {},
             "business_context": {},
             "competitor_context": {},
             "market_context": {},
             "collection_focus": {},
         }
+
+        # Market detection (Phase 0)
+        if self.market_detection:
+            md = self.market_detection
+            context["market_detection"] = {
+                "detected_market": md.primary.code if md.primary else None,
+                "detected_market_name": md.primary.name if md.primary else None,
+                "confidence": md.primary.confidence if md.primary else 0,
+                "needs_confirmation": md.needs_confirmation,
+                "confirmation_reason": md.confirmation_reason,
+                "is_multi_market_site": md.is_multi_market_site,
+                "hreflang_markets": md.hreflang_markets,
+                "has_conflicts": md.has_conflicts,
+                "candidates": [
+                    {"code": c.code, "name": c.name, "confidence": c.confidence}
+                    for c in md.candidates[:3]
+                ] if md.candidates else [],
+            }
 
         # Business context
         if self.business_context:

@@ -22,6 +22,7 @@ from .models import (
     IntelligentCollectionConfig,
     PrimaryGoal,
 )
+from .market_detection import MarketDetector, MarketDetectionResult
 from .website_analyzer import WebsiteAnalyzer
 from .competitor_discovery import CompetitorDiscovery
 from .market_validator import MarketValidator
@@ -105,6 +106,7 @@ class ContextIntelligenceOrchestrator:
         self.dataforseo_client = dataforseo_client
 
         # Initialize agents
+        self.market_detector = MarketDetector(timeout=10.0)
         self.website_analyzer = WebsiteAnalyzer(claude_client)
         self.competitor_discovery = CompetitorDiscovery(claude_client, dataforseo_client)
         self.market_validator = MarketValidator(claude_client, dataforseo_client)
@@ -136,7 +138,49 @@ class ContextIntelligenceOrchestrator:
 
         result = ContextIntelligenceResult(domain=request.domain)
 
+        # Resolve effective market (user input takes priority, then detection)
+        effective_market = request.primary_market
+
         try:
+            # Phase 0: Market Detection (NEW - detect market from website signals)
+            logger.info("Phase 0: Detecting market from website signals...")
+            result.market_detection = await self.market_detector.detect(request.domain)
+
+            if result.market_detection:
+                md = result.market_detection
+                logger.info(
+                    f"Market detection complete: {md.primary.code} ({md.primary.name}) "
+                    f"confidence={md.primary.confidence:.0%}, "
+                    f"needs_confirmation={md.needs_confirmation}, "
+                    f"is_multi_market={md.is_multi_market_site}"
+                )
+
+                # Use detected market if:
+                # 1. User didn't provide explicit market (still has default)
+                # 2. Detection has high confidence
+                if not request.primary_market or request.primary_market.lower() in ["", "auto", "detect"]:
+                    if md.primary.confidence >= 0.6:
+                        effective_market = md.primary.code
+                        logger.info(f"Using detected market: {effective_market}")
+                    else:
+                        # Low confidence, default to US
+                        effective_market = "us"
+                        logger.info(f"Low confidence detection, defaulting to: {effective_market}")
+                else:
+                    # User explicitly provided market - validate against detection
+                    if md.primary.code != request.primary_market.lower():
+                        if md.primary.confidence > 0.8:
+                            logger.warning(
+                                f"User-provided market '{request.primary_market}' conflicts with "
+                                f"detected market '{md.primary.code}' (confidence: {md.primary.confidence:.0%})"
+                            )
+                            result.warnings.append(
+                                f"Detected market ({md.primary.name}) differs from selected market. "
+                                f"Detection confidence: {md.primary.confidence:.0%}"
+                            )
+                    # Always respect user's explicit choice
+                    effective_market = request.primary_market
+
             # Phase 1: Website Analysis (runs first, other phases depend on it)
             logger.info("Phase 1: Analyzing website...")
             result.website_analysis = await self.website_analyzer.analyze(request.domain)
@@ -155,12 +199,12 @@ class ContextIntelligenceOrchestrator:
                 website_analysis=result.website_analysis,
                 user_provided_competitors=request.known_competitors,
                 dataforseo_competitors=dataforseo_competitors,
-                market=request.primary_market,
+                market=effective_market,  # Use resolved market
             )
 
             market_task = self.market_validator.validate_and_discover(
                 domain=request.domain,
-                declared_market=request.primary_market,
+                declared_market=effective_market,  # Use resolved market
                 declared_language=request.primary_language,
                 secondary_markets=request.secondary_markets,
                 website_analysis=result.website_analysis,
@@ -206,10 +250,13 @@ class ContextIntelligenceOrchestrator:
             result.collection_config = self._generate_collection_config(
                 request=request,
                 result=result,
+                effective_market=effective_market,
             )
 
             # Calculate overall confidence
             confidences = []
+            if result.market_detection and result.market_detection.primary:
+                confidences.append(result.market_detection.primary.confidence)
             if result.website_analysis:
                 confidences.append(result.website_analysis.analysis_confidence)
             if result.business_context:
@@ -243,18 +290,26 @@ class ContextIntelligenceOrchestrator:
         self,
         request: ContextIntelligenceRequest,
         result: ContextIntelligenceResult,
+        effective_market: str = "",
     ) -> IntelligentCollectionConfig:
         """Generate the intelligent collection configuration."""
-        # Derive default language from market if not specified
-        market_languages = {
-            "se": "sv", "us": "en", "uk": "en", "de": "de",
-            "no": "no", "dk": "da", "fi": "fi", "fr": "fr", "nl": "nl",
-        }
-        default_language = market_languages.get(request.primary_market.lower(), "en")
+        # Use effective market (resolved from detection + user input)
+        primary_market = effective_market or request.primary_market or "us"
+
+        # Get language from market detection if available, otherwise derive from market
+        if result.market_detection and result.market_detection.primary:
+            default_language = result.market_detection.primary.language_code or "en"
+        else:
+            market_languages = {
+                "se": "sv", "us": "en", "uk": "en", "de": "de",
+                "no": "no", "dk": "da", "fi": "fi", "fr": "fr", "nl": "nl",
+                "au": "en", "ca": "en", "ie": "en", "nz": "en",
+            }
+            default_language = market_languages.get(primary_market.lower(), "en")
 
         config = IntelligentCollectionConfig(
             domain=request.domain,
-            primary_market=request.primary_market,
+            primary_market=primary_market,
             primary_language=request.primary_language or default_language,
             primary_goal=request.primary_goal,
             business_context=result.business_context,
