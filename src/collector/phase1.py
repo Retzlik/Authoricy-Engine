@@ -98,6 +98,19 @@ async def collect_foundation_data(
 async def fetch_domain_overview(client, domain: str, market: str, language: str) -> Dict:
     """Fetch current domain rank metrics."""
     try:
+        # CRITICAL: Log exact parameters being sent to DataForSEO
+        logger.info(
+            f"[MARKET DEBUG] domain_rank_overview request: "
+            f"domain={domain}, market='{market}', language='{language}'"
+        )
+
+        # Validate market/language are proper full names (not codes)
+        if len(market) <= 3:  # Likely a code like "uk", "us"
+            logger.warning(
+                f"[MARKET WARNING] Market appears to be a code ('{market}'), not a full name. "
+                f"DataForSEO expects full names like 'United Kingdom', 'United States'"
+            )
+
         result = await client.post(
             "dataforseo_labs/google/domain_rank_overview/live",
             [{
@@ -158,11 +171,26 @@ async def fetch_domain_overview(client, domain: str, market: str, language: str)
         organic = metrics.get("organic", {})
         paid = metrics.get("paid", {})
 
+        organic_traffic = organic.get("etv", 0)
+        organic_keywords = organic.get("count", 0)
+
         logger.info(
             f"Domain overview metrics for {domain}: "
-            f"keywords={organic.get('count')}, traffic={organic.get('etv')}, "
+            f"keywords={organic_keywords}, traffic={organic_traffic}, "
             f"paid_keywords={paid.get('count', 0)}"
         )
+
+        # Warn if traffic seems unusually low (could indicate wrong market)
+        if organic_keywords > 100 and organic_traffic < 50:
+            logger.warning(
+                f"[DATA QUALITY] Low traffic ({organic_traffic}) despite {organic_keywords} keywords. "
+                f"Check if market/language is correct for {domain}"
+            )
+        elif organic_traffic == 0 and organic_keywords > 0:
+            logger.warning(
+                f"[DATA QUALITY] Zero traffic with {organic_keywords} keywords for {domain}. "
+                f"Market might be wrong."
+            )
 
         return {
             "organic_keywords": organic.get("count", 0),

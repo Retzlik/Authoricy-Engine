@@ -621,12 +621,18 @@ async def run_analysis(
                 collection_market = config.primary_market
                 collection_language = config.primary_language
 
+                logger.info(
+                    f"[{job_id}] Context Intelligence market: '{collection_market}', "
+                    f"language: '{collection_language}'"
+                )
+
                 # Map market code to full name for DataForSEO
                 market_names = {
                     "se": "Sweden", "us": "United States", "de": "Germany",
                     "uk": "United Kingdom", "no": "Norway", "dk": "Denmark",
                     "fi": "Finland", "fr": "France", "nl": "Netherlands",
                     "es": "Spain", "it": "Italy", "au": "Australia", "ca": "Canada",
+                    "ie": "Ireland", "nz": "New Zealand",
                 }
                 language_names = {
                     "sv": "Swedish", "en": "English", "de": "German",
@@ -634,8 +640,19 @@ async def run_analysis(
                     "fr": "French", "nl": "Dutch", "es": "Spanish", "it": "Italian",
                 }
 
-                market_full = market_names.get(collection_market, "United States")
-                language_full = language_names.get(collection_language, "English")
+                # Check if market is already a full name (legacy handling)
+                known_full_names = set(market_names.values())
+                if collection_market in known_full_names:
+                    market_full = collection_market
+                else:
+                    market_full = market_names.get(collection_market.lower(), "United States")
+
+                # Same for language
+                known_language_names = set(language_names.values())
+                if collection_language in known_language_names:
+                    language_full = collection_language
+                else:
+                    language_full = language_names.get(collection_language.lower(), "English")
             else:
                 # Fallback to provided values - use primary_market if legacy market not set
                 market_names_fallback = {
@@ -653,7 +670,18 @@ async def run_analysis(
                 language_full = language or language_names_fallback.get(primary_language or "en", "English")
 
             # Run data collection (Phase 1-4: 60 endpoints)
-            logger.info(f"[{job_id}] Phase 1-4: Collecting data from DataForSEO...")
+            logger.info(
+                f"[{job_id}] Phase 1-4: Collecting data from DataForSEO... "
+                f"MARKET='{market_full}' LANGUAGE='{language_full}'"
+            )
+
+            # Validate market is a full name, not a code
+            if len(market_full) <= 3:
+                logger.error(
+                    f"[{job_id}] CRITICAL: Market '{market_full}' appears to be a code, not a full name! "
+                    f"This will cause wrong data. Expected: 'United Kingdom', 'United States', etc."
+                )
+
             result = await orchestrator.collect(CollectionConfig(
                 domain=domain,
                 market=market_full,

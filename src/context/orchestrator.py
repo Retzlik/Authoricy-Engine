@@ -253,6 +253,11 @@ class ContextIntelligenceOrchestrator:
                 effective_market=effective_market,
             )
 
+            logger.info(
+                f"Collection config generated: market='{result.collection_config.primary_market}', "
+                f"language='{result.collection_config.primary_language}'"
+            )
+
             # Calculate overall confidence
             confidences = []
             if result.market_detection and result.market_detection.primary:
