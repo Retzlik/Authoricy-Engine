@@ -72,6 +72,10 @@ app = FastAPI(
 from api.strategy import router as strategy_router
 app.include_router(strategy_router)
 
+# Include Dashboard Intelligence router
+from api.dashboard import router as dashboard_router
+app.include_router(dashboard_router)
+
 
 # ============================================================================
 # STARTUP - Initialize Database
