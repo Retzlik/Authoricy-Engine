@@ -1026,9 +1026,9 @@ Clicking [⚙️ Edit Competitors] opens modal:
 │ │ ┌──────────────────┐ │ │ │ 🎯 Software Comparison         │ │ │ AIO Ready:   ││
 │ │ │ ⚔️ PHASE 3       │ │ │ │    P2 • Phase 2 • 34 kws       │ │ │ [Yes ▼]      ││
 │ │ │ 89 hard kws      │ │ │ │    Winnability: 65% avg        │ │ │              ││
-│ │ │ [Expand]         │ │ │ └────────────────────────────────┘ │ │ Content      ││
-│ │ └──────────────────┘ │ │                                    │ │ Brief:       ││
-│ │                      │ │ [+ Add Thread]                     │ │ [Generate]   ││
+│ │ │ [Expand]         │ │ │ └────────────────────────────────┘ │ │              ││
+│ │ └──────────────────┘ │ │                                    │ │ Notes:       ││
+│ │                      │ │ [+ Add Thread]                     │ │ [Edit ✏️]    ││
 │ │ ──────────────────   │ │                                    │ │              ││
 │ │ ALL KEYWORDS         │ │                                    │ │              ││
 │ │ 234 total            │ │                                    │ │              ││
@@ -1659,8 +1659,7 @@ const canProceed = (state: CurationState) =>
 1. Three-panel layout
 2. Phase-aware keyword grouping (greenfield)
 3. Winnability display
-4. Content brief generator
-5. Export flow
+4. Export flow with Intelligence-Informed Custom Instructions
 
 ### Phase 6: Analysis Flow (Week 6)
 1. Analysis questionnaire
