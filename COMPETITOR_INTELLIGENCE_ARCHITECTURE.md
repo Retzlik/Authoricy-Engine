@@ -2426,8 +2426,19 @@ def validate_curation(
             suggestion=f"Remove {final_count - rules['max_keep']} more competitors"
         ))
 
-    # Check purpose balance after curation
+    # Apply purpose overrides (user reclassification)
     remaining = [c for c in session.candidates if c.domain not in curation.removed]
+    for candidate in remaining:
+        if candidate.domain in curation.purpose_overrides:
+            new_purpose = curation.purpose_overrides[candidate.domain]
+            valid_purposes = ["BENCHMARK_PEER", "KEYWORD_SOURCE", "LINK_SOURCE", "CONTENT_MODEL", "ASPIRATIONAL"]
+            if new_purpose in valid_purposes:
+                candidate.purpose = new_purpose
+                candidate.purpose_overridden_by_user = True
+            else:
+                warnings.append(f"Invalid purpose '{new_purpose}' for {candidate.domain}")
+
+    # Check purpose balance after curation
     purpose_counts = Counter(c.purpose for c in remaining)
 
     if purpose_counts.get("BENCHMARK_PEER", 0) < 2:
@@ -2475,11 +2486,106 @@ The frontend should implement this flow:
    → Proceed to greenfield analysis with validated competitors
 ```
 
+### 7.4 Post-Finalization Editing
+
+Users may want to edit competitors AFTER the initial curation. This is supported:
+
+```python
+@router.patch("/sessions/{session_id}/competitors", response_model=FinalCompetitorSetResponse)
+async def update_competitors(
+    session_id: UUID,
+    updates: CompetitorUpdateInput,
+) -> FinalCompetitorSetResponse:
+    """
+    Update competitors after finalization.
+
+    Allows users to:
+    - Add new competitors
+    - Remove existing competitors
+    - Reclassify purposes
+    - Replace competitors
+
+    Will re-validate the set after changes.
+    """
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    if not session.is_finalized:
+        raise HTTPException(400, "Use /curate endpoint for initial curation")
+
+    # Apply updates
+    current_set = session.final_competitor_set
+
+    # Remove specified competitors
+    for domain in updates.remove:
+        current_set.competitors = [c for c in current_set.competitors if c.domain != domain]
+
+    # Add new competitors (with quick validation)
+    for new_comp in updates.add:
+        validated = await quick_validate_competitor(new_comp.domain)
+        if validated:
+            validated.purpose = new_comp.purpose or "BENCHMARK_PEER"
+            validated.user_added = True
+            current_set.competitors.append(validated)
+
+    # Apply purpose overrides
+    for domain, new_purpose in updates.purpose_overrides.items():
+        for comp in current_set.competitors:
+            if comp.domain == domain:
+                comp.purpose = new_purpose
+                comp.purpose_overridden_by_user = True
+
+    # Re-validate
+    validation = await validate_final_set(current_set)
+
+    # Persist changes
+    await save_updated_set(session_id, current_set, validation)
+
+    return FinalCompetitorSetResponse(
+        session_id=str(session_id),
+        domain=session.domain,
+        status="updated",
+        competitors=[_to_curation_candidate(c) for c in current_set.competitors],
+        competitor_count=len(current_set.competitors),
+        validation_passed=validation.is_valid,
+        validation_warnings=validation.warnings,
+        purpose_distribution=validation.purpose_distribution,
+        ready_for_analysis=True,
+        requires_reanalysis=True,  # Flag that greenfield analysis should re-run
+    )
+
+
+class CompetitorUpdateInput(BaseModel):
+    """Input for updating competitors post-finalization."""
+    remove: List[str] = Field(default_factory=list, description="Domains to remove")
+    add: List[AddCompetitorInput] = Field(default_factory=list, description="Competitors to add")
+    purpose_overrides: Dict[str, str] = Field(default_factory=dict, description="Reclassify purposes")
+
+
+class AddCompetitorInput(BaseModel):
+    """Input for adding a new competitor."""
+    domain: str
+    purpose: Optional[str] = None  # If not specified, defaults to BENCHMARK_PEER
+```
+
+### 7.5 Complete Frontend Edit Capabilities
+
+The frontend can now support:
+
+| Action | Endpoint | When Available |
+|--------|----------|----------------|
+| **Remove competitor** | `POST /curate` or `PATCH /competitors` | During curation or after |
+| **Add competitor** | `POST /curate` or `PATCH /competitors` | During curation or after |
+| **Reclassify purpose** | `POST /curate` or `PATCH /competitors` | During curation or after |
+| **Replace competitor** | `PATCH /competitors` (remove + add) | After finalization |
+| **Re-discover** | `POST /discover` (new session) | Any time |
+
 ---
 
 ## 8. Quality Assurance
 
-### 7.1 Quality Metrics
+### 8.1 Quality Metrics
 
 | Metric | Target | Measurement |
 |--------|--------|-------------|
@@ -2489,7 +2595,7 @@ The frontend should implement this flow:
 | **Purpose Balance** | Within 20% of target | Distribution vs ideal |
 | **User Curation Rate** | <30% changes | User additions after removal |
 
-### 7.2 Quality Checks
+### 8.2 Quality Checks
 
 ```python
 class QualityChecker:
