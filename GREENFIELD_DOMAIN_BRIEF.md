@@ -3265,6 +3265,493 @@ async def get_dashboard_overview(domain_id: UUID, db: Session = Depends(get_db))
     return StandardOverviewResponse(...)
 ```
 
+### Caching Strategy
+
+SERP data is expensive to fetch and changes slowly. Implement aggressive caching to reduce costs and improve performance.
+
+#### Cache Architecture
+
+```python
+# In src/persistence/greenfield_cache.py
+
+import hashlib
+import json
+from datetime import datetime, timedelta
+from typing import Dict, Any, Optional
+from redis import Redis
+
+
+class GreenfieldSerpCache:
+    """
+    Cache for SERP analysis data used in winnability calculations.
+
+    Key insight: SERP results for most keywords don't change dramatically
+    in < 24 hours. We can safely cache and reuse.
+    """
+
+    # Cache TTLs by data type
+    TTL_CONFIG = {
+        "serp_results": timedelta(hours=24),      # SERP positions stable for 24h
+        "domain_metrics": timedelta(hours=48),    # DR/traffic changes slowly
+        "traffic_share": timedelta(hours=24),     # Traffic share data
+        "keyword_suggestions": timedelta(days=7), # Suggestions stable for week
+        "competitor_keywords": timedelta(days=3), # Competitor kw data
+    }
+
+    def __init__(self, redis_client: Redis, namespace: str = "greenfield"):
+        self.redis = redis_client
+        self.namespace = namespace
+
+    def _make_key(self, data_type: str, identifier: str) -> str:
+        """Create cache key."""
+        return f"{self.namespace}:{data_type}:{identifier}"
+
+    def _hash_query(self, keyword: str, market: str, language: str) -> str:
+        """Create unique hash for SERP query."""
+        query_str = f"{keyword}|{market}|{language}"
+        return hashlib.md5(query_str.encode()).hexdigest()[:12]
+
+    # =========================================================================
+    # SERP Results Caching
+    # =========================================================================
+
+    async def get_serp_results(
+        self,
+        keyword: str,
+        market: str,
+        language: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Get cached SERP results if available."""
+        query_hash = self._hash_query(keyword, market, language)
+        key = self._make_key("serp_results", query_hash)
+
+        cached = await self.redis.get(key)
+        if cached:
+            return json.loads(cached)
+        return None
+
+    async def set_serp_results(
+        self,
+        keyword: str,
+        market: str,
+        language: str,
+        results: Dict[str, Any],
+    ):
+        """Cache SERP results."""
+        query_hash = self._hash_query(keyword, market, language)
+        key = self._make_key("serp_results", query_hash)
+        ttl = self.TTL_CONFIG["serp_results"]
+
+        await self.redis.setex(key, ttl, json.dumps(results))
+
+    # =========================================================================
+    # Batch Operations
+    # =========================================================================
+
+    async def get_serp_batch(
+        self,
+        keywords: List[str],
+        market: str,
+        language: str,
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Get cached SERP results for multiple keywords."""
+        results = {}
+        cache_misses = []
+
+        for keyword in keywords:
+            cached = await self.get_serp_results(keyword, market, language)
+            if cached:
+                results[keyword] = cached
+            else:
+                cache_misses.append(keyword)
+                results[keyword] = None
+
+        return results, cache_misses
+
+    async def set_serp_batch(
+        self,
+        results: Dict[str, Dict[str, Any]],
+        market: str,
+        language: str,
+    ):
+        """Cache SERP results for multiple keywords."""
+        for keyword, serp_data in results.items():
+            await self.set_serp_results(keyword, market, language, serp_data)
+
+    # =========================================================================
+    # Competitor Data Caching
+    # =========================================================================
+
+    async def get_competitor_keywords(
+        self,
+        competitor_domain: str,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Get cached competitor keyword data."""
+        key = self._make_key("competitor_keywords", competitor_domain)
+        cached = await self.redis.get(key)
+        if cached:
+            return json.loads(cached)
+        return None
+
+    async def set_competitor_keywords(
+        self,
+        competitor_domain: str,
+        keywords: List[Dict[str, Any]],
+    ):
+        """Cache competitor keyword data."""
+        key = self._make_key("competitor_keywords", competitor_domain)
+        ttl = self.TTL_CONFIG["competitor_keywords"]
+        await self.redis.setex(key, ttl, json.dumps(keywords))
+
+    # =========================================================================
+    # Cache Statistics
+    # =========================================================================
+
+    async def get_cache_stats(self) -> Dict[str, Any]:
+        """Get cache hit/miss statistics."""
+        stats_key = f"{self.namespace}:stats"
+        stats = await self.redis.hgetall(stats_key)
+        return {
+            "hits": int(stats.get("hits", 0)),
+            "misses": int(stats.get("misses", 0)),
+            "hit_rate": self._calculate_hit_rate(stats),
+        }
+
+    def _calculate_hit_rate(self, stats: Dict) -> float:
+        hits = int(stats.get("hits", 0))
+        misses = int(stats.get("misses", 0))
+        total = hits + misses
+        return hits / total if total > 0 else 0.0
+```
+
+#### Cache-Aware SERP Analysis
+
+```python
+# In src/context/competitor_discovery.py - Modified for caching
+
+async def _discover_from_seed_keywords_cached(
+    self,
+    seed_keywords: List[str],
+    market: str,
+    language: str,
+    cache: GreenfieldSerpCache,
+) -> List[Dict[str, Any]]:
+    """
+    Discover competitors with caching layer.
+
+    1. Check cache for existing SERP data
+    2. Only fetch missing keywords from API
+    3. Cache new results
+    4. Combine and return
+    """
+
+    # Step 1: Check cache
+    cached_results, cache_misses = await cache.get_serp_batch(
+        keywords=seed_keywords,
+        market=market,
+        language=language,
+    )
+
+    logger.info(f"SERP cache: {len(seed_keywords) - len(cache_misses)} hits, {len(cache_misses)} misses")
+
+    # Step 2: Fetch only missing keywords
+    if cache_misses and self.dataforseo_client:
+        fresh_results = await self._fetch_serp_batch(cache_misses, market, language)
+
+        # Step 3: Cache new results
+        await cache.set_serp_batch(fresh_results, market, language)
+
+        # Combine with cached
+        cached_results.update(fresh_results)
+
+    # Step 4: Process all results
+    return self._extract_competitors_from_serp_batch(cached_results)
+```
+
+#### Cache Configuration
+
+| Data Type | TTL | Rationale |
+|-----------|-----|-----------|
+| SERP results | 24 hours | Positions stable short-term |
+| Domain metrics | 48 hours | DR/traffic very stable |
+| Traffic share | 24 hours | Refreshes daily |
+| Keyword suggestions | 7 days | Suggestions rarely change |
+| Competitor keywords | 3 days | Balance freshness vs cost |
+
+#### Cache Warming Strategy
+
+For high-value keywords (beachhead candidates), proactively warm cache:
+
+```python
+async def warm_beachhead_cache(
+    beachhead_keywords: List[str],
+    market: str,
+    language: str,
+    cache: GreenfieldSerpCache,
+    dataforseo_client: DataForSEOClient,
+):
+    """
+    Pre-warm cache for beachhead keywords.
+
+    Run after initial beachhead selection to ensure
+    fast subsequent analyses.
+    """
+    _, misses = await cache.get_serp_batch(beachhead_keywords, market, language)
+
+    if misses:
+        logger.info(f"Warming cache for {len(misses)} beachhead keywords")
+        fresh = await dataforseo_client.get_serp_batch(misses, market, language)
+        await cache.set_serp_batch(fresh, market, language)
+```
+
+### Graceful Degradation
+
+When SERP data is unavailable for some keywords, the system must degrade gracefully rather than fail.
+
+#### Degradation Levels
+
+```python
+# In src/scoring/greenfield.py - Add graceful degradation
+
+from enum import Enum
+from dataclasses import dataclass
+
+
+class DataCompleteness(Enum):
+    """Data completeness levels for graceful degradation."""
+    FULL = "full"           # All data available
+    PARTIAL = "partial"     # Some SERP data missing
+    MINIMAL = "minimal"     # Most SERP data missing
+    FALLBACK = "fallback"   # No SERP data, using estimates
+
+
+@dataclass
+class WinnabilityAnalysisWithConfidence(WinnabilityAnalysis):
+    """Extended analysis with data quality indicators."""
+    data_completeness: DataCompleteness = DataCompleteness.FULL
+    data_sources_used: List[str] = field(default_factory=list)
+    confidence_adjustment: float = 1.0  # Multiplier for confidence
+
+
+def calculate_winnability_with_fallback(
+    keyword: Dict[str, Any],
+    target_dr: int,
+    serp_data: Optional[Dict[str, Any]],
+    industry: str = "saas",
+) -> WinnabilityAnalysisWithConfidence:
+    """
+    Calculate winnability with graceful degradation when data is missing.
+
+    Fallback hierarchy:
+    1. Full SERP data → Full analysis (confidence: 1.0)
+    2. Partial SERP data → Interpolated analysis (confidence: 0.7)
+    3. No SERP data → Estimated from KD (confidence: 0.4)
+    """
+
+    keyword_str = keyword.get("keyword", "unknown")
+    base_kd = keyword.get("keyword_difficulty", 50)
+    search_volume = keyword.get("search_volume", 0)
+
+    # Case 1: Full SERP data available
+    if serp_data and serp_data.get("results"):
+        results = serp_data.get("results", [])
+        serp_drs = [r.get("domain_rating", 50) for r in results if r.get("domain_rating")]
+
+        if len(serp_drs) >= 5:  # At least 5 results with DR
+            return _calculate_full_winnability(
+                keyword, target_dr, serp_data, industry,
+                completeness=DataCompleteness.FULL,
+                confidence=1.0,
+            )
+
+    # Case 2: Partial SERP data (some results, not enough DR data)
+    if serp_data and serp_data.get("results"):
+        results = serp_data.get("results", [])
+        serp_drs = [r.get("domain_rating") for r in results if r.get("domain_rating")]
+
+        if 1 <= len(serp_drs) < 5:
+            # Interpolate missing DR values
+            avg_available_dr = sum(serp_drs) / len(serp_drs)
+            estimated_avg_dr = _interpolate_serp_dr(base_kd, avg_available_dr)
+
+            return _calculate_partial_winnability(
+                keyword, target_dr, estimated_avg_dr,
+                has_ai_overview=serp_data.get("ai_overview") is not None,
+                industry=industry,
+                completeness=DataCompleteness.PARTIAL,
+                confidence=0.7,
+            )
+
+    # Case 3: No SERP data at all - estimate from KD
+    return _calculate_fallback_winnability(
+        keyword, target_dr, base_kd, industry,
+        completeness=DataCompleteness.FALLBACK,
+        confidence=0.4,
+    )
+
+
+def _calculate_fallback_winnability(
+    keyword: Dict[str, Any],
+    target_dr: int,
+    base_kd: int,
+    industry: str,
+    completeness: DataCompleteness,
+    confidence: float,
+) -> WinnabilityAnalysisWithConfidence:
+    """
+    Calculate winnability without SERP data using KD-based estimation.
+
+    Assumptions:
+    - Avg SERP DR ≈ KD * 0.7 + 20 (empirical correlation)
+    - AI Overview probability based on KD (higher KD = more likely)
+    - Low-DR presence unlikely for KD > 40
+    """
+
+    # Estimate SERP characteristics from KD
+    estimated_avg_dr = base_kd * 0.7 + 20
+    estimated_min_dr = max(10, estimated_avg_dr - 20)
+    estimated_has_low_dr = base_kd < 35
+    estimated_has_aio = base_kd > 30  # AIO more common for competitive keywords
+
+    score, components = calculate_winnability(
+        target_dr=target_dr,
+        avg_serp_dr=estimated_avg_dr,
+        min_serp_dr=estimated_min_dr,
+        has_low_dr_rankings=estimated_has_low_dr,
+        weak_content_signals=[],  # Can't know without SERP
+        has_ai_overview=estimated_has_aio,
+        keyword_difficulty=base_kd,
+        industry=industry,
+    )
+
+    return WinnabilityAnalysisWithConfidence(
+        keyword=keyword.get("keyword", "unknown"),
+        winnability_score=score,
+        personalized_difficulty=calculate_personalized_difficulty_greenfield(
+            base_kd, target_dr, estimated_avg_dr
+        ),
+        avg_serp_dr=estimated_avg_dr,
+        min_serp_dr=estimated_min_dr,
+        has_low_dr_rankings=estimated_has_low_dr,
+        weak_content_signals=[],
+        has_ai_overview=estimated_has_aio,
+        data_completeness=completeness,
+        data_sources_used=["keyword_difficulty_estimation"],
+        confidence_adjustment=confidence,
+        is_beachhead_candidate=score >= 70 and base_kd <= 30,
+    )
+
+
+def _interpolate_serp_dr(base_kd: int, partial_avg_dr: float) -> float:
+    """
+    Interpolate SERP DR using KD and partial data.
+
+    Weighted average: 70% partial data, 30% KD-based estimate
+    """
+    kd_estimated_dr = base_kd * 0.7 + 20
+    return partial_avg_dr * 0.7 + kd_estimated_dr * 0.3
+```
+
+#### User Communication
+
+When degraded data is used, communicate clearly to users:
+
+```python
+# In API response
+
+class WinnabilityResponse(BaseModel):
+    keyword: str
+    winnability_score: float
+    personalized_difficulty: float
+
+    # Data quality indicators
+    data_quality: str  # "full", "partial", "estimated"
+    confidence_level: float  # 0-1
+    data_quality_note: Optional[str] = None
+
+
+def format_winnability_response(analysis: WinnabilityAnalysisWithConfidence) -> WinnabilityResponse:
+    """Format winnability with data quality context."""
+
+    notes = {
+        DataCompleteness.FULL: None,
+        DataCompleteness.PARTIAL: "Some SERP data unavailable; score estimated from partial data",
+        DataCompleteness.MINIMAL: "Limited SERP data; score has lower confidence",
+        DataCompleteness.FALLBACK: "SERP data unavailable; score estimated from keyword difficulty",
+    }
+
+    return WinnabilityResponse(
+        keyword=analysis.keyword,
+        winnability_score=analysis.winnability_score,
+        personalized_difficulty=analysis.personalized_difficulty,
+        data_quality=analysis.data_completeness.value,
+        confidence_level=analysis.confidence_adjustment,
+        data_quality_note=notes.get(analysis.data_completeness),
+    )
+```
+
+#### Aggregate Quality Reporting
+
+For batch analyses, report overall data quality:
+
+```python
+def calculate_analysis_data_quality(
+    analyses: List[WinnabilityAnalysisWithConfidence]
+) -> Dict[str, Any]:
+    """
+    Calculate overall data quality for an analysis run.
+    """
+    if not analyses:
+        return {"overall_quality": "unknown", "confidence": 0}
+
+    completeness_counts = {
+        DataCompleteness.FULL: 0,
+        DataCompleteness.PARTIAL: 0,
+        DataCompleteness.MINIMAL: 0,
+        DataCompleteness.FALLBACK: 0,
+    }
+
+    for a in analyses:
+        completeness_counts[a.data_completeness] += 1
+
+    total = len(analyses)
+    full_rate = completeness_counts[DataCompleteness.FULL] / total
+    partial_rate = completeness_counts[DataCompleteness.PARTIAL] / total
+    fallback_rate = completeness_counts[DataCompleteness.FALLBACK] / total
+
+    # Determine overall quality
+    if full_rate >= 0.8:
+        overall = "high"
+    elif full_rate + partial_rate >= 0.7:
+        overall = "medium"
+    elif fallback_rate > 0.5:
+        overall = "low"
+    else:
+        overall = "medium"
+
+    # Calculate weighted confidence
+    avg_confidence = sum(a.confidence_adjustment for a in analyses) / total
+
+    return {
+        "overall_quality": overall,
+        "confidence": round(avg_confidence, 2),
+        "full_data_keywords": completeness_counts[DataCompleteness.FULL],
+        "partial_data_keywords": completeness_counts[DataCompleteness.PARTIAL],
+        "fallback_keywords": completeness_counts[DataCompleteness.FALLBACK],
+        "recommendation": _get_quality_recommendation(overall, fallback_rate),
+    }
+
+
+def _get_quality_recommendation(quality: str, fallback_rate: float) -> str:
+    """Generate recommendation based on data quality."""
+    if quality == "high":
+        return "Analysis based on complete SERP data. High confidence in recommendations."
+    elif quality == "medium":
+        return "Some keywords analyzed with estimated data. Consider re-running for higher confidence."
+    else:
+        return f"{int(fallback_rate * 100)}% of keywords lack SERP data. Results are estimates. Consider reducing keyword count or checking API availability."
+```
+
 ---
 
 ## 14. Success Metrics
