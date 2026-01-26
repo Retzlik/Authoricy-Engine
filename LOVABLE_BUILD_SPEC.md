@@ -1055,54 +1055,118 @@ Clicking [⚙️ Edit Competitors] opens modal:
 - Phase selector
 - Winnability indicator (HIGH/MEDIUM/LOW)
 - AIO Ready toggle (optimized for AI Overviews?)
-- Content Brief generator (AI-powered)
 
-### 6.3 Content Brief Generator
+### 6.3 Export Flow & Intelligence-Informed Custom Instructions
 
-For greenfield domains, offer AI-generated content briefs:
+**The Core Insight:** Our analysis provides ALL the intelligence needed for Monok export. No additional "content brief generator" is required - the intelligence we gather during analysis directly populates the export.
+
+**What Monok Receives:**
+
+| Component | Source (Established) | Source (Greenfield) |
+|-----------|----------------------|---------------------|
+| **Threads** | User-organized thread structure | User-organized thread structure |
+| **Topics** | Topic clusters from analysis | Topic clusters from competitor intelligence |
+| **Keywords** | Keyword research with difficulty | Beachhead keywords with winnability |
+| **Custom Instructions** | Auto-populated from intelligence | Auto-populated from intelligence |
+
+**Intelligence-Informed Custom Instructions:**
+
+The Custom Instructions field is automatically populated with actionable intelligence from our analysis. This ensures Monok produces content that is strategically aligned with our research.
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│ Generate Content Brief                                          │
+│ Export to Monok                                      [×]        │
 ├────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Thread: Invoice Templates                                      │
-│  Keywords: 23 (89% avg winnability)                            │
+│  Strategy: Q1 Invoice Content 🌱                               │
+│  Threads: 4  •  Topics: 18  •  Keywords: 127                   │
 │                                                                 │
-│  Generating brief...                                           │
+│  ───────────────────────────────────────────────────────────── │
+│                                                                 │
+│  CUSTOM INSTRUCTIONS (Auto-populated from intelligence)        │
 │                                                                 │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │ CONTENT BRIEF: Ultimate Invoice Template Guide           │  │
+│  │ ## Target Audience                                        │  │
+│  │ Small business owners and freelancers who need simple,   │  │
+│  │ professional invoicing solutions.                         │  │
 │  │                                                          │  │
-│  │ Target Keywords:                                         │  │
-│  │ • Primary: free invoice template (5,400 vol)            │  │
-│  │ • Secondary: invoice template pdf, excel invoice...     │  │
+│  │ ## Competitive Positioning                                │  │
+│  │ Focus on simplicity and speed vs. competitors like       │  │
+│  │ FreshBooks who target enterprise features.               │  │
 │  │                                                          │  │
-│  │ Competitor Analysis:                                     │  │
-│  │ • Top rankers: canva.com, invoicesimple.com             │  │
-│  │ • Gap: No comprehensive guide covering all formats      │  │
-│  │ • Angle: Cover PDF, Excel, Word, Google Docs + tips     │  │
+│  │ ## Content Gaps to Exploit                                │  │
+│  │ - No competitor covers industry-specific templates       │  │
+│  │ - Missing: integration guides for small business tools   │  │
+│  │ - Opportunity: beginner-friendly invoice tutorials       │  │
 │  │                                                          │  │
-│  │ Recommended Structure:                                   │  │
-│  │ 1. What is an invoice? (AIO bait)                       │  │
-│  │ 2. Free invoice templates by format                     │  │
-│  │ 3. How to customize templates                           │  │
-│  │ 4. Industry-specific templates                          │  │
-│  │ 5. FAQ section (10 questions with schema)               │  │
+│  │ ## Brand Voice                                            │  │
+│  │ Friendly, practical, no jargon. Speak to busy           │  │
+│  │ entrepreneurs who want quick solutions.                   │  │
 │  │                                                          │  │
-│  │ Word count: 2,500-3,500                                 │  │
-│  │ Images: 8-12 template screenshots                       │  │
-│  │ Schema: FAQ, HowTo                                      │  │
+│  │ ## SEO Requirements                                       │  │
+│  │ - Target AIO/featured snippets with clear definitions   │  │
+│  │ - Use FAQ schema for common questions                    │  │
+│  │ - Include comparison tables for template types           │  │
 │  │                                                          │  │
-│  │ [Copy Brief] [Export to Monok] [Regenerate]             │  │
+│  │ [Edit ✏️]                                                  │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                                                                 │
+│  ℹ️  Custom Instructions are generated from your analysis.     │
+│      Edit to add brand guidelines or specific requirements.    │
+│                                                                 │
+│  ─────────────────────────────────────────────────────────────  │
+│                                                                 │
+│  Validation:                                                   │
+│  ✓ All threads have assigned keywords                         │
+│  ✓ No orphan keywords                                          │
+│  ✓ Phase assignments valid (greenfield only)                   │
+│                                                                 │
+│                                        [Cancel] [Export →]     │
 └────────────────────────────────────────────────────────────────┘
 ```
 
-### 6.4 Export Flow (Same as v2.0)
+**Custom Instructions Data Sources:**
 
-*(Validation → Export Complete → Download options)*
+| Section | Populated From |
+|---------|----------------|
+| Target Audience | Business context from analysis questionnaire |
+| Competitive Positioning | Competitor analysis and gap identification |
+| Content Gaps | Keyword gap analysis, competitor content audit |
+| Brand Voice | User-provided brand guidelines (optional) |
+| SEO Requirements | Domain maturity + analysis mode (AIO focus for greenfield) |
+
+**Same Flow for Both Domain Types:**
+
+```
+ESTABLISHED:                           GREENFIELD:
+┌─────────────────────┐                ┌─────────────────────┐
+│ Strategy Builder    │                │ Strategy Builder    │
+│ with keywords       │                │ with beachheads     │
+└─────────┬───────────┘                └─────────┬───────────┘
+          │                                      │
+          ▼                                      ▼
+┌─────────────────────┐                ┌─────────────────────┐
+│ Export Modal        │                │ Export Modal        │
+│ • Threads           │                │ • Threads           │
+│ • Topics            │                │ • Topics            │
+│ • Keywords          │                │ • Keywords          │
+│ • Custom Instruct.  │                │ • Custom Instruct.  │
+│   (from analysis)   │                │   (from analysis)   │
+└─────────┬───────────┘                └─────────┬───────────┘
+          │                                      │
+          ▼                                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     MONOK INTEGRATION                        │
+│  Same export format, intelligence-driven custom instructions │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Why This Works:**
+
+1. **No Duplication**: We don't generate briefs separately - the analysis IS the brief
+2. **User Control**: Users can edit Custom Instructions before export
+3. **Consistency**: Same export flow regardless of domain maturity
+4. **Real Value**: Intelligence informs content production, not generic templates
 
 ---
 
@@ -1271,7 +1335,6 @@ After discovery completes, user is taken to Competitor Curation (Section 3).
 | POST | `/api/threads/{id}/keywords` | Assign keywords |
 | POST | `/api/strategies/{id}/validate-export` | Validate for export |
 | POST | `/api/strategies/{id}/export` | Export to Monok |
-| POST | `/api/strategies/{id}/generate-brief` | Generate content brief (greenfield) |
 
 ### 8.6 Example Responses (NEW)
 
