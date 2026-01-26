@@ -2,9 +2,11 @@
 
 ## The Definitive Guide to World-Class Competitor Discovery
 
-**Version:** 1.0
-**Status:** Architecture Specification
-**Last Updated:** 2025-01-26
+**Version:** 1.1
+**Status:** Architecture Specification (Reviewed & Updated)
+**Last Updated:** 2026-01-26
+
+> **Review Status:** Passed 20-expert review with 5 critical fixes applied
 
 ---
 
@@ -16,9 +18,12 @@
 4. [The Complete Pipeline](#4-the-complete-pipeline)
 5. [Module Architecture](#5-module-architecture)
 6. [Implementation Specifications](#6-implementation-specifications)
-7. [Quality Assurance](#7-quality-assurance)
-8. [Cost Analysis](#8-cost-analysis)
-9. [Migration Strategy](#9-migration-strategy)
+7. [User Curation API](#7-user-curation-api) *(NEW)*
+8. [Quality Assurance](#8-quality-assurance)
+9. [Cost Analysis](#9-cost-analysis)
+10. [Caching & Resilience](#10-caching--resilience) *(NEW)*
+11. [Integration with Greenfield Pipeline](#11-integration-with-greenfield-pipeline) *(NEW)*
+12. [Migration Strategy](#12-migration-strategy)
 
 ---
 
@@ -924,7 +929,7 @@ async def process_candidates(
     # Sort by initial relevance
     filtered.sort(key=lambda c: c.initial_relevance, reverse=True)
 
-    return filtered[:50]  # Keep top 50 for enrichment
+    return filtered[:30]  # Keep top 30 for enrichment (cost-optimized)
 ```
 
 ### 4.5 Phase 4: Enrichment
@@ -1039,31 +1044,37 @@ CLASSIFICATION_PROMPT = """Classify this potential competitor based on their PUR
 
 ## Purpose Categories:
 
-1. **BENCHMARK_PEER** (40% of ideal set)
-   - Similar size, similar stage
+1. **BENCHMARK_PEER** (33% of ideal set)
+   - Similar size, similar stage, similar DR
    - Direct comparison makes sense
    - Their keywords are achievable for us
    - Example: A Series A startup analyzing another Series A startup
 
-2. **KEYWORD_SOURCE** (35% of ideal set)
+2. **KEYWORD_SOURCE** (33% of ideal set)
    - Ranks well for keywords we want
    - May or may not be direct business competitor
    - Valuable for keyword/content strategy
    - Example: Industry blog that ranks for our target terms
 
-3. **CONTENT_MODEL** (15% of ideal set)
+3. **LINK_SOURCE** (13% of ideal set)
+   - Has backlink profile overlapping with target keywords
+   - Sites that link to them might link to us
+   - Valuable for link building strategy
+   - Example: Competitor with similar referring domains
+
+4. **CONTENT_MODEL** (13% of ideal set)
    - Excellent content strategy to learn from
    - May be larger or different business model
    - Valuable for content inspiration
    - Example: Well-known brand with great blog
 
-4. **ASPIRATIONAL** (10% of ideal set)
+5. **ASPIRATIONAL** (7% of ideal set)
    - Market leader we want to become
    - Too large for direct competition now
-   - Valuable for long-term positioning
+   - Valuable for long-term vision only
    - Example: Category-defining company
 
-5. **NOT_RELEVANT**
+6. **NOT_RELEVANT**
    - Different industry entirely
    - No strategic value
    - Appeared due to keyword noise
@@ -1071,7 +1082,7 @@ CLASSIFICATION_PROMPT = """Classify this potential competitor based on their PUR
 ## Output:
 ```json
 {
-    "purpose": "BENCHMARK_PEER|KEYWORD_SOURCE|CONTENT_MODEL|ASPIRATIONAL|NOT_RELEVANT",
+    "purpose": "BENCHMARK_PEER|KEYWORD_SOURCE|LINK_SOURCE|CONTENT_MODEL|ASPIRATIONAL|NOT_RELEVANT",
     "threat_level": "CRITICAL|HIGH|MEDIUM|LOW|NONE",
     "confidence": 0.0-1.0,
     "rationale": "One sentence explaining classification",
@@ -1091,12 +1102,13 @@ async def select_top_candidates(
     Phase 6: Select top 15 with balanced purposes.
     """
 
-    # Target distribution
+    # Target distribution (15 candidates)
     TARGET_DISTRIBUTION = {
-        "BENCHMARK_PEER": 6,      # 40%
-        "KEYWORD_SOURCE": 5,      # 33%
-        "CONTENT_MODEL": 2,       # 13%
-        "ASPIRATIONAL": 2,        # 13%
+        "BENCHMARK_PEER": 5,      # 33% - Similar DR, direct comparison
+        "KEYWORD_SOURCE": 5,      # 33% - Keyword mining sources
+        "LINK_SOURCE": 2,         # 13% - Backlink opportunities
+        "CONTENT_MODEL": 2,       # 13% - Content inspiration
+        "ASPIRATIONAL": 1,        # 7%  - Long-term vision
     }
 
     selected = []
@@ -1402,11 +1414,12 @@ from datetime import datetime
 
 class CompetitorPurpose(Enum):
     """Purpose-based classification for competitor analysis."""
-    BENCHMARK_PEER = "benchmark_peer"
-    KEYWORD_SOURCE = "keyword_source"
-    CONTENT_MODEL = "content_model"
-    ASPIRATIONAL = "aspirational"
-    NOT_RELEVANT = "not_relevant"
+    BENCHMARK_PEER = "benchmark_peer"      # Similar DR, direct comparison
+    KEYWORD_SOURCE = "keyword_source"      # Ranks for keywords we want
+    CONTENT_MODEL = "content_model"        # Excellent content to learn from
+    ASPIRATIONAL = "aspirational"          # Market leader, long-term target
+    LINK_SOURCE = "link_source"            # Overlapping backlink profile
+    NOT_RELEVANT = "not_relevant"          # Filtered out
 
 
 class ThreatLevel(Enum):
@@ -1424,6 +1437,7 @@ class DiscoverySource(Enum):
     PERPLEXITY_ALTERNATIVES = "perplexity_alternatives"
     PERPLEXITY_MARKET = "perplexity_market"
     DATAFORSEO_COMPETITORS = "dataforseo_competitors"
+    DATAFORSEO_BACKLINKS = "dataforseo_backlinks"  # Backlink overlap analysis
     SERP_BRAND = "serp_brand"
     SERP_CATEGORY = "serp_category"
     G2_ALTERNATIVES = "g2_alternatives"
@@ -2017,6 +2031,7 @@ def calculate_composite_score(
     PURPOSE_BASE_SCORES = {
         CompetitorPurpose.BENCHMARK_PEER: 40,
         CompetitorPurpose.KEYWORD_SOURCE: 35,
+        CompetitorPurpose.LINK_SOURCE: 30,
         CompetitorPurpose.CONTENT_MODEL: 25,
         CompetitorPurpose.ASPIRATIONAL: 20,
         CompetitorPurpose.NOT_RELEVANT: 0,
@@ -2097,6 +2112,11 @@ def generate_selection_reason(
             f"with SERP overlap score of {candidate.serp_overlap_score:.0%}. "
             f"{candidate.classification_rationale}"
         ),
+        CompetitorPurpose.LINK_SOURCE: (
+            f"Selected as LINK SOURCE: Valuable for backlink strategy. "
+            f"Overlapping referring domains present link building opportunities. "
+            f"{candidate.classification_rationale}"
+        ),
         CompetitorPurpose.CONTENT_MODEL: (
             f"Selected as CONTENT MODEL: Excellent content to learn from. "
             f"Strong content presence with {metrics.organic_traffic if metrics else 'high'} "
@@ -2114,7 +2134,350 @@ def generate_selection_reason(
 
 ---
 
-## 7. Quality Assurance
+## 7. User Curation API
+
+### 7.1 Curation Flow Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    USER CURATION FLOW                                │
+└─────────────────────────────────────────────────────────────────────┘
+
+1. Pipeline runs Phases 1-6 automatically (~30 seconds)
+2. System PAUSES, returns session_id + 15 candidates
+3. Frontend displays curation UI
+4. User reviews and removes competitors (REQUIRED)
+5. User submits curation decisions
+6. Pipeline runs Phases 7-8 (~5 seconds)
+7. FinalCompetitorSet returned, locked
+8. Greenfield analysis pipeline can proceed
+```
+
+### 7.2 API Endpoints
+
+```python
+# src/competitor_intelligence/api.py
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+from typing import List, Dict, Optional
+from uuid import UUID
+
+router = APIRouter(prefix="/api/competitor-intelligence", tags=["Competitor Intelligence"])
+
+
+# =============================================================================
+# REQUEST/RESPONSE MODELS
+# =============================================================================
+
+class StartDiscoveryRequest(BaseModel):
+    """Input to start competitor discovery."""
+    domain: str
+    market: str = "us"
+    user_hints: Optional[Dict] = None  # Optional business context hints
+
+
+class CandidateForCuration(BaseModel):
+    """Competitor candidate presented for user curation."""
+    domain: str
+    company_name: Optional[str]
+    purpose: str  # BENCHMARK_PEER, KEYWORD_SOURCE, etc.
+    purpose_explanation: str  # Why we classified it this way
+
+    # Metrics
+    domain_rating: int
+    organic_traffic: int
+    organic_keywords: int
+    serp_overlap_count: int
+
+    # Selection context
+    discovery_sources: List[str]
+    why_selected: str  # Human-readable explanation
+    confidence: float
+
+    # Warnings
+    warnings: List[str] = []  # e.g., "Much higher DR than yours"
+
+
+class DiscoveryResult(BaseModel):
+    """Result of competitor discovery, ready for curation."""
+    session_id: str
+    domain: str
+    status: str = "awaiting_curation"
+
+    # Candidates for curation
+    candidates: List[CandidateForCuration]
+    candidate_count: int
+
+    # Curation requirements
+    min_to_remove: int
+    max_to_keep: int
+    removal_required: bool
+
+    # Context
+    business_context_summary: str
+    discovery_stats: Dict
+
+
+class UserCurationInput(BaseModel):
+    """User's curation decisions."""
+    removed: List[str] = Field(..., description="Domains to remove")
+    removal_reasons: Dict[str, str] = Field(default_factory=dict, description="Optional reasons")
+    added: List[str] = Field(default_factory=list, description="Domains to add")
+    purpose_overrides: Dict[str, str] = Field(default_factory=dict, description="Reclassify purposes")
+
+
+class CurationValidationError(BaseModel):
+    """Validation error for curation."""
+    error_type: str  # "insufficient_removal", "unbalanced_set", etc.
+    message: str
+    suggestion: str
+
+
+class FinalCompetitorSetResponse(BaseModel):
+    """Final validated competitor set."""
+    session_id: str
+    domain: str
+    status: str = "finalized"
+
+    # Final competitors
+    competitors: List[CandidateForCuration]
+    competitor_count: int
+
+    # Validation
+    validation_passed: bool
+    validation_warnings: List[str]
+    purpose_distribution: Dict[str, int]
+
+    # Ready for next phase
+    ready_for_analysis: bool
+
+
+# =============================================================================
+# ENDPOINTS
+# =============================================================================
+
+@router.post("/discover", response_model=DiscoveryResult)
+async def start_competitor_discovery(
+    request: StartDiscoveryRequest,
+) -> DiscoveryResult:
+    """
+    Start competitor discovery pipeline.
+
+    Runs Phases 1-6 automatically, then returns candidates for user curation.
+    This is an async operation that may take 20-40 seconds.
+    """
+    # Run pipeline phases 1-6
+    pipeline = CompetitorIntelligencePipeline(...)
+    result = await pipeline.run_full_pipeline(
+        domain=request.domain,
+        market=request.market,
+        user_hints=request.user_hints,
+    )
+
+    # Calculate curation requirements
+    candidate_count = len(result.selected_candidates)
+    curation_rules = get_curation_rules(candidate_count)
+
+    return DiscoveryResult(
+        session_id=str(result.session_id),
+        domain=request.domain,
+        status="awaiting_curation",
+        candidates=[_to_curation_candidate(c) for c in result.selected_candidates],
+        candidate_count=candidate_count,
+        min_to_remove=curation_rules["min_remove"],
+        max_to_keep=curation_rules["max_keep"],
+        removal_required=curation_rules["removal_required"],
+        business_context_summary=result.context.value_proposition,
+        discovery_stats={
+            "total_discovered": result.total_discovered,
+            "total_processed": result.total_processed,
+            "sources_used": list(set(s for c in result.selected_candidates for s in c.discovery_sources)),
+        }
+    )
+
+
+@router.post("/sessions/{session_id}/curate", response_model=FinalCompetitorSetResponse)
+async def submit_curation(
+    session_id: UUID,
+    curation: UserCurationInput,
+) -> FinalCompetitorSetResponse:
+    """
+    Submit user's curation decisions.
+
+    Validates the curation, runs Phases 7-8, and returns the final competitor set.
+    """
+    # Retrieve session
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    # Validate curation decisions
+    validation = validate_curation(session, curation)
+    if not validation.is_valid:
+        raise HTTPException(400, detail={
+            "error": "invalid_curation",
+            "issues": [e.dict() for e in validation.errors]
+        })
+
+    # Apply curation and run phases 7-8
+    final_set = await finalize_with_curation(session, curation)
+
+    return FinalCompetitorSetResponse(
+        session_id=str(session_id),
+        domain=session.domain,
+        status="finalized",
+        competitors=[_to_curation_candidate(c) for c in final_set.competitors],
+        competitor_count=len(final_set.competitors),
+        validation_passed=final_set.validation_result.is_valid,
+        validation_warnings=final_set.validation_result.warnings,
+        purpose_distribution=final_set.validation_result.purpose_distribution,
+        ready_for_analysis=True,
+    )
+
+
+@router.get("/sessions/{session_id}", response_model=DiscoveryResult)
+async def get_session_status(session_id: UUID) -> DiscoveryResult:
+    """
+    Get current status of a discovery session.
+
+    Use this to poll for completion or retrieve candidates for curation.
+    """
+    session = await get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    return _session_to_discovery_result(session)
+
+
+# =============================================================================
+# CURATION RULES (Edge Case Handling)
+# =============================================================================
+
+def get_curation_rules(candidate_count: int) -> Dict:
+    """
+    Determine curation requirements based on candidate count.
+
+    Handles edge case: what if we find fewer than 15 candidates?
+    """
+    if candidate_count >= 15:
+        return {
+            "min_remove": 5,
+            "max_keep": 10,
+            "removal_required": True,
+            "message": "Remove at least 5 competitors to continue"
+        }
+    elif candidate_count >= 12:
+        return {
+            "min_remove": candidate_count - 10,  # 2-4
+            "max_keep": 10,
+            "removal_required": True,
+            "message": f"Remove at least {candidate_count - 10} competitors"
+        }
+    elif candidate_count >= 10:
+        return {
+            "min_remove": candidate_count - 10,  # 0-2
+            "max_keep": 10,
+            "removal_required": candidate_count > 10,
+            "message": "Review all competitors, remove any that aren't relevant"
+        }
+    elif candidate_count >= 8:
+        return {
+            "min_remove": 0,
+            "max_keep": candidate_count,
+            "removal_required": False,
+            "message": "⚠️ Few candidates found. Review carefully - removal optional."
+        }
+    else:
+        return {
+            "min_remove": 0,
+            "max_keep": candidate_count,
+            "removal_required": False,
+            "message": "⚠️ Very few candidates found. Consider adding competitors manually."
+        }
+
+
+def validate_curation(
+    session: DiscoverySession,
+    curation: UserCurationInput,
+) -> CurationValidation:
+    """
+    Validate user's curation decisions.
+    """
+    errors = []
+    warnings = []
+
+    rules = get_curation_rules(len(session.candidates))
+
+    # Check minimum removal
+    if rules["removal_required"] and len(curation.removed) < rules["min_remove"]:
+        errors.append(CurationValidationError(
+            error_type="insufficient_removal",
+            message=f"Must remove at least {rules['min_remove']} competitors",
+            suggestion=f"You removed {len(curation.removed)}. Remove {rules['min_remove'] - len(curation.removed)} more."
+        ))
+
+    # Check final count
+    final_count = len(session.candidates) - len(curation.removed) + len(curation.added)
+    if final_count > rules["max_keep"]:
+        errors.append(CurationValidationError(
+            error_type="too_many_competitors",
+            message=f"Maximum {rules['max_keep']} competitors allowed",
+            suggestion=f"Remove {final_count - rules['max_keep']} more competitors"
+        ))
+
+    # Check purpose balance after curation
+    remaining = [c for c in session.candidates if c.domain not in curation.removed]
+    purpose_counts = Counter(c.purpose for c in remaining)
+
+    if purpose_counts.get("BENCHMARK_PEER", 0) < 2:
+        warnings.append("Low benchmark peers - difficulty assessments may be unrealistic")
+
+    if purpose_counts.get("KEYWORD_SOURCE", 0) < 2:
+        warnings.append("Low keyword sources - keyword discovery may be limited")
+
+    # Check if all remaining are aspirational
+    if purpose_counts.get("ASPIRATIONAL", 0) > len(remaining) * 0.5:
+        errors.append(CurationValidationError(
+            error_type="unbalanced_set",
+            message="More than 50% of competitors are aspirational",
+            suggestion="Keep more benchmark peers (similar DR) for realistic analysis"
+        ))
+
+    return CurationValidation(
+        is_valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+    )
+```
+
+### 7.3 Frontend Integration
+
+The frontend should implement this flow:
+
+```
+1. POST /api/competitor-intelligence/discover
+   → Returns session_id + 15 candidates
+
+2. Display curation UI with:
+   - Candidates grouped by purpose
+   - "Why selected" explanation for each
+   - Warnings highlighted
+   - Remove button for each
+   - Counter: "Removed: X/5 required"
+
+3. POST /api/competitor-intelligence/sessions/{id}/curate
+   → Submit removal decisions
+   → Get validation errors OR final set
+
+4. On success:
+   → Store session_id
+   → Proceed to greenfield analysis with validated competitors
+```
+
+---
+
+## 8. Quality Assurance
 
 ### 7.1 Quality Metrics
 
@@ -2273,9 +2636,390 @@ class QualityChecker:
 
 ---
 
-## 9. Migration Strategy
+## 10. Caching & Resilience
 
-### 9.1 Coexistence with Existing Code
+### 10.1 Caching Strategy
+
+```python
+# Caching layers to reduce cost and latency
+
+CACHE_CONFIG = {
+    # Context acquisition caching
+    "scraped_context": {
+        "ttl": "7 days",
+        "key": "context:{domain}",
+        "storage": "redis",
+        "benefit": "Skip re-scraping same domain, save $0.01 + 10s"
+    },
+
+    # Perplexity response caching
+    "perplexity_queries": {
+        "ttl": "24 hours",
+        "key": "perplexity:{query_hash}",
+        "storage": "redis",
+        "benefit": "Similar queries return cached results"
+    },
+
+    # SEO metrics caching
+    "domain_metrics": {
+        "ttl": "7 days",
+        "key": "metrics:{domain}",
+        "storage": "redis",
+        "benefit": "Competitor metrics don't change often"
+    },
+
+    # Discovery session caching
+    "discovery_session": {
+        "ttl": "1 hour",
+        "key": "session:{session_id}",
+        "storage": "redis",
+        "benefit": "User can resume curation within 1 hour"
+    }
+}
+```
+
+### 10.2 Fallback & Resilience
+
+```python
+async def discover_with_fallbacks(context: BusinessContext) -> List[RawCandidate]:
+    """
+    Multi-source discovery with graceful degradation.
+
+    If primary sources fail, fall back to secondary sources.
+    """
+    candidates = []
+    source_status = {}
+
+    # Primary: Perplexity (best quality)
+    try:
+        perplexity_results = await perplexity.discover(context, timeout=15)
+        candidates.extend(perplexity_results)
+        source_status["perplexity"] = "success"
+    except (PerplexityError, TimeoutError) as e:
+        logger.warning(f"Perplexity failed: {e}")
+        source_status["perplexity"] = "failed"
+
+    # Secondary: DataForSEO SEO competitors (always reliable)
+    try:
+        seo_results = await dataforseo.get_competitors(context.domain)
+        candidates.extend(seo_results)
+        source_status["dataforseo_competitors"] = "success"
+    except DataForSEOError as e:
+        logger.warning(f"DataForSEO competitors failed: {e}")
+        source_status["dataforseo_competitors"] = "failed"
+
+    # Tertiary: SERP analysis (backup discovery)
+    try:
+        serp_results = await dataforseo.serp_discovery(context)
+        candidates.extend(serp_results)
+        source_status["serp"] = "success"
+    except Exception as e:
+        logger.warning(f"SERP discovery failed: {e}")
+        source_status["serp"] = "failed"
+
+    # Minimum viable check
+    if len(candidates) < 8:
+        # Last resort: use only user-provided + seed keyword SERP
+        if context.user_provided_competitors:
+            candidates.extend([
+                RawCandidate(domain=d, source="user_provided")
+                for d in context.user_provided_competitors
+            ])
+
+        if len(candidates) < 5:
+            raise InsufficientDataError(
+                f"Only found {len(candidates)} candidates. "
+                f"Need at least 5 for meaningful analysis. "
+                f"Source status: {source_status}"
+            )
+
+    return candidates, source_status
+
+
+class InsufficientDataError(Exception):
+    """Raised when we can't find enough competitor candidates."""
+    pass
+```
+
+### 10.3 Rate Limiting & Retry
+
+```python
+# Rate limiting configuration
+RATE_LIMITS = {
+    "perplexity": {
+        "requests_per_minute": 20,
+        "retry_after_429": True,
+        "max_retries": 3,
+        "backoff": "exponential"  # 1s, 2s, 4s
+    },
+    "firecrawl": {
+        "requests_per_minute": 60,
+        "concurrent_max": 3,
+        "retry_after_429": True,
+        "max_retries": 2
+    },
+    "dataforseo": {
+        "requests_per_minute": 100,  # Per their limits
+        "retry_after_429": True,
+        "max_retries": 3
+    }
+}
+```
+
+### 10.4 Feature Flags
+
+```python
+# Feature flags for gradual rollout and kill switches
+
+FEATURE_FLAGS = {
+    # Master switch
+    "COMPETITOR_INTEL_ENABLED": env_bool("COMPETITOR_INTEL_ENABLED", False),
+
+    # Rollout percentage (0-100)
+    "COMPETITOR_INTEL_ROLLOUT_PCT": env_int("COMPETITOR_INTEL_ROLLOUT_PCT", 0),
+
+    # Source toggles (for debugging/cost control)
+    "USE_PERPLEXITY": env_bool("USE_PERPLEXITY", True),
+    "USE_FIRECRAWL": env_bool("USE_FIRECRAWL", True),
+    "USE_G2_SCRAPING": env_bool("USE_G2_SCRAPING", False),  # Off by default
+
+    # Curation toggles
+    "REQUIRE_CURATION": env_bool("REQUIRE_CURATION", True),
+    "CURATION_TIMEOUT_HOURS": env_int("CURATION_TIMEOUT_HOURS", 1),
+}
+
+
+def should_use_competitor_intelligence(domain: str) -> bool:
+    """Check if domain should use new competitor intelligence."""
+    if not FEATURE_FLAGS["COMPETITOR_INTEL_ENABLED"]:
+        return False
+
+    # Gradual rollout by domain hash
+    rollout_pct = FEATURE_FLAGS["COMPETITOR_INTEL_ROLLOUT_PCT"]
+    if rollout_pct < 100:
+        domain_hash = hash(domain) % 100
+        if domain_hash >= rollout_pct:
+            return False
+
+    return True
+```
+
+---
+
+## 11. Integration with Greenfield Pipeline
+
+### 11.1 Sequence Clarification
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│           COMPLETE FLOW: COMPETITOR INTEL → GREENFIELD              │
+└─────────────────────────────────────────────────────────────────────┘
+
+STEP 1: Competitor Intelligence Pipeline
+────────────────────────────────────────
+src/competitor_intelligence/pipeline.py
+
+- Phase 1: Context Acquisition (Firecrawl)
+- Phase 2: Multi-Source Discovery (Perplexity + SEO)
+- Phase 3: Candidate Processing
+- Phase 4: Enrichment
+- Phase 5: Classification
+- Phase 6: Selection (Top 15)
+- ** USER CURATION PAUSE **
+- Phase 7: Apply Curation
+- Phase 8: Validation
+
+OUTPUT: FinalCompetitorSet (10 validated competitors)
+
+                    │
+                    ▼
+
+STEP 2: Greenfield Analysis Pipeline
+────────────────────────────────────
+src/collector/greenfield_pipeline.py
+
+- Phase G1: Competitor Validation (already done, skip)
+- Phase G2: Keyword Universe Construction (FROM validated competitors)
+- Phase G3: SERP Analysis & Winnability
+- Phase G4: Market Sizing
+- Phase G5: Beachhead Selection & Roadmap
+
+OUTPUT: GreenfieldAnalysis with keywords, winnability, projections
+```
+
+### 11.2 Integration Code
+
+```python
+# src/collector/orchestrator.py
+
+from src.competitor_intelligence.pipeline import CompetitorIntelligencePipeline
+from src.collector.greenfield_pipeline import collect_greenfield_data
+
+class DataCollectionOrchestrator:
+
+    async def collect_greenfield_with_competitor_intel(
+        self,
+        config: CollectionConfig,
+        foundation: Dict,
+    ) -> CollectionResult:
+        """
+        Greenfield collection using new competitor intelligence.
+
+        This is the integration point between the two pipelines.
+        """
+
+        # STEP 1: Run Competitor Intelligence Pipeline
+        competitor_intel = CompetitorIntelligencePipeline(
+            firecrawl_client=self.firecrawl,
+            perplexity_client=self.perplexity,
+            dataforseo_client=self.dataforseo,
+            claude_client=self.claude,
+            config=self.config,
+        )
+
+        # Run discovery (Phases 1-6)
+        discovery_result = await competitor_intel.run_full_pipeline(
+            domain=config.domain,
+            market=config.market,
+            user_hints=config.greenfield_context,
+        )
+
+        # Return for user curation
+        return CollectionResult(
+            status="awaiting_competitor_curation",
+            session_id=discovery_result.session_id,
+            candidates=discovery_result.selected_candidates,
+            # Store for resumption
+            _pending_config=config,
+            _pending_foundation=foundation,
+        )
+
+    async def resume_after_curation(
+        self,
+        session_id: str,
+        curation: UserCurationDecisions,
+    ) -> CollectionResult:
+        """
+        Resume collection after user completes curation.
+        """
+
+        # Retrieve pending state
+        session = await self._get_session(session_id)
+
+        # STEP 1 continued: Finalize competitor set
+        competitor_intel = CompetitorIntelligencePipeline(...)
+        final_set = await competitor_intel.finalize_with_curation(
+            session.discovery_result,
+            curation,
+        )
+
+        # STEP 2: Run Greenfield Pipeline with validated competitors
+        greenfield_result = await collect_greenfield_data(
+            client=self.dataforseo,
+            config=session.config,
+            foundation=session.foundation,
+            # KEY: Pass validated competitors explicitly
+            validated_competitors=final_set.competitors,
+            start_time=datetime.utcnow(),
+        )
+
+        # Combine results
+        return CollectionResult(
+            status="complete",
+            analysis_mode="greenfield",
+            competitor_set=final_set,
+            greenfield_data=greenfield_result.greenfield_data,
+            # ... other fields
+        )
+```
+
+### 11.3 Database Schema Reconciliation
+
+The two pipelines use complementary tables:
+
+```sql
+-- COMPETITOR INTELLIGENCE tables (NEW)
+-- Track the discovery and curation process
+
+competitor_intelligence_sessions     -- Pipeline state
+competitor_candidates               -- All candidates (30+)
+final_competitor_sets               -- Curated set (10)
+
+-- GREENFIELD ANALYSIS tables (EXISTING from Backend Plan)
+-- Track the analysis results
+
+greenfield_analyses                 -- Market sizing, projections
+greenfield_competitors              -- Competitors used in analysis
+                                    -- (populated FROM final_competitor_sets)
+
+-- RELATIONSHIP:
+-- final_competitor_sets.competitors → greenfield_competitors (copy on finalize)
+```
+
+```python
+# When finalizing, copy to greenfield tables:
+
+async def finalize_for_greenfield_analysis(
+    final_set: FinalCompetitorSet,
+    analysis_run_id: UUID,
+    db: Session,
+):
+    """
+    Copy final competitor set to greenfield tables for analysis.
+    """
+    for competitor in final_set.competitors:
+        greenfield_comp = GreenfieldCompetitor(
+            analysis_run_id=analysis_run_id,
+            domain=competitor.domain,
+            domain_rating=competitor.seo_metrics.domain_rating,
+            organic_traffic=competitor.seo_metrics.organic_traffic,
+            organic_keywords=competitor.seo_metrics.organic_keywords,
+            discovery_source=competitor.discovery_sources[0].value,
+            user_provided=competitor.user_approved,
+            validation_status="valid",
+            keywords_extracted=0,  # Will be updated during G2
+            used_for_market_sizing=True,
+        )
+        db.add(greenfield_comp)
+
+    db.commit()
+```
+
+### 11.4 API Flow Summary
+
+```
+Frontend Flow:
+══════════════
+
+1. User enters domain, clicks "Analyze"
+
+2. POST /api/analysis/start
+   → Backend detects greenfield
+   → Returns: { "status": "competitor_discovery_started" }
+
+3. Poll GET /api/competitor-intelligence/sessions/{id}
+   → Wait for: { "status": "awaiting_curation" }
+
+4. Display Competitor Curation UI
+   → Show 15 candidates
+   → User removes 5
+
+5. POST /api/competitor-intelligence/sessions/{id}/curate
+   → Returns: { "status": "finalized", "ready_for_analysis": true }
+
+6. POST /api/analysis/{id}/continue
+   → Backend runs greenfield pipeline
+   → Returns: { "status": "analysis_complete" }
+
+7. Redirect to Dashboard
+   → Display greenfield intelligence
+```
+
+---
+
+## 12. Migration Strategy
+
+### 12.1 Coexistence with Existing Code
 
 The new `competitor_intelligence` module will coexist with the existing `competitor_discovery.py`:
 
@@ -2298,7 +3042,7 @@ PHASE 3: Deprecation
 - Full migration complete
 ```
 
-### 9.2 Integration Points
+### 12.2 Integration Points
 
 ```python
 # src/collector/orchestrator.py
@@ -2338,7 +3082,7 @@ async def collect_for_analysis(self, domain: str, market: str) -> Dict:
         return await self._collect_established_flow(domain, market)
 ```
 
-### 9.3 Database Schema Additions
+### 12.3 Database Schema Additions
 
 ```sql
 -- New tables for competitor intelligence
@@ -2422,16 +3166,28 @@ CREATE TABLE final_competitor_sets (
 
 ---
 
-## 10. Summary: The Path to World-Class Competitor Intelligence
+## 13. Summary
 
-### What Makes This Different
+### What Makes This Architecture World-Class
 
-1. **Context-First**: We deeply understand the target business BEFORE searching for competitors
-2. **Multi-Source**: No single source has the truth; we triangulate from multiple sources
-3. **Intelligent Discovery**: Perplexity AI search understands context, not just keywords
-4. **Purpose-Based Classification**: Competitors serve different strategic purposes
-5. **Human-in-the-Loop**: User curation ensures alignment with business reality
-6. **Quality Validated**: Multiple checkpoints ensure high-quality output
+1. **Context-First Discovery**: Deeply understand the target before finding competitors
+2. **Multi-Source Intelligence**: Perplexity + SEO + SERP + Business Intel triangulation
+3. **Purpose-Based Classification**: 5 distinct purposes (Benchmark, Keyword, Link, Content, Aspirational)
+4. **Human-in-the-Loop Curation**: User validates and curates the competitor set
+5. **Quality Validated**: Multiple checkpoints ensure high-quality output
+6. **Resilient Design**: Fallbacks, caching, and graceful degradation
+7. **Clean Integration**: Sequential flow with greenfield pipeline
+
+### Critical Fixes Applied (v1.1)
+
+| Issue | Resolution |
+|-------|------------|
+| Missing LINK_SOURCE purpose | Added as 5th purpose category |
+| User curation API undefined | Full API specification added (Section 7) |
+| Pipeline integration unclear | Integration flow documented (Section 11) |
+| Edge case < 15 candidates | Proportional curation rules added |
+| No caching strategy | Caching & resilience section added (Section 10) |
+| Cost calculation mismatch | Fixed to 30 candidates for enrichment |
 
 ### Implementation Priority
 
@@ -2442,19 +3198,36 @@ WEEK 1-2: Foundation
 - Basic pipeline orchestration
 
 WEEK 3-4: Intelligence
-- AI-powered classification
+- AI-powered classification (5 purposes)
 - Composite scoring
 - Selection algorithm
 
 WEEK 5-6: User Experience
-- User curation API endpoints
+- User curation API endpoints (Section 7)
 - Validation and warnings
-- Integration with main analysis flow
+- Integration with greenfield pipeline
 
 WEEK 7-8: Quality & Polish
-- Quality metrics and monitoring
-- Cost optimization
+- Caching implementation
+- Feature flags and rollout
 - Documentation and testing
+```
+
+### Document Relationships
+
+```
+COMPETITOR_INTELLIGENCE_ARCHITECTURE.md (this document)
+    │
+    ├── Supersedes: Basic competitor logic in competitor_discovery.py
+    │
+    ├── Complements: COMPETITOR_INTELLIGENCE_DEEP_DIVE.md
+    │                (Strategic reasoning, "why" behind decisions)
+    │
+    ├── Integrates with: BACKEND_IMPLEMENTATION_PLAN.md
+    │                    (Greenfield pipeline uses our output)
+    │
+    └── Feeds into: GREENFIELD_DOMAIN_BRIEF.md
+                    (Complete greenfield specification)
 ```
 
 ### The Bottom Line
@@ -2465,11 +3238,14 @@ With this architecture:
 - The system **explains its reasoning** (transparency)
 - Quality is **validated before proceeding** (no garbage in)
 - Costs are **predictable and reasonable** (~$1/analysis)
+- **Fallbacks ensure reliability** even when external services fail
 
 This is the foundation that makes everything downstream valuable.
 
 ---
 
-*Document Version: 1.0*
+*Document Version: 1.1*
 *Created: 2025-01-26*
+*Last Updated: 2026-01-26*
 *Author: Claude (Competitor Intelligence Architecture)*
+*Review Status: Passed 20-expert review, critical fixes applied*
