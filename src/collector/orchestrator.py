@@ -3,6 +3,10 @@ Data Collection Orchestrator
 
 Coordinates the multi-phase data collection process.
 
+Supports two modes:
+1. Standard Mode: Traditional 4-phase analysis for established domains
+2. Greenfield Mode: Competitor-first analysis for domains with minimal SEO data
+
 FIXES APPLIED:
 - Phase 3 call now uses correct argument order (named arguments)
 - Phase 4 call now includes brand_name parameter
@@ -13,10 +17,13 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .depth import CollectionDepth
+
+# Greenfield context is imported at runtime in _collect_greenfield
+# to avoid circular imports. Type hint uses string forward reference.
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +52,14 @@ class CollectionConfig:
     skip_technical_audits: bool = False
     skip_phases: Optional[List[int]] = None
     early_termination_threshold: int = 10  # Min keywords to continue
+
+    # Greenfield mode
+    # When greenfield_context is provided, the orchestrator will use
+    # competitor-first analysis for domains with minimal SEO data.
+    # Set force_greenfield=True to always use greenfield mode regardless of metrics.
+    # greenfield_context should be a GreenfieldContext instance from greenfield_pipeline
+    greenfield_context: Optional[Any] = None  # GreenfieldContext from greenfield_pipeline
+    force_greenfield: bool = False
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -188,6 +203,17 @@ class CollectionResult:
     brand_sentiment_score: float = 0.0
     technical_health_score: float = 0.0
 
+    # Greenfield mode fields
+    analysis_mode: str = "standard"  # standard, greenfield, hybrid
+    greenfield_competitors: List[Dict] = field(default_factory=list)
+    greenfield_keyword_universe: List[Dict] = field(default_factory=list)
+    winnability_analyses: Dict[str, Any] = field(default_factory=dict)
+    market_opportunity: Dict[str, Any] = field(default_factory=dict)
+    beachhead_keywords: List[Dict] = field(default_factory=list)
+    traffic_projections: Dict[str, Any] = field(default_factory=dict)
+    growth_roadmap: List[Dict] = field(default_factory=list)
+    data_completeness_score: float = 0.0
+
 
 class DataCollectionOrchestrator:
     """
@@ -259,33 +285,48 @@ class DataCollectionOrchestrator:
             errors.append(f"Phase 1 failed: {str(e)}")
             foundation = {}
 
-        # Check for minimal domain
-        if self._should_abbreviate(foundation):
-            # Log what data was actually collected
+        # Check for minimal domain - route to greenfield if context provided
+        if self._should_use_greenfield(foundation, config):
             domain_keywords = foundation.get("domain_overview", {}).get("organic_keywords", 0)
             domain_backlinks = foundation.get("backlink_summary", {}).get("total_backlinks", 0)
-            logger.warning(
-                f"Domain has minimal data - abbreviated analysis. "
-                f"Keywords: {domain_keywords}, Backlinks: {domain_backlinks}. "
-                f"This may indicate: (1) new/small domain, (2) API errors, or (3) wrong market/language."
-            )
-            warnings.append(
-                f"Domain has minimal SEO data (keywords: {domain_keywords}, backlinks: {domain_backlinks}). "
-                f"Analysis was abbreviated. This may be normal for new or small websites."
-            )
-            duration = (datetime.utcnow() - start_time).total_seconds()
-            return CollectionResult(
-                domain=config.domain,
-                timestamp=start_time,
-                market=config.market,
-                language=config.language,
-                industry=config.industry,
-                success=True,
-                errors=errors,
-                warnings=warnings,
-                duration_seconds=duration,
-                **foundation
-            )
+
+            if config.greenfield_context:
+                # Route to greenfield pipeline
+                logger.info(
+                    f"Routing to greenfield pipeline. "
+                    f"Keywords: {domain_keywords}, Backlinks: {domain_backlinks}."
+                )
+                return await self._collect_greenfield(
+                    config=config,
+                    foundation=foundation,
+                    start_time=start_time,
+                    errors=errors,
+                    warnings=warnings,
+                )
+            else:
+                # No greenfield context provided - abbreviated analysis
+                logger.warning(
+                    f"Domain has minimal data - abbreviated analysis. "
+                    f"Keywords: {domain_keywords}, Backlinks: {domain_backlinks}. "
+                    f"Provide greenfield_context for competitor-first analysis."
+                )
+                warnings.append(
+                    f"Domain has minimal SEO data (keywords: {domain_keywords}, backlinks: {domain_backlinks}). "
+                    f"Analysis was abbreviated. Provide greenfield_context for competitor-first analysis."
+                )
+                duration = (datetime.utcnow() - start_time).total_seconds()
+                return CollectionResult(
+                    domain=config.domain,
+                    timestamp=start_time,
+                    market=config.market,
+                    language=config.language,
+                    industry=config.industry,
+                    success=True,
+                    errors=errors,
+                    warnings=warnings,
+                    duration_seconds=duration,
+                    **foundation
+                )
 
         # Extract competitors for later phases
         detected_competitors = config.competitors or self._extract_top_competitors(
@@ -397,8 +438,217 @@ class DataCollectionOrchestrator:
         """Alias for collect_all()."""
         return await self.collect_all(config)
 
+    async def _collect_greenfield(
+        self,
+        config: CollectionConfig,
+        foundation: Dict[str, Any],
+        start_time: datetime,
+        errors: List[str],
+        warnings: List[str],
+    ) -> CollectionResult:
+        """
+        Execute greenfield collection pipeline for domains with minimal SEO data.
+
+        Uses competitor-first analysis to build keyword universe and identify
+        beachhead opportunities.
+        """
+        from .greenfield_pipeline import collect_greenfield_data, GreenfieldContext
+        from dataclasses import asdict
+
+        logger.info("Starting greenfield collection pipeline...")
+
+        try:
+            greenfield_result = await collect_greenfield_data(
+                client=self.client,
+                config=config,
+                foundation=foundation,
+                start_time=start_time,
+            )
+
+            # Merge greenfield results with foundation data
+            duration = (datetime.utcnow() - start_time).total_seconds()
+
+            # Convert greenfield competitors to dict format
+            gf_competitors = [
+                {
+                    "domain": comp.domain,
+                    "discovery_source": comp.discovery_source,
+                    "discovery_reason": comp.discovery_reason,
+                    "domain_rating": comp.domain_rating,
+                    "organic_traffic": comp.organic_traffic,
+                    "organic_keywords": comp.organic_keywords,
+                    "relevance_score": comp.relevance_score,
+                    "suggested_purpose": comp.suggested_purpose,
+                    "is_validated": comp.is_validated,
+                }
+                for comp in greenfield_result.competitors
+            ]
+
+            # Convert keyword universe to dict format
+            gf_keywords = [
+                {
+                    "keyword": kw.keyword,
+                    "search_volume": kw.search_volume,
+                    "keyword_difficulty": kw.keyword_difficulty,
+                    "cpc": kw.cpc,
+                    "source_competitor": kw.source_competitor,
+                    "search_intent": kw.search_intent,
+                    "winnability_score": kw.winnability_score,
+                    "personalized_difficulty": kw.personalized_difficulty,
+                    "serp_analyzed": kw.serp_analyzed,
+                }
+                for kw in greenfield_result.keyword_universe
+            ]
+
+            # Convert beachhead keywords to dict format
+            gf_beachheads = [
+                {
+                    "keyword": bh.keyword,
+                    "search_volume": bh.search_volume,
+                    "winnability_score": bh.winnability_score,
+                    "personalized_difficulty": bh.personalized_difficulty,
+                    "priority": bh.priority,
+                    "growth_phase": bh.growth_phase,
+                    "beachhead_score": bh.beachhead_score,
+                }
+                for bh in greenfield_result.beachhead_keywords
+            ]
+
+            # Convert winnability analyses to dict format
+            gf_winnability = {
+                kw: {
+                    "winnability_score": analysis.winnability_score,
+                    "personalized_difficulty": analysis.personalized_difficulty,
+                    "serp_avg_dr": analysis.serp_avg_dr,
+                    "serp_min_dr": analysis.serp_min_dr,
+                    "weak_signals": analysis.weak_signals,
+                    "ranking_potential": analysis.ranking_potential,
+                }
+                for kw, analysis in greenfield_result.winnability_analyses.items()
+            }
+
+            # Convert market opportunity to dict
+            gf_market = {}
+            if greenfield_result.market_opportunity:
+                mo = greenfield_result.market_opportunity
+                gf_market = {
+                    "tam_volume": mo.tam_volume,
+                    "sam_volume": mo.sam_volume,
+                    "som_volume": mo.som_volume,
+                    "tam_keyword_count": mo.tam_keyword_count,
+                    "sam_keyword_count": mo.sam_keyword_count,
+                    "som_keyword_count": mo.som_keyword_count,
+                    "market_opportunity_score": mo.market_opportunity_score,
+                    "competition_intensity": mo.competition_intensity,
+                }
+
+            # Convert traffic projections to dict
+            gf_projections = {}
+            if greenfield_result.traffic_projections:
+                tp = greenfield_result.traffic_projections
+                gf_projections = {
+                    "conservative": {
+                        "month_3": tp.conservative.month_3,
+                        "month_6": tp.conservative.month_6,
+                        "month_12": tp.conservative.month_12,
+                        "month_18": tp.conservative.month_18,
+                        "month_24": tp.conservative.month_24,
+                        "confidence": tp.conservative.confidence,
+                    },
+                    "expected": {
+                        "month_3": tp.expected.month_3,
+                        "month_6": tp.expected.month_6,
+                        "month_12": tp.expected.month_12,
+                        "month_18": tp.expected.month_18,
+                        "month_24": tp.expected.month_24,
+                        "confidence": tp.expected.confidence,
+                    },
+                    "aggressive": {
+                        "month_3": tp.aggressive.month_3,
+                        "month_6": tp.aggressive.month_6,
+                        "month_12": tp.aggressive.month_12,
+                        "month_18": tp.aggressive.month_18,
+                        "month_24": tp.aggressive.month_24,
+                        "confidence": tp.aggressive.confidence,
+                    },
+                }
+
+            # Merge errors and warnings
+            all_errors = errors + greenfield_result.errors
+            all_warnings = warnings + greenfield_result.warnings
+
+            logger.info(
+                f"Greenfield collection complete: {len(gf_competitors)} competitors, "
+                f"{len(gf_keywords)} keywords, {len(gf_beachheads)} beachheads"
+            )
+
+            return CollectionResult(
+                domain=config.domain,
+                timestamp=start_time,
+                market=config.market,
+                language=config.language,
+                industry=config.industry,
+                success=True,
+                errors=all_errors,
+                warnings=all_warnings,
+                duration_seconds=duration,
+                # Foundation data
+                **foundation,
+                # Greenfield mode indicator
+                analysis_mode="greenfield",
+                # Greenfield-specific results
+                greenfield_competitors=gf_competitors,
+                greenfield_keyword_universe=gf_keywords,
+                winnability_analyses=gf_winnability,
+                market_opportunity=gf_market,
+                beachhead_keywords=gf_beachheads,
+                traffic_projections=gf_projections,
+                growth_roadmap=greenfield_result.growth_roadmap,
+                data_completeness_score=greenfield_result.data_completeness_score,
+            )
+
+        except Exception as e:
+            logger.error(f"Greenfield pipeline failed: {e}")
+            errors.append(f"Greenfield pipeline failed: {str(e)}")
+
+            # Return abbreviated result
+            duration = (datetime.utcnow() - start_time).total_seconds()
+            return CollectionResult(
+                domain=config.domain,
+                timestamp=start_time,
+                market=config.market,
+                language=config.language,
+                industry=config.industry,
+                success=False,
+                errors=errors,
+                warnings=warnings,
+                duration_seconds=duration,
+                analysis_mode="greenfield",
+                **foundation,
+            )
+
+    def _should_use_greenfield(self, foundation: Dict, config: CollectionConfig) -> bool:
+        """
+        Determine if greenfield mode should be used.
+
+        Greenfield mode is used when:
+        1. force_greenfield is True, OR
+        2. Domain has minimal SEO data (< 50 keywords AND < 100 backlinks)
+
+        Returns:
+            True if greenfield mode should be used
+        """
+        if config.force_greenfield:
+            return True
+
+        keywords = foundation.get("domain_overview", {}).get("organic_keywords", 0)
+        backlinks = foundation.get("backlink_summary", {}).get("total_backlinks", 0)
+
+        # Use greenfield thresholds from scoring module
+        return keywords < 50 and backlinks < 100
+
     def _should_abbreviate(self, foundation: Dict) -> bool:
-        """Check if domain has enough data for full analysis."""
+        """Check if domain has enough data for full analysis (deprecated, use _should_use_greenfield)."""
         keywords = foundation.get("domain_overview", {}).get("organic_keywords", 0)
         backlinks = foundation.get("backlink_summary", {}).get("total_backlinks", 0)
         return keywords < 10 and backlinks < 50
@@ -464,6 +714,7 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
             "success": result.success,
             "errors": result.errors,
             "warnings": result.warnings,
+            "analysis_mode": result.analysis_mode,
         },
         "phase1_foundation": {
             "domain_overview": result.domain_overview,
@@ -514,6 +765,36 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
             "keyword_gaps_count": len(result.keyword_gaps),
         },
     }
+
+    # Add greenfield data if in greenfield mode
+    if result.analysis_mode == "greenfield":
+        compiled["greenfield"] = {
+            "competitors": result.greenfield_competitors,
+            "keyword_universe": result.greenfield_keyword_universe,
+            "winnability_analyses": result.winnability_analyses,
+            "market_opportunity": result.market_opportunity,
+            "beachhead_keywords": result.beachhead_keywords,
+            "traffic_projections": result.traffic_projections,
+            "growth_roadmap": result.growth_roadmap,
+            "data_completeness_score": result.data_completeness_score,
+        }
+
+        # Update summary for greenfield mode
+        compiled["summary"].update({
+            "analysis_mode": "greenfield",
+            "greenfield_competitor_count": len(result.greenfield_competitors),
+            "greenfield_keyword_count": len(result.greenfield_keyword_universe),
+            "beachhead_count": len(result.beachhead_keywords),
+            "data_completeness_score": result.data_completeness_score,
+        })
+
+        # Add market opportunity to summary if available
+        if result.market_opportunity:
+            compiled["summary"]["market_opportunity"] = {
+                "tam_volume": result.market_opportunity.get("tam_volume", 0),
+                "sam_volume": result.market_opportunity.get("sam_volume", 0),
+                "som_volume": result.market_opportunity.get("som_volume", 0),
+            }
 
     return compiled
 
