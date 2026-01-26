@@ -115,6 +115,49 @@ from .decay import (
     prioritize_by_recovery_roi,
 )
 
+# Greenfield Domain Scoring
+from .greenfield import (
+    # Enums
+    DomainMaturity,
+    Industry,
+
+    # Data classes
+    DomainMetrics,
+    WinnabilityAnalysis,
+    BeachheadKeyword,
+    MarketOpportunity,
+    TrafficProjection,
+    TrafficProjections,
+
+    # Classification
+    classify_domain_maturity,
+    is_greenfield,
+    is_emerging,
+
+    # Winnability
+    calculate_winnability,
+    calculate_winnability_full,
+    calculate_personalized_difficulty_greenfield,
+    calculate_batch_winnability,
+    get_winnability_summary,
+
+    # Beachhead
+    calculate_beachhead_score,
+    select_beachhead_keywords,
+
+    # Market opportunity
+    calculate_market_opportunity,
+
+    # Traffic projections
+    project_traffic_scenarios,
+
+    # Utilities
+    get_industry_from_string,
+    requires_eeat_compliance,
+    get_coefficient,
+    INDUSTRY_COEFFICIENTS,
+)
+
 __all__ = [
     # Helpers
     "CTR_CURVE",
@@ -164,6 +207,32 @@ __all__ = [
     "get_pages_to_kill",
     "get_consolidation_candidates",
     "prioritize_by_recovery_roi",
+
+    # Greenfield
+    "DomainMaturity",
+    "Industry",
+    "DomainMetrics",
+    "WinnabilityAnalysis",
+    "BeachheadKeyword",
+    "MarketOpportunity",
+    "TrafficProjection",
+    "TrafficProjections",
+    "classify_domain_maturity",
+    "is_greenfield",
+    "is_emerging",
+    "calculate_winnability",
+    "calculate_winnability_full",
+    "calculate_personalized_difficulty_greenfield",
+    "calculate_batch_winnability",
+    "get_winnability_summary",
+    "calculate_beachhead_score",
+    "select_beachhead_keywords",
+    "calculate_market_opportunity",
+    "project_traffic_scenarios",
+    "get_industry_from_string",
+    "requires_eeat_compliance",
+    "get_coefficient",
+    "INDUSTRY_COEFFICIENTS",
 ]
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"  # Added greenfield scoring
