@@ -27,7 +27,10 @@ Note: All endpoints use language_name (e.g., "English") not language_code (e.g.,
 """
 
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .depth import CollectionDepth
 from dataclasses import dataclass, field
 import logging
 
@@ -102,8 +105,10 @@ async def collect_keyword_data(
     market: str,
     language: str,
     seed_keywords: Optional[List[str]] = None,
-    max_seed_keywords: int = 10,
-    expansion_limit: int = 50
+    depth: Optional["CollectionDepth"] = None,
+    # Legacy parameters (deprecated, use depth instead)
+    max_seed_keywords: int = None,
+    expansion_limit: int = None,
 ) -> Dict[str, Any]:
     """
     Collect Phase 2: Keyword Intelligence data.
@@ -114,14 +119,28 @@ async def collect_keyword_data(
         market: Target market (e.g., "United States", "Sweden")
         language: Language name (e.g., "English", "Swedish") - NOT code!
         seed_keywords: Optional seed keywords from Phase 1 (top page keywords)
-        max_seed_keywords: Maximum seeds to expand (controls API cost)
-        expansion_limit: Results limit per expansion call
+        depth: CollectionDepth config (controls all limits)
+        max_seed_keywords: [DEPRECATED] Use depth.max_seed_keywords
+        expansion_limit: [DEPRECATED] Use depth.expansion_limit_per_seed
 
     Returns:
         Dictionary with all Phase 2 data
     """
+    # Import here to avoid circular imports
+    from .depth import CollectionDepth
 
-    logger.info(f"Phase 2: Starting keyword collection for {domain}")
+    # Use depth config or create default from legacy params
+    if depth is None:
+        depth = CollectionDepth(
+            name="legacy",
+            max_seed_keywords=max_seed_keywords or 10,
+            expansion_limit_per_seed=expansion_limit or 50,
+        )
+
+    logger.info(
+        f"Phase 2: Starting keyword collection for {domain} "
+        f"[depth={depth.name}, seeds={depth.max_seed_keywords}]"
+    )
 
     # -------------------------------------------------------------------------
     # Step 1: Initial parallel calls (ranked keywords + keyword universe)
@@ -130,8 +149,8 @@ async def collect_keyword_data(
     logger.info("Step 1: Fetching ranked keywords and keyword universe...")
 
     initial_tasks = [
-        fetch_ranked_keywords(client, domain, market, language, limit=1000),
-        fetch_keywords_for_site(client, domain, market, language, limit=500),
+        fetch_ranked_keywords(client, domain, market, language, limit=1000),  # Always get full rankings
+        fetch_keywords_for_site(client, domain, market, language, limit=depth.keyword_universe_limit),
     ]
 
     ranked_result, universe_result = await asyncio.gather(
@@ -155,9 +174,9 @@ async def collect_keyword_data(
 
     # Use provided seeds or extract from ranked keywords
     if not seed_keywords:
-        seed_keywords = extract_seed_keywords(ranked_keywords, max_count=max_seed_keywords)
+        seed_keywords = extract_seed_keywords(ranked_keywords, max_count=depth.max_seed_keywords)
     else:
-        seed_keywords = seed_keywords[:max_seed_keywords]
+        seed_keywords = seed_keywords[:depth.max_seed_keywords]
 
     logger.info(f"Using {len(seed_keywords)} seed keywords for expansion: {seed_keywords[:5]}...")
 
@@ -172,7 +191,7 @@ async def collect_keyword_data(
         expansion_tasks = []
         for seed in seed_keywords:
             expansion_tasks.append(
-                expand_keyword(client, seed, market, language, limit=expansion_limit)
+                expand_keyword(client, seed, market, language, limit=depth.expansion_limit_per_seed)
             )
 
         expansion_results = await asyncio.gather(*expansion_tasks, return_exceptions=True)
@@ -191,8 +210,8 @@ async def collect_keyword_data(
 
     logger.info("Step 3: Classifying search intent...")
 
-    # Get top 200 keywords for intent classification
-    top_keywords = [kw["keyword"] for kw in ranked_keywords[:200]]
+    # Get top N keywords for intent classification
+    top_keywords = [kw["keyword"] for kw in ranked_keywords[:depth.intent_classification_limit]]
 
     intent_classification = {}
     if top_keywords:
@@ -208,12 +227,14 @@ async def collect_keyword_data(
 
     logger.info("Step 4: Identifying keyword gaps...")
 
+    # Use seeds proportionally for gap analysis (at least half of max seeds)
+    gap_seeds_count = max(5, depth.max_seed_keywords // 2)
     keyword_gaps = await fetch_keyword_ideas(
         client,
-        seed_keywords[:5],  # Use top 5 seeds for gap analysis
+        seed_keywords[:gap_seeds_count],
         market,
         language,
-        limit=200
+        limit=depth.keyword_gaps_limit
     )
 
     if isinstance(keyword_gaps, Exception):
@@ -227,10 +248,11 @@ async def collect_keyword_data(
     logger.info("Step 5: Scoring keyword difficulty...")
 
     # Combine gap keywords + top opportunities for difficulty scoring
+    half_limit = depth.difficulty_scoring_limit // 2
     keywords_to_score = []
-    keywords_to_score.extend([g["keyword"] for g in keyword_gaps[:100]])
-    keywords_to_score.extend([kw["keyword"] for kw in ranked_keywords if kw.get("position", 100) > 10][:100])
-    keywords_to_score = list(set(keywords_to_score))[:200]  # Dedupe, limit to 200
+    keywords_to_score.extend([g["keyword"] for g in keyword_gaps[:half_limit]])
+    keywords_to_score.extend([kw["keyword"] for kw in ranked_keywords if kw.get("position", 100) > 10][:half_limit])
+    keywords_to_score = list(set(keywords_to_score))[:depth.difficulty_scoring_limit]  # Dedupe, limit
 
     difficulty_scores = {}
     if keywords_to_score:
@@ -247,11 +269,11 @@ async def collect_keyword_data(
     logger.info("Step 6: Fetching additional keyword intelligence...")
 
     additional_tasks = [
-        fetch_historical_search_volume(client, seed_keywords[:10], market, language),
-        fetch_serp_elements(client, seed_keywords[:20], market, language),
-        fetch_questions_for_keywords(client, seed_keywords[:5], market, language),
+        fetch_historical_search_volume(client, seed_keywords[:depth.historical_volume_limit], market, language),
+        fetch_serp_elements(client, seed_keywords[:depth.serp_analysis_limit], market, language),
+        fetch_questions_for_keywords(client, seed_keywords[:depth.questions_limit], market, language),
         fetch_top_searches(client, domain, market, language),
-        fetch_bulk_traffic_estimation(client, domain, seed_keywords[:50], market, language),
+        fetch_bulk_traffic_estimation(client, domain, seed_keywords[:depth.traffic_estimation_limit], market, language),
     ]
 
     additional_results = await asyncio.gather(*additional_tasks, return_exceptions=True)

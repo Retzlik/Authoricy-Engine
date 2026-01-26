@@ -13,7 +13,10 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .depth import CollectionDepth
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +31,11 @@ class CollectionConfig:
     industry: str = "General"
     competitors: Optional[List[str]] = None
 
-    # Limits
+    # Collection depth (controls thoroughness vs cost)
+    # If provided, overrides individual limits below
+    depth: Optional["CollectionDepth"] = None
+
+    # Legacy limits (used if depth is None)
     max_seed_keywords: int = 5
     max_competitors: int = 5
     max_backlinks: int = 500
@@ -55,6 +62,38 @@ class CollectionConfig:
                 f"[CONFIG ERROR] Language '{self.language}' appears to be a code, not a full name! "
                 f"DataForSEO requires full names like 'English', 'Swedish'."
             )
+
+        # If depth is provided, sync max_seed_keywords for backward compatibility
+        if self.depth is not None:
+            self.max_seed_keywords = self.depth.max_seed_keywords
+            logger.info(f"[CONFIG] Using depth preset: {self.depth.name}")
+
+    def get_depth(self) -> "CollectionDepth":
+        """
+        Get the CollectionDepth config, creating a default if needed.
+
+        Returns:
+            CollectionDepth instance (either provided or created from legacy limits)
+        """
+        if self.depth is not None:
+            return self.depth
+
+        # Create from legacy limits for backward compatibility
+        from .depth import CollectionDepth
+        return CollectionDepth(
+            name="legacy",
+            max_seed_keywords=self.max_seed_keywords,
+            # Use basic preset values for other limits when using legacy config
+            keyword_universe_limit=500,
+            keyword_gaps_limit=200,
+            expansion_limit_per_seed=50,
+            intent_classification_limit=200,
+            difficulty_scoring_limit=200,
+            serp_analysis_limit=20,
+            questions_limit=5,
+            historical_volume_limit=10,
+            traffic_estimation_limit=50,
+        )
 
 
 @dataclass
@@ -255,16 +294,22 @@ class DataCollectionOrchestrator:
 
         # Phase 2: Keywords (if not skipped)
         keywords_data = {}
+        depth = config.get_depth()
         if 2 not in skip:
             try:
                 from src.collector.phase2 import collect_keyword_data
-                logger.info("Phase 2: Collecting keyword data...")
+                logger.info(
+                    f"Phase 2: Collecting keyword data "
+                    f"(depth={depth.name}, seeds={depth.max_seed_keywords}, "
+                    f"universe={depth.keyword_universe_limit})..."
+                )
                 keywords_data = await collect_keyword_data(
                     self.client,
                     config.domain,
                     config.market,
                     config.language,
-                    seed_keywords=self._extract_seed_keywords(foundation)
+                    seed_keywords=self._extract_seed_keywords(foundation),
+                    depth=depth,
                 )
             except ImportError:
                 warnings.append("Phase 2 module not available, skipping...")

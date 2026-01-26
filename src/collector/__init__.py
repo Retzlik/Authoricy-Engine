@@ -6,9 +6,17 @@ This package handles all data collection from DataForSEO API:
 - Phase 2: Keyword Intelligence (rankings, gaps, clusters)
 - Phase 3: Competitive Intelligence (competitor metrics, backlinks)
 - Phase 4: AI & Technical (AI visibility, brand mentions, audits)
+
+Collection depth presets control thoroughness vs cost:
+- testing: ~$0.30 (development)
+- basic: ~$1-2 (quick audits)
+- balanced: ~$3-5 (standard clients)
+- comprehensive: ~$8-15 (important clients)
+- enterprise: ~$20-30 (maximum depth)
 """
 
 from .client import DataForSEOClient, DataForSEOError
+from .depth import CollectionDepth, get_depth
 from .orchestrator import (
     DataCollectionOrchestrator,
     CollectionConfig,
@@ -24,6 +32,10 @@ __all__ = [
     # Client
     "DataForSEOClient",
     "DataForSEOError",
+
+    # Depth configuration
+    "CollectionDepth",
+    "get_depth",
 
     # Orchestrator
     "DataCollectionOrchestrator",
