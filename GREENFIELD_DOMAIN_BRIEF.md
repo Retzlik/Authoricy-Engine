@@ -2699,6 +2699,463 @@ async def get_dashboard_roadmap(
 
 ## 13. Integration Points
 
+### With Context Intelligence System
+
+**Critical Integration Point:** The greenfield flow must integrate with the existing `ContextIntelligenceOrchestrator` and `CompetitorDiscovery` classes, not replace them.
+
+#### Current vs Greenfield Flow Comparison
+
+```
+CURRENT FLOW (Established Domains):
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ContextIntelligenceOrchestrator.gather_context()                            │
+│                                                                             │
+│ Phase 0: MarketDetector.detect(domain)           ← Scrapes website         │
+│ Phase 1: MarketResolver.resolve(user, detected)   ← Resolves conflicts     │
+│ Phase 2: WebsiteAnalyzer.analyze(domain)          ← Extracts business info │
+│ Phase 3: CompetitorDiscovery.discover_and_validate()                        │
+│          ├── User-provided competitors (validated)                          │
+│          ├── DataForSEO get_domain_competitors()  ← REQUIRES DOMAIN DATA   │
+│          └── SERP: "{brand} alternatives"         ← REQUIRES BRAND NAME    │
+│ Phase 4: MarketValidator.validate()                                         │
+│ Phase 5: BusinessProfiler.synthesize()                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+GREENFIELD FLOW (New Domains):
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ContextIntelligenceOrchestrator.gather_context_greenfield()    ← NEW METHOD│
+│                                                                             │
+│ Phase G0: Check domain maturity (is this greenfield?)                       │
+│ Phase G1: Accept GreenfieldContext from user                   ← NEW INPUT │
+│ Phase G2: MarketResolver.resolve(user_market, None)            ← No detect │
+│ Phase G3: CompetitorDiscovery.discover_greenfield()            ← NEW METHOD│
+│          ├── User-provided competitors (PRIMARY SOURCE)                     │
+│          ├── SERP: "{seed_keyword}" → extract ranking domains  ← DIFFERENT │
+│          └── Traffic Share by Domain API                       ← NEW SOURCE│
+│ Phase G4: GreenfieldCompetitorAnalyzer.mine_keywords()         ← NEW       │
+│ Phase G5: BusinessProfiler.synthesize_greenfield()             ← EXTENDED  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Extending CompetitorDiscovery for Greenfield
+
+```python
+# In src/context/competitor_discovery.py - ADD new method
+
+class CompetitorDiscovery:
+    """
+    Extended to support greenfield mode.
+    """
+
+    # ... existing __init__ and discover_and_validate methods ...
+
+    async def discover_greenfield(
+        self,
+        seed_keywords: List[str],
+        user_provided_competitors: List[str],
+        target_market: str,
+        target_language: str,
+        industry: str,
+        target_dr: int = 10,  # Assumed DR for new domain
+    ) -> CompetitorValidation:
+        """
+        Discover competitors for greenfield domain using seed keywords.
+
+        Unlike discover_and_validate(), this method:
+        1. Uses seed keywords instead of brand name for SERP queries
+        2. Extracts competitors from SERP results (who ranks for these keywords?)
+        3. Uses Traffic Share by Domain API for keyword-based discovery
+        4. Does NOT call DataForSEO domain competitor suggestions (won't work)
+        5. Treats user-provided competitors as PRIMARY source
+
+        Args:
+            seed_keywords: 5-10 core keywords representing the offering
+            user_provided_competitors: Known competitors (required, 3-5 minimum)
+            target_market: Geographic market (us, uk, se, etc.)
+            target_language: Content language (en, sv, de, etc.)
+            industry: Industry vertical for context
+            target_dr: Target domain's expected/current DR
+
+        Returns:
+            CompetitorValidation with discovered and classified competitors
+        """
+        logger.info(f"Greenfield competitor discovery with {len(seed_keywords)} seed keywords")
+
+        result = CompetitorValidation(
+            user_provided=user_provided_competitors,
+        )
+
+        all_competitors: Dict[str, Dict[str, Any]] = {}
+
+        # SOURCE 1: User-provided competitors (PRIMARY - trust these)
+        for comp in user_provided_competitors:
+            if is_excluded_domain(comp):
+                result.rejected.append({
+                    "domain": comp,
+                    "reason": f"Excluded: {get_exclusion_reason(comp)}",
+                })
+                continue
+            all_competitors[comp] = {
+                "domain": comp,
+                "source": DiscoveryMethod.USER_PROVIDED,
+                "user_provided": True,
+                "trust_level": "high",  # User knows their competitors
+            }
+
+        # SOURCE 2: SERP-based discovery (who ranks for seed keywords?)
+        serp_competitors = await self._discover_from_seed_keywords(
+            seed_keywords=seed_keywords,
+            market=target_market,
+            language=target_language,
+        )
+        for comp in serp_competitors:
+            comp_domain = comp.get("domain", "")
+            if not comp_domain or is_excluded_domain(comp_domain):
+                continue
+            if comp_domain not in all_competitors:
+                all_competitors[comp_domain] = comp
+
+        # SOURCE 3: Traffic Share by Domain (who captures search demand?)
+        traffic_share_competitors = await self._discover_from_traffic_share(
+            keywords=seed_keywords[:5],  # Top 5 seed keywords
+            market=target_market,
+        )
+        for comp in traffic_share_competitors:
+            comp_domain = comp.get("domain", "")
+            if not comp_domain or is_excluded_domain(comp_domain):
+                continue
+            if comp_domain not in all_competitors:
+                all_competitors[comp_domain] = comp
+
+        # Classify all discovered competitors
+        if self.claude_client:
+            classifications = await self._classify_competitors_greenfield(
+                seed_keywords=seed_keywords,
+                industry=industry,
+                competitors=list(all_competitors.values()),
+                market=target_market,
+            )
+            # ... process classifications same as existing method ...
+
+        return result
+
+    async def _discover_from_seed_keywords(
+        self,
+        seed_keywords: List[str],
+        market: str,
+        language: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Discover competitors by analyzing who ranks for seed keywords.
+
+        This is the core greenfield discovery method - no brand name needed.
+        """
+        discovered = []
+
+        if not self.dataforseo_client:
+            return discovered
+
+        # Get location code for market
+        location_code = self._get_location_code(market)
+
+        for keyword in seed_keywords[:7]:  # Analyze top 7 seed keywords
+            try:
+                # Get SERP results for this keyword
+                serp_results = await self.dataforseo_client.get_serp_results(
+                    keyword=keyword,
+                    location_code=location_code,
+                    language_code=language,
+                    depth=20,  # Top 20 results
+                )
+
+                for result in serp_results.get("organic", []):
+                    domain = result.get("domain", "")
+                    if not domain:
+                        continue
+
+                    discovered.append({
+                        "domain": domain,
+                        "source": DiscoveryMethod.SERP_ANALYSIS,
+                        "discovery_keyword": keyword,
+                        "serp_position": result.get("position"),
+                        "serp_url": result.get("url"),
+                        "metrics": {
+                            "position": result.get("position"),
+                            "title": result.get("title"),
+                        },
+                    })
+
+            except Exception as e:
+                logger.warning(f"SERP fetch failed for '{keyword}': {e}")
+                continue
+
+        # Deduplicate and count occurrences
+        domain_counts = {}
+        domain_data = {}
+        for comp in discovered:
+            domain = comp["domain"]
+            domain_counts[domain] = domain_counts.get(domain, 0) + 1
+            if domain not in domain_data:
+                domain_data[domain] = comp
+            domain_data[domain]["keyword_overlap"] = domain_counts[domain]
+
+        # Sort by number of keywords they rank for (higher = more relevant)
+        sorted_domains = sorted(
+            domain_data.values(),
+            key=lambda x: x.get("keyword_overlap", 0),
+            reverse=True
+        )
+
+        return sorted_domains[:20]  # Top 20 by keyword overlap
+
+    async def _discover_from_traffic_share(
+        self,
+        keywords: List[str],
+        market: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Discover competitors using Traffic Share by Domain API.
+
+        This shows which domains capture the most traffic for given keywords.
+        """
+        discovered = []
+
+        if not self.dataforseo_client:
+            return discovered
+
+        try:
+            # DataForSEO Traffic Share by Domain endpoint
+            traffic_share = await self.dataforseo_client.get_traffic_share_by_domain(
+                keywords=keywords,
+                location_name=market.upper(),
+            )
+
+            for domain_data in traffic_share:
+                discovered.append({
+                    "domain": domain_data.get("domain", ""),
+                    "source": DiscoveryMethod.TRAFFIC_SHARE,
+                    "metrics": {
+                        "estimated_traffic": domain_data.get("etv", 0),
+                        "keyword_count": domain_data.get("keywords_count", 0),
+                        "traffic_share": domain_data.get("traffic_share", 0),
+                    },
+                })
+
+        except Exception as e:
+            logger.warning(f"Traffic share fetch failed: {e}")
+
+        return discovered
+
+    async def _classify_competitors_greenfield(
+        self,
+        seed_keywords: List[str],
+        industry: str,
+        competitors: List[Dict[str, Any]],
+        market: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Classify competitors for greenfield (no website analysis available).
+
+        Uses seed keywords and industry instead of website_analysis.
+        """
+        if not self.claude_client or not competitors:
+            return []
+
+        # Build greenfield-specific prompt
+        prompt = GREENFIELD_CLASSIFICATION_PROMPT.format(
+            seed_keywords=", ".join(seed_keywords),
+            industry=industry,
+            target_market=market,
+            competitors_list=self._format_competitors_for_prompt(competitors),
+        )
+
+        # ... call Claude and parse response ...
+        return classifications
+
+
+# New prompt for greenfield classification
+GREENFIELD_CLASSIFICATION_PROMPT = """Classify these potential competitors for a NEW business entering the market.
+
+## Target Business Context:
+- **Seed Keywords**: {seed_keywords}
+- **Industry**: {industry}
+- **Target Market**: {target_market}
+- NOTE: This is a NEW domain with no existing presence. We're identifying who they will compete against.
+
+## Potential Competitors to Classify:
+
+{competitors_list}
+
+## Classification Criteria:
+For each competitor, determine:
+1. **DIRECT**: Already sells similar products/services to the same audience
+2. **EMERGING**: New player in this space, potential future competitor
+3. **ASPIRATIONAL**: Market leader, benchmark to learn from
+4. **CONTENT**: Content sites ranking for these keywords (blogs, publications)
+5. **SEO**: Different business model but ranks for overlapping keywords
+6. **NOT_COMPETITOR**: Unrelated, only appears due to generic keywords
+
+Return JSON array with classification for each competitor.
+"""
+```
+
+#### Extending ContextIntelligenceOrchestrator
+
+```python
+# In src/context/orchestrator.py - ADD new method
+
+class ContextIntelligenceOrchestrator:
+
+    async def gather_context_greenfield(
+        self,
+        request: GreenfieldContextRequest,  # New request type
+    ) -> GreenfieldIntelligenceResult:
+        """
+        Gather context for greenfield domain.
+
+        Unlike gather_context(), this method:
+        1. Accepts GreenfieldContext with seed keywords
+        2. Skips market detection (uses user-provided market)
+        3. Uses greenfield competitor discovery
+        4. Builds keyword universe from competitors
+
+        Args:
+            request: Greenfield context request with seed keywords and known competitors
+
+        Returns:
+            GreenfieldIntelligenceResult with competitor-derived intelligence
+        """
+        logger.info(f"Starting Greenfield Context Intelligence for: {request.domain}")
+
+        result = GreenfieldIntelligenceResult(domain=request.domain)
+
+        # Phase G0: Verify this is actually greenfield
+        domain_metrics = await self._fetch_domain_metrics(request.domain)
+        maturity = classify_domain_maturity(domain_metrics)
+
+        if maturity == DomainMaturity.ESTABLISHED:
+            logger.warning(f"Domain {request.domain} appears established, redirecting to standard flow")
+            return await self._redirect_to_standard(request)
+
+        result.maturity_classification = maturity
+
+        # Phase G1: Accept user context (no website scraping needed)
+        result.greenfield_context = request.greenfield_context
+        result.strategic_context = request.strategic_context
+
+        # Phase G2: Resolve market (no detection, use user input)
+        result.resolved_market = ResolvedMarket(
+            market=request.greenfield_context.target_market,
+            language=request.greenfield_context.target_language,
+            source="user_provided",
+            confidence=1.0,  # User-provided is authoritative
+        )
+
+        # Phase G3: Greenfield competitor discovery
+        result.competitor_validation = await self.competitor_discovery.discover_greenfield(
+            seed_keywords=request.greenfield_context.seed_keywords,
+            user_provided_competitors=request.greenfield_context.known_competitors,
+            target_market=result.resolved_market.market,
+            target_language=result.resolved_market.language,
+            industry=request.greenfield_context.industry_vertical,
+            target_dr=domain_metrics.domain_rating or 10,
+        )
+
+        # Phase G4: Mine competitor keywords (build keyword universe)
+        result.keyword_universe = await self._build_keyword_universe_greenfield(
+            competitors=result.competitor_validation.confirmed + result.competitor_validation.discovered,
+            seed_keywords=request.greenfield_context.seed_keywords,
+            market=result.resolved_market.market,
+        )
+
+        # Phase G5: Business profile synthesis
+        result.business_profile = await self.business_profiler.synthesize_greenfield(
+            greenfield_context=request.greenfield_context,
+            competitor_validation=result.competitor_validation,
+            keyword_universe=result.keyword_universe,
+        )
+
+        return result
+
+
+class GreenfieldContextRequest:
+    """
+    Request for greenfield context intelligence.
+
+    Unlike ContextIntelligenceRequest, requires seed keywords and
+    known competitors (since we can't discover them from domain data).
+    """
+
+    def __init__(
+        self,
+        domain: str,
+        greenfield_context: GreenfieldContext,  # Required
+        strategic_context: Optional[StrategicContext] = None,
+    ):
+        self.domain = domain
+        self.greenfield_context = greenfield_context
+        self.strategic_context = strategic_context
+
+        # Validation
+        if len(greenfield_context.seed_keywords) < 5:
+            raise ValueError("Greenfield analysis requires at least 5 seed keywords")
+        if len(greenfield_context.known_competitors) < 3:
+            raise ValueError("Greenfield analysis requires at least 3 known competitors")
+```
+
+#### Integration Flow Summary
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         USER STARTS ANALYSIS                                │
+│                                                                             │
+│  Domain: newstartup.com                                                     │
+│  Market: United States                                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DOMAIN MATURITY CHECK                                     │
+│                                                                             │
+│  Fetch: DataForSEO domain overview                                          │
+│  Result: DR=5, Keywords=12, Traffic=34                                      │
+│  Classification: GREENFIELD                                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    GREENFIELD CONTEXT FORM                                   │
+│                                                                             │
+│  "We detected this is a new domain. Please provide:"                        │
+│  - Business description                                                      │
+│  - Seed keywords (5-10)                                                      │
+│  - Known competitors (3-5)                                                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│           ContextIntelligenceOrchestrator.gather_context_greenfield()       │
+│                                                                             │
+│  Uses: CompetitorDiscovery.discover_greenfield()                            │
+│        - User competitors → Direct classification                           │
+│        - SERP "{seed_keyword}" → Who ranks here?                            │
+│        - Traffic Share API → Who captures demand?                           │
+│                                                                             │
+│  REUSES: AI classification, platform filtering, deduplication               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    GREENFIELD COLLECTION PIPELINE                            │
+│                                                                             │
+│  Phase G1: Competitor Discovery (DONE above)                                │
+│  Phase G2: Keyword Universe (mine competitor keywords)                      │
+│  Phase G3: SERP Analysis (winnability)                                      │
+│  Phase G4: Market Sizing (TAM/SAM/SOM)                                      │
+│  Phase G5: Projections & Roadmap                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### With Existing Collection Pipeline
 
 ```python
