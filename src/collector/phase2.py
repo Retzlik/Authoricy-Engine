@@ -390,6 +390,8 @@ async def fetch_ranked_keywords(
             "url": serp_item.get("url", ""),
             "traffic": (item.get("ranked_serp_element") or {}).get("etv") or 0,
             "traffic_value": (item.get("ranked_serp_element") or {}).get("estimated_paid_traffic_cost") or 0,
+            # Semantic clustering - DataForSEO's parent topic for keyword grouping
+            "parent_topic": kw_info.get("parent_topic"),
         })
 
     return keywords
@@ -429,6 +431,8 @@ async def fetch_keywords_for_site(
             "cpc": kw_info.get("cpc") or 0,
             "competition": kw_info.get("competition") or 0,
             "competition_level": kw_info.get("competition_level", ""),
+            # Semantic clustering - DataForSEO's parent topic for keyword grouping
+            "parent_topic": kw_info.get("parent_topic"),
         })
 
     return keywords
@@ -589,6 +593,8 @@ async def fetch_keyword_ideas(
             "competition": competition,
             "competition_level": kw_info.get("competition_level", ""),
             "opportunity_score": round(opportunity_score, 2),
+            # Semantic clustering - DataForSEO's parent topic for keyword grouping
+            "parent_topic": kw_info.get("parent_topic"),
         })
 
     # Sort by opportunity score

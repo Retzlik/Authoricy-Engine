@@ -623,12 +623,25 @@ async def fetch_live_serp_ai_overview(
                     ai_overview_content = item.get("text", "")[:500]
                     break
 
+            # Extract organic results with titles for format analysis
+            organic_results = []
+            for item in items:
+                if item.get("type") == "organic":
+                    organic_results.append({
+                        "position": item.get("rank_group"),
+                        "url": item.get("url", ""),
+                        "domain": item.get("domain", ""),
+                        "title": item.get("title", ""),  # SERP title for format analysis
+                        "description": item.get("description", ""),
+                    })
+
             serp_results.append({
                 "keyword": keyword,
                 "has_ai_overview": has_ai_overview,
                 "ai_overview_content": ai_overview_content,
                 "serp_features": [item.get("type") for item in items[:20]],
-                "organic_results_count": sum(1 for item in items if item.get("type") == "organic"),
+                "organic_results_count": len(organic_results),
+                "organic_results": organic_results[:10],  # Top 10 organic results with titles
             })
         except Exception as e:
             logger.warning(f"Failed to fetch live SERP for '{keyword}': {e}")

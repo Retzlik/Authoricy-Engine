@@ -326,6 +326,9 @@ async def run_migration():
         "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_detection_confidence FLOAT",
         "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_has_conflict BOOLEAN DEFAULT FALSE",
         "ALTER TABLE context_intelligence ADD COLUMN IF NOT EXISTS resolved_conflict_details TEXT",
+        # Keywords table: parent_topic for semantic clustering
+        "ALTER TABLE keywords ADD COLUMN IF NOT EXISTS parent_topic VARCHAR(500)",
+        "CREATE INDEX IF NOT EXISTS idx_keyword_parent_topic ON keywords(domain_id, parent_topic)",
     ]
 
     # Enum migrations - PostgreSQL enum ADD VALUE can't be in transaction

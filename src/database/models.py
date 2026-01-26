@@ -274,6 +274,7 @@ class Keyword(Base):
     # Clustering
     cluster_name = Column(String(255))
     is_cluster_seed = Column(Boolean, default=False)
+    parent_topic = Column(String(500))  # DataForSEO's semantic parent topic for clustering
 
     # Historical search volume (for trends)
     monthly_searches = Column(JSONB)  # [{year, month, volume}, ...]
@@ -289,6 +290,7 @@ class Keyword(Base):
         Index("idx_keyword_opportunity", "domain_id", "opportunity_score"),
         Index("idx_keyword_position", "domain_id", "current_position"),
         Index("idx_keyword_text", "keyword_normalized"),
+        Index("idx_keyword_parent_topic", "domain_id", "parent_topic"),
     )
 
 

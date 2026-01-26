@@ -246,6 +246,10 @@ def store_keywords(
                 search_intent=_map_intent(kw_data.get("intent")),
                 # Historical
                 monthly_searches=kw_data.get("monthly_searches"),
+                # Scoring - calculated opportunity score from collection
+                opportunity_score=kw_data.get("opportunity_score"),
+                # Clustering - parent_topic from DataForSEO for semantic grouping
+                parent_topic=kw_data.get("parent_topic"),
             )
             db.add(keyword)
             count += 1
