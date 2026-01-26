@@ -37,6 +37,7 @@ Most SEO intelligence platforms fail new domains. They attempt to analyze domain
 13. [Integration Points](#13-integration-points)
 14. [Success Metrics](#14-success-metrics)
 15. [Implementation Phases](#15-implementation-phases)
+16. [Validation Plan](#16-validation-plan)
 
 ---
 
@@ -2941,6 +2942,650 @@ async def get_dashboard_overview(domain_id: UUID, db: Session = Depends(get_db))
 - [ ] Performance optimization
 
 **Deliverable:** Production-ready greenfield capability
+
+---
+
+## 16. Validation Plan
+
+This section defines the comprehensive validation strategy to ensure Greenfield Intelligence delivers accurate, actionable results. **No feature ships without passing all quality gates.**
+
+### 16.1 Pre-Implementation Validation
+
+Before writing any production code, validate foundational assumptions.
+
+#### Data Availability Audit
+
+| Data Point | Required For | Source | Validation Method | Pass Criteria |
+|------------|--------------|--------|-------------------|---------------|
+| Domain Rating of SERP results | Winnability score | DataForSEO SERP API | Test 100 keywords | DR available for >90% of results |
+| AI Overview presence | CTR adjustment | DataForSEO SERP API | Test 100 keywords | Boolean flag available |
+| Content age/freshness | Weak content signals | DataForSEO or scraping | Test 50 keywords | Date available for >70% of results |
+| Competitor organic keywords | Keyword universe | DataForSEO Domain API | Test 10 competitors | Top 500 keywords retrievable |
+| Search intent classification | Business relevance | DataForSEO or Claude | Test 200 keywords | Intent matches manual review >85% |
+
+**Action if fails:** Document limitation, design fallback (e.g., estimate SERP DR from KD if unavailable)
+
+#### API Cost Modeling
+
+```
+Per Greenfield Analysis Cost Estimate:
+
+Phase G1: Competitor Discovery
+- SERP results for 5-10 seed keywords: 5-10 API calls
+- Domain overview for 15-20 competitors: 15-20 API calls
+Subtotal: ~30 calls
+
+Phase G2: Keyword Universe
+- Competitor keywords (7 competitors × 500 kw): 7 API calls
+- Keyword expansion (10 seeds × 100 suggestions): 10 API calls
+- Related keywords: 10 API calls
+Subtotal: ~27 calls
+
+Phase G3: SERP Analysis for Winnability
+- SERP results for top 200 keywords: 200 API calls
+Subtotal: 200 calls
+
+Phase G4: Market Sizing
+- Already collected (reuse)
+Subtotal: 0 calls
+
+TOTAL: ~257 API calls per analysis
+
+Cost at $0.002/call: ~$0.51 per greenfield analysis
+Cost at $0.01/call: ~$2.57 per greenfield analysis
+```
+
+**Validation:** Run 10 test analyses, measure actual API calls. Must be within 20% of estimate.
+
+**Action if exceeds budget:** Reduce SERP analysis to top 100 keywords, implement caching.
+
+#### User Problem Validation
+
+Before building, confirm users actually need this.
+
+| Validation Method | Target | Pass Criteria |
+|-------------------|--------|---------------|
+| Customer interviews | 5 agencies with new domain clients | 4/5 confirm greenfield is pain point |
+| Support ticket analysis | Last 6 months | >10 tickets about "no data" or "new domain" |
+| Competitor analysis | SEMrush/Ahrefs forums | Find user complaints about new domains |
+| Sales team input | 3 sales reps | Confirm lost deals due to greenfield gap |
+
+**Owner:** Product Manager
+**Timeline:** Complete before Phase 1 begins
+**Document:** User validation report with quotes and evidence
+
+---
+
+### 16.2 Algorithm Validation Protocol
+
+Each algorithm requires validation before and after implementation.
+
+#### 16.2.1 Winnability Score Validation
+
+**Hypothesis:** Winnability score predicts ranking probability. Keywords with winnability >70 should rank in top 20 within 6 months at higher rate than keywords with winnability <50.
+
+**Validation Method:**
+```python
+# Retrospective validation on existing client data
+
+def validate_winnability_algorithm():
+    """
+    Validation protocol for winnability score accuracy.
+
+    Steps:
+    1. Select 10 established clients who started as greenfield (DR <20) 12+ months ago
+    2. For each client, calculate winnability scores for keywords they NOW rank for
+    3. Compare winnability predictions to actual ranking outcomes
+    4. Calculate prediction accuracy
+    """
+
+    test_cases = []
+
+    for client in get_former_greenfield_clients(min_months=12):
+        # Get keywords they rank for now
+        current_keywords = get_client_rankings(client)
+
+        for kw in current_keywords:
+            # Calculate what winnability would have been at start
+            historical_serp = get_historical_serp(kw.keyword, client.start_date)
+            initial_dr = client.initial_domain_rating
+
+            predicted_winnability = calculate_winnability(
+                target_dr=initial_dr,
+                avg_serp_dr=historical_serp.avg_dr,
+                min_serp_dr=historical_serp.min_dr,
+                has_low_dr_rankings=historical_serp.has_low_dr,
+                weak_content_signals=historical_serp.weak_signals,
+                has_ai_overview=historical_serp.has_aio,
+                keyword_difficulty=kw.kd_at_start,
+            )
+
+            actual_outcome = {
+                "ranked_top_20": kw.best_position <= 20,
+                "ranked_top_10": kw.best_position <= 10,
+                "months_to_rank": kw.months_to_first_top_20,
+            }
+
+            test_cases.append({
+                "keyword": kw.keyword,
+                "predicted_winnability": predicted_winnability,
+                "actual_outcome": actual_outcome,
+            })
+
+    # Analyze results
+    high_winnability = [t for t in test_cases if t["predicted_winnability"] >= 70]
+    low_winnability = [t for t in test_cases if t["predicted_winnability"] < 50]
+
+    high_win_success_rate = sum(1 for t in high_winnability if t["actual_outcome"]["ranked_top_20"]) / len(high_winnability)
+    low_win_success_rate = sum(1 for t in low_winnability if t["actual_outcome"]["ranked_top_20"]) / len(low_winnability)
+
+    return {
+        "high_winnability_success_rate": high_win_success_rate,  # Target: >60%
+        "low_winnability_success_rate": low_win_success_rate,    # Target: <30%
+        "lift": high_win_success_rate / max(0.01, low_win_success_rate),  # Target: >2x
+    }
+```
+
+**Pass Criteria:**
+| Metric | Target | Minimum Acceptable |
+|--------|--------|-------------------|
+| High winnability (>70) success rate | >60% | >50% |
+| Low winnability (<50) success rate | <30% | <40% |
+| Lift (high vs low) | >2.5x | >2.0x |
+| Correlation (winnability vs rank achieved) | >0.5 | >0.4 |
+
+**If validation fails:**
+1. Analyze which coefficient is miscalibrated
+2. Adjust coefficient using regression analysis on test data
+3. Re-validate
+4. Repeat until pass criteria met
+
+#### 16.2.2 Personalized Difficulty Validation
+
+**Hypothesis:** Personalized KD better predicts ranking difficulty than base KD for domains with non-average authority.
+
+**Validation Method:**
+```python
+def validate_personalized_difficulty():
+    """Compare personalized KD prediction accuracy vs base KD."""
+
+    test_cases = []
+
+    for client in get_diverse_dr_clients():  # Mix of DR 10, 30, 50, 70
+        for kw in client.keywords_attempted:
+            base_kd = kw.keyword_difficulty
+            personalized_kd = calculate_personalized_difficulty_greenfield(
+                base_kd=base_kd,
+                target_dr=client.domain_rating_at_attempt,
+                avg_serp_dr=kw.serp_avg_dr_at_attempt,
+            )
+
+            actual_difficulty = {
+                "months_to_rank": kw.months_to_top_20,
+                "achieved_position": kw.best_position,
+            }
+
+            test_cases.append({
+                "base_kd": base_kd,
+                "personalized_kd": personalized_kd,
+                "actual": actual_difficulty,
+                "domain_dr": client.domain_rating_at_attempt,
+            })
+
+    # Calculate correlation
+    base_kd_correlation = correlation(
+        [t["base_kd"] for t in test_cases],
+        [t["actual"]["months_to_rank"] for t in test_cases]
+    )
+    personalized_kd_correlation = correlation(
+        [t["personalized_kd"] for t in test_cases],
+        [t["actual"]["months_to_rank"] for t in test_cases]
+    )
+
+    return {
+        "base_kd_correlation": base_kd_correlation,
+        "personalized_kd_correlation": personalized_kd_correlation,
+        "improvement": personalized_kd_correlation - base_kd_correlation,
+    }
+```
+
+**Pass Criteria:**
+| Metric | Target |
+|--------|--------|
+| Personalized KD correlation with actual time-to-rank | >0.6 |
+| Improvement over base KD | >0.1 (10 percentage points) |
+
+#### 16.2.3 Beachhead Selection Validation
+
+**Hypothesis:** Beachhead keywords (selected by our algorithm) rank faster and with higher success rate than random high-volume keywords.
+
+**Validation Method:**
+1. For 5 greenfield clients, run beachhead selection algorithm
+2. Also identify "naive picks" (highest volume keywords with KD <40)
+3. Track both sets for 6 months
+4. Compare ranking success rates
+
+**Pass Criteria:**
+| Metric | Target |
+|--------|--------|
+| Beachhead top-20 rate at 6 months | >50% |
+| Naive pick top-20 rate at 6 months | Baseline (no target) |
+| Beachhead lift over naive | >1.5x |
+| Average time-to-rank for beachhead | <4 months |
+
+#### 16.2.4 Traffic Projection Validation
+
+**Hypothesis:** Actual traffic falls within our projected ranges (conservative to aggressive) for >70% of clients.
+
+**Validation Method:**
+```python
+def validate_traffic_projections():
+    """
+    Compare projected traffic to actual traffic at 12 months.
+    """
+    results = []
+
+    for client in get_greenfield_clients_with_12_month_history():
+        # Get original projections
+        projections = client.original_greenfield_analysis.traffic_projections
+
+        # Get actual traffic at month 12
+        actual_traffic = client.organic_traffic_at_month_12
+
+        # Check if within range
+        in_range = (
+            projections.conservative.traffic_by_month[12] <= actual_traffic <=
+            projections.aggressive.traffic_by_month[12]
+        )
+
+        # Calculate accuracy
+        expected = projections.expected.traffic_by_month[12]
+        accuracy = 1 - abs(actual_traffic - expected) / expected
+
+        results.append({
+            "client": client.domain,
+            "conservative": projections.conservative.traffic_by_month[12],
+            "expected": projections.expected.traffic_by_month[12],
+            "aggressive": projections.aggressive.traffic_by_month[12],
+            "actual": actual_traffic,
+            "in_range": in_range,
+            "accuracy": accuracy,
+        })
+
+    return {
+        "in_range_rate": sum(r["in_range"] for r in results) / len(results),  # Target: >70%
+        "avg_accuracy": sum(r["accuracy"] for r in results) / len(results),   # Target: >0.6
+        "results": results,
+    }
+```
+
+**Pass Criteria:**
+| Metric | Target | Minimum |
+|--------|--------|---------|
+| Within range rate | >75% | >65% |
+| Expected scenario accuracy (within 30%) | >50% | >40% |
+| No catastrophic misses (>3x off) | 0% | <5% |
+
+---
+
+### 16.3 Industry Coefficient Validation
+
+Each industry coefficient set requires separate validation.
+
+#### Coefficient Tuning Protocol
+
+```python
+def tune_industry_coefficients(industry: str, test_data: List[TestCase]):
+    """
+    Use gradient descent to tune coefficients based on actual outcomes.
+
+    Objective: Minimize prediction error for winnability → ranking outcome
+    """
+
+    # Initial coefficients
+    coefficients = INDUSTRY_COEFFICIENTS[industry].copy()
+
+    learning_rate = 0.1
+    iterations = 100
+
+    for i in range(iterations):
+        total_error = 0
+        gradients = {k: 0 for k in coefficients}
+
+        for case in test_data:
+            # Predict winnability with current coefficients
+            predicted = calculate_winnability_with_coefficients(case, coefficients)
+
+            # Compare to actual outcome (1 if ranked top 20, 0 otherwise)
+            actual = 1 if case.actual_position <= 20 else 0
+
+            # Calculate error
+            error = (predicted / 100) - actual
+            total_error += error ** 2
+
+            # Calculate gradients (simplified)
+            for coef_name in coefficients:
+                gradients[coef_name] += error * partial_derivative(case, coef_name, coefficients)
+
+        # Update coefficients
+        for coef_name in coefficients:
+            coefficients[coef_name] -= learning_rate * gradients[coef_name] / len(test_data)
+
+        # Log progress
+        if i % 10 == 0:
+            logger.info(f"Iteration {i}: MSE = {total_error / len(test_data)}")
+
+    return coefficients
+```
+
+#### Industry-Specific Validation Requirements
+
+| Industry | Min Test Cases | Special Validation |
+|----------|----------------|-------------------|
+| SaaS | 50 keywords | None (baseline) |
+| E-commerce | 50 keywords | Validate product vs category pages separately |
+| YMYL Health | 30 keywords | Manual E-E-A-T compliance check on successful rankings |
+| YMYL Finance | 30 keywords | Manual E-E-A-T compliance check |
+| Local Services | 40 keywords | Validate local pack predictions separately |
+| News/Media | 30 keywords | Account for freshness decay |
+| Education | 30 keywords | Validate institutional vs commercial separately |
+| B2C Consumer | 40 keywords | None |
+
+---
+
+### 16.4 Quality Gates by Phase
+
+Each implementation phase has mandatory quality gates.
+
+#### Phase 1: Foundation - Quality Gate
+
+| Check | Method | Pass Criteria |
+|-------|--------|---------------|
+| Classification accuracy | Test 100 domains with known maturity | >95% correct classification |
+| Edge case handling | Test domains at boundaries (DR 19, 20, 21, 34, 35, 36) | All classified correctly |
+| Performance | Classify 1000 domains | <100ms total |
+
+**Gate owner:** Engineering lead
+**Gate review:** Automated tests + manual spot check
+
+#### Phase 2: Competitor Discovery - Quality Gate
+
+| Check | Method | Pass Criteria |
+|-------|--------|---------------|
+| Competitor relevance | Manual review of 10 analyses | >80% of discovered competitors are true competitors |
+| Platform filtering | Check for Wikipedia, Reddit in results | 0 platform domains in final list |
+| Competitor count | Review distribution | 8-15 competitors per analysis |
+| API efficiency | Measure calls per analysis | Within 20% of budget estimate |
+
+**Gate owner:** Product + Engineering
+**Gate review:** Manual review of 10 analyses
+
+#### Phase 3: Keyword Universe - Quality Gate
+
+| Check | Method | Pass Criteria |
+|-------|--------|---------------|
+| Keyword count | Check 10 analyses | 500-3000 keywords per analysis |
+| Relevance score distribution | Histogram review | >30% keywords with relevance >0.7 |
+| Intent classification | Manual check 50 keywords | >85% correct intent |
+| Deduplication | Check for duplicates | 0 duplicate keywords |
+| Source diversity | Check keyword sources | Keywords from >3 sources per analysis |
+
+**Gate owner:** Engineering + Data team
+**Gate review:** Automated metrics + manual sample check
+
+#### Phase 4: Winnability Analysis - Quality Gate
+
+| Check | Method | Pass Criteria |
+|-------|--------|---------------|
+| SERP data completeness | Check SERP fetch success rate | >85% of keywords have SERP data |
+| Winnability distribution | Histogram review | Normal-ish distribution, not all clustered |
+| Beachhead identification | Check 10 analyses | 15-30 beachhead keywords per analysis |
+| Algorithm validation | Run validation protocol (16.2.1) | Pass all criteria |
+| Fallback handling | Test with missing SERP data | Graceful degradation, no crashes |
+
+**Gate owner:** Engineering + Data Science
+**Gate review:** Validation report + manual review
+
+#### Phase 5: Market Opportunity - Quality Gate
+
+| Check | Method | Pass Criteria |
+|-------|--------|---------------|
+| TAM/SAM/SOM ratios | Check 10 analyses | SOM < SAM < TAM always |
+| Competitor share totals | Sum shares | Total ~100% (allow ±5%) |
+| Volume sanity | Compare to known market sizes | Within order of magnitude |
+| Zero handling | Test with sparse data | No division by zero, sensible defaults |
+
+**Gate owner:** Product + Engineering
+**Gate review:** Manual review of market sizing accuracy
+
+#### Phase 6: Projections & Roadmap - Quality Gate
+
+| Check | Method | Pass Criteria |
+|-------|--------|---------------|
+| Projection ordering | Check all analyses | Conservative < Expected < Aggressive always |
+| Confidence labels | Verify confidence values | Conservative=0.75, Expected=0.5, Aggressive=0.25 |
+| Roadmap phase logic | Check keyword assignment | Easier keywords in Phase 1, harder in Phase 4 |
+| Timeline sanity | Review projections | No traffic projections >10x market TAM |
+
+**Gate owner:** Product
+**Gate review:** Manual review + sanity checks
+
+#### Phase 7: Frontend - Quality Gate
+
+| Check | Method | Pass Criteria |
+|-------|--------|---------------|
+| Wizard completion rate | Track in staging | >80% complete wizard without abandonment |
+| Load time | Measure dashboard load | <3 seconds for full dashboard |
+| Mobile responsiveness | Test on mobile devices | All views usable on mobile |
+| Error handling | Test with API failures | Graceful error messages, no crashes |
+| Accessibility | Run axe-core audit | 0 critical violations |
+
+**Gate owner:** Frontend lead + Design
+**Gate review:** QA testing + design review
+
+#### Phase 8: Testing & Refinement - Quality Gate (LAUNCH GATE)
+
+| Check | Method | Pass Criteria |
+|-------|--------|---------------|
+| Full algorithm validation | Run all validations (16.2) | All pass |
+| User acceptance testing | 5 beta users complete analysis | >4/5 rate "useful" or better |
+| Performance under load | Load test with 50 concurrent | <30s analysis time |
+| Error rate | Monitor staging for 1 week | <1% error rate |
+| Data quality audit | Manual review of 20 analyses | No obvious errors or nonsensical results |
+
+**Gate owner:** VP Engineering + Product
+**Gate review:** Launch readiness review meeting
+
+---
+
+### 16.5 Post-Launch Monitoring
+
+After launch, continuous monitoring validates ongoing quality.
+
+#### Real-Time Monitoring Dashboards
+
+```yaml
+Greenfield Quality Dashboard:
+
+  Operational Metrics (refresh: 1 min):
+    - Analysis completion rate (target: >95%)
+    - Average analysis time (target: <15 min)
+    - API error rate (target: <1%)
+    - SERP data completeness (target: >85%)
+
+  Quality Metrics (refresh: hourly):
+    - Winnability score distribution (alert if >50% cluster at extremes)
+    - Beachhead count distribution (alert if <10 or >40 average)
+    - Market sizing sanity (alert if SOM > SAM)
+    - User feedback scores (alert if <3.5/5 average)
+
+  Validation Metrics (refresh: weekly):
+    - Projection accuracy (track against actuals as data comes in)
+    - Beachhead success rate (track rankings at 30/60/90 days)
+    - Coefficient drift detection (compare to baseline)
+```
+
+#### Cohort Tracking Protocol
+
+```python
+def track_greenfield_cohort(cohort_month: str):
+    """
+    Track a cohort of greenfield analyses to validate long-term accuracy.
+
+    Run monthly, tracking cohorts until 24-month mark.
+    """
+
+    cohort = get_analyses_from_month(cohort_month)
+
+    tracking_points = [1, 3, 6, 9, 12, 18, 24]  # months after analysis
+
+    for months_elapsed in tracking_points:
+        if not has_elapsed(cohort_month, months_elapsed):
+            continue
+
+        cohort_metrics = {
+            "cohort_month": cohort_month,
+            "tracking_month": months_elapsed,
+            "sample_size": len(cohort),
+        }
+
+        for analysis in cohort:
+            domain = analysis.domain
+
+            # Get current metrics
+            current_traffic = get_current_traffic(domain)
+            current_keywords = get_current_keywords(domain)
+
+            # Get original projections
+            projected_traffic = analysis.traffic_projections.expected.traffic_by_month.get(months_elapsed, 0)
+
+            # Calculate accuracy
+            cohort_metrics.setdefault("traffic_actuals", []).append(current_traffic)
+            cohort_metrics.setdefault("traffic_projected", []).append(projected_traffic)
+
+            # Track beachhead rankings
+            for beachhead_kw in analysis.beachhead_keywords:
+                current_position = get_keyword_position(domain, beachhead_kw.keyword)
+                cohort_metrics.setdefault("beachhead_rankings", []).append({
+                    "keyword": beachhead_kw.keyword,
+                    "predicted_winnability": beachhead_kw.winnability_score,
+                    "current_position": current_position,
+                    "success": current_position <= 20 if current_position else False,
+                })
+
+        # Aggregate and store
+        store_cohort_tracking(cohort_metrics)
+
+        # Alert if metrics diverge significantly
+        if months_elapsed >= 6:
+            validate_cohort_accuracy(cohort_metrics)
+```
+
+#### Feedback Collection
+
+| Feedback Type | Collection Method | Frequency | Owner |
+|---------------|-------------------|-----------|-------|
+| In-app rating | Post-analysis prompt | Every analysis | Product |
+| Detailed survey | Email at 30 days | Monthly cohort | Product |
+| User interviews | Scheduled calls | 5/month | Product |
+| Support tickets | Zendesk tagging | Ongoing | Support |
+| Churn analysis | Exit survey | On churn | Success |
+
+#### Coefficient Recalibration Schedule
+
+| Trigger | Action |
+|---------|--------|
+| Weekly | Review prediction accuracy metrics |
+| Monthly | Run full validation protocol on new data |
+| Quarterly | Re-tune coefficients using latest data |
+| Major algorithm change | Full revalidation required |
+| Industry CTR shift (>10%) | Update CTR curves, re-project |
+
+---
+
+### 16.6 Validation Checklist Summary
+
+Before launch, all items must be checked:
+
+#### Pre-Implementation
+- [ ] Data availability audit complete - all data points confirmed available
+- [ ] API cost model validated - actual costs within 20% of estimate
+- [ ] User problem validation complete - documented evidence of need
+- [ ] Baseline metrics established for existing clients
+
+#### Algorithm Validation
+- [ ] Winnability validation passed (lift >2x)
+- [ ] Personalized KD validation passed (correlation >0.6)
+- [ ] Beachhead selection validation passed (lift >1.5x)
+- [ ] Traffic projection validation passed (>70% in range)
+- [ ] Industry coefficients validated for all 8 verticals
+
+#### Quality Gates
+- [ ] Phase 1 gate passed
+- [ ] Phase 2 gate passed
+- [ ] Phase 3 gate passed
+- [ ] Phase 4 gate passed
+- [ ] Phase 5 gate passed
+- [ ] Phase 6 gate passed
+- [ ] Phase 7 gate passed
+- [ ] Phase 8 (launch) gate passed
+
+#### Monitoring Setup
+- [ ] Real-time dashboard configured
+- [ ] Cohort tracking implemented
+- [ ] Feedback collection live
+- [ ] Alerting configured for quality degradation
+
+#### Documentation
+- [ ] User documentation complete
+- [ ] API documentation complete
+- [ ] Internal runbook for quality issues
+- [ ] Coefficient tuning playbook documented
+
+---
+
+### 16.7 Rollback Plan
+
+If post-launch monitoring detects critical issues:
+
+#### Severity Levels
+
+| Level | Definition | Response Time | Action |
+|-------|------------|---------------|--------|
+| P0 | Completely wrong results, user-visible errors | <1 hour | Feature flag off, rollback |
+| P1 | Significant accuracy degradation (>30% error) | <4 hours | Investigate, consider rollback |
+| P2 | Minor accuracy issues, edge cases | <24 hours | Fix forward, monitor |
+| P3 | Cosmetic or UX issues | <1 week | Normal sprint |
+
+#### Rollback Procedure
+
+```yaml
+P0 Rollback Checklist:
+
+  1. Disable greenfield feature flag (5 min)
+     - All users see standard analysis
+     - Greenfield option hidden in UI
+
+  2. Notify affected users (30 min)
+     - Email users who ran analysis in last 24h
+     - Offer reanalysis when fixed
+
+  3. Root cause analysis (4 hours)
+     - Identify specific failure
+     - Determine scope of impact
+     - Document in incident report
+
+  4. Fix and validate (varies)
+     - Implement fix
+     - Re-run full validation protocol
+     - Pass all quality gates
+
+  5. Gradual re-enable (1 day)
+     - Enable for internal users first
+     - Enable for 10% of users
+     - Monitor for 24h
+     - Full rollout
+```
 
 ---
 
