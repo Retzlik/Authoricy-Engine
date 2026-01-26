@@ -1171,3 +1171,669 @@ async def list_analyses(
             })
 
         return {"analyses": result}
+
+
+# =============================================================================
+# PHASE 3: KEYWORDS & TOPICS API
+# =============================================================================
+
+# --- Keyword Request/Response Models ---
+
+class KeywordAssign(BaseModel):
+    """Request to assign keywords to a thread."""
+    keyword_ids: List[UUID] = Field(..., min_length=1, max_length=1000)
+    version: int = Field(..., description="Thread version for optimistic locking")
+
+
+class KeywordRemove(BaseModel):
+    """Request to remove keywords from a thread."""
+    keyword_ids: List[UUID] = Field(..., min_length=1, max_length=1000)
+
+
+class KeywordInThreadResponse(BaseModel):
+    """Keyword response within a thread context."""
+    id: UUID
+    keyword: str
+    search_volume: Optional[int]
+    keyword_difficulty: Optional[int]
+    opportunity_score: Optional[float]
+    search_intent: Optional[str]
+    parent_topic: Optional[str]
+    estimated_traffic: Optional[int]
+    position: str  # Position within thread
+
+    class Config:
+        from_attributes = True
+
+
+class ThreadKeywordsResponse(BaseModel):
+    """Response for thread keywords."""
+    keywords: List[KeywordInThreadResponse]
+    total_count: int
+
+
+# --- Topic Request/Response Models ---
+
+class TopicCreate(BaseModel):
+    """Request to create a new topic."""
+    name: str = Field(..., min_length=1, max_length=500)
+    content_type: Optional[str] = "cluster"  # pillar, cluster, supporting
+    primary_keyword_id: Optional[UUID] = None
+    after_topic_id: Optional[UUID] = None  # Insert position
+
+
+class TopicUpdate(BaseModel):
+    """Request to update a topic (with optimistic locking)."""
+    name: Optional[str] = Field(None, max_length=500)
+    content_type: Optional[str] = None
+    status: Optional[str] = None  # draft, confirmed, in_production, published
+    target_url: Optional[str] = Field(None, max_length=2000)
+    primary_keyword_id: Optional[UUID] = None
+    version: int = Field(..., description="Required for optimistic locking")
+
+
+class TopicMove(BaseModel):
+    """Request to move a topic within the same thread."""
+    after_topic_id: Optional[UUID] = None  # null = move to beginning
+
+
+class TopicMoveToThread(BaseModel):
+    """Request to move a topic to a different thread."""
+    thread_id: UUID
+    after_topic_id: Optional[UUID] = None
+
+
+class TopicResponse(BaseModel):
+    """Topic response."""
+    id: UUID
+    thread_id: UUID
+    name: str
+    slug: Optional[str]
+    position: str
+    version: int
+    primary_keyword_id: Optional[UUID]
+    primary_keyword: Optional[str]
+    content_type: str
+    status: str
+    target_url: Optional[str]
+    existing_url: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TopicListResponse(BaseModel):
+    """Response for listing topics."""
+    topics: List[TopicResponse]
+
+
+def topic_to_response(topic: StrategyTopic) -> TopicResponse:
+    """Convert topic model to response."""
+    return TopicResponse(
+        id=topic.id,
+        thread_id=topic.thread_id,
+        name=topic.name,
+        slug=topic.slug,
+        position=topic.position,
+        version=topic.version,
+        primary_keyword_id=topic.primary_keyword_id,
+        primary_keyword=topic.primary_keyword,
+        content_type=topic.content_type.value if isinstance(topic.content_type, ContentType) else topic.content_type,
+        status=topic.status.value if isinstance(topic.status, TopicStatus) else topic.status,
+        target_url=topic.target_url,
+        existing_url=topic.existing_url,
+        created_at=topic.created_at,
+        updated_at=topic.updated_at,
+    )
+
+
+# =============================================================================
+# KEYWORD ENDPOINTS (Thread-level)
+# =============================================================================
+
+@router.get("/threads/{thread_id}/keywords", response_model=ThreadKeywordsResponse)
+async def get_thread_keywords(thread_id: UUID):
+    """
+    Get keywords assigned to a thread (ordered by position).
+    """
+    with get_db_context() as db:
+        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        # Join thread_keywords with keywords
+        results = db.query(
+            ThreadKeyword, Keyword
+        ).join(
+            Keyword, ThreadKeyword.keyword_id == Keyword.id
+        ).filter(
+            ThreadKeyword.thread_id == thread_id
+        ).order_by(ThreadKeyword.position).all()
+
+        keywords = []
+        for tk, kw in results:
+            keywords.append(KeywordInThreadResponse(
+                id=kw.id,
+                keyword=kw.keyword,
+                search_volume=kw.search_volume,
+                keyword_difficulty=kw.keyword_difficulty,
+                opportunity_score=kw.opportunity_score,
+                search_intent=kw.search_intent.value if kw.search_intent else None,
+                parent_topic=kw.parent_topic,
+                estimated_traffic=kw.estimated_traffic,
+                position=tk.position,
+            ))
+
+        return ThreadKeywordsResponse(
+            keywords=keywords,
+            total_count=len(keywords),
+        )
+
+
+@router.post("/threads/{thread_id}/keywords", response_model=ThreadResponse)
+async def assign_keywords_to_thread(thread_id: UUID, request: KeywordAssign):
+    """
+    Assign keywords to a thread (bulk).
+
+    Keywords are assigned with lexicographic positions for ordering.
+    If a keyword is already assigned to another thread in the same strategy,
+    returns 400 error.
+    """
+    with get_db_context() as db:
+        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        # Optimistic locking check
+        if thread.version != request.version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "version_conflict",
+                    "current_version": thread.version,
+                    "message": "Thread was modified by another user"
+                }
+            )
+
+        strategy = db.query(Strategy).get(thread.strategy_id)
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+
+        # Get existing keywords in this thread for position calculation
+        last_position = db.query(func.max(ThreadKeyword.position)).filter(
+            ThreadKeyword.thread_id == thread_id
+        ).scalar()
+
+        # Validate keywords exist and belong to the same analysis
+        keywords = db.query(Keyword).filter(
+            Keyword.id.in_(request.keyword_ids),
+            Keyword.analysis_run_id == strategy.analysis_run_id,
+        ).all()
+
+        if len(keywords) != len(request.keyword_ids):
+            found_ids = {kw.id for kw in keywords}
+            missing = [str(kid) for kid in request.keyword_ids if kid not in found_ids]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Keywords not found or not from this analysis: {missing[:5]}"
+            )
+
+        # Check if any keyword is already assigned to another thread in this strategy
+        existing_assignments = db.query(
+            ThreadKeyword.keyword_id, StrategyThread.id, StrategyThread.name
+        ).join(
+            StrategyThread, ThreadKeyword.thread_id == StrategyThread.id
+        ).filter(
+            ThreadKeyword.keyword_id.in_(request.keyword_ids),
+            StrategyThread.strategy_id == strategy.id,
+            StrategyThread.id != thread_id,  # Exclude current thread
+        ).all()
+
+        if existing_assignments:
+            first_conflict = existing_assignments[0]
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "keyword_already_assigned",
+                    "keyword_id": str(first_conflict[0]),
+                    "thread_name": first_conflict[2],
+                    "message": f"Keyword already assigned to thread '{first_conflict[2]}'"
+                }
+            )
+
+        # Get keywords already in this thread (skip duplicates)
+        existing_in_thread = db.query(ThreadKeyword.keyword_id).filter(
+            ThreadKeyword.thread_id == thread_id,
+            ThreadKeyword.keyword_id.in_(request.keyword_ids),
+        ).all()
+        existing_ids = {e[0] for e in existing_in_thread}
+
+        # Generate positions and create assignments
+        new_keyword_ids = [kid for kid in request.keyword_ids if kid not in existing_ids]
+        current_position = last_position
+
+        for keyword_id in new_keyword_ids:
+            new_position = generate_position_at_end(current_position)
+            tk = ThreadKeyword(
+                thread_id=thread_id,
+                keyword_id=keyword_id,
+                position=new_position,
+            )
+            db.add(tk)
+            current_position = new_position
+
+        # Update thread version
+        thread.version += 1
+        thread.updated_at = datetime.utcnow()
+
+        # Log activity
+        log_activity(
+            db, strategy.id, "keywords_assigned",
+            entity_type="thread", entity_id=thread_id,
+            details={"keyword_count": len(new_keyword_ids)}
+        )
+
+        db.commit()
+        db.refresh(thread)
+
+        logger.info(f"Assigned {len(new_keyword_ids)} keywords to thread {thread_id}")
+
+        return thread_to_response(db, thread)
+
+
+@router.delete("/threads/{thread_id}/keywords", response_model=ThreadResponse)
+async def remove_keywords_from_thread(thread_id: UUID, request: KeywordRemove):
+    """
+    Remove keywords from a thread (bulk).
+    """
+    with get_db_context() as db:
+        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        # Delete the keyword assignments
+        deleted = db.query(ThreadKeyword).filter(
+            ThreadKeyword.thread_id == thread_id,
+            ThreadKeyword.keyword_id.in_(request.keyword_ids),
+        ).delete(synchronize_session=False)
+
+        # Update thread version
+        thread.version += 1
+        thread.updated_at = datetime.utcnow()
+
+        # Log activity
+        log_activity(
+            db, thread.strategy_id, "keywords_removed",
+            entity_type="thread", entity_id=thread_id,
+            details={"keyword_count": deleted}
+        )
+
+        db.commit()
+        db.refresh(thread)
+
+        logger.info(f"Removed {deleted} keywords from thread {thread_id}")
+
+        return thread_to_response(db, thread)
+
+
+# =============================================================================
+# TOPIC ENDPOINTS
+# =============================================================================
+
+@router.get("/threads/{thread_id}/topics", response_model=TopicListResponse)
+async def list_topics(thread_id: UUID):
+    """
+    List topics for a thread (ordered by position).
+    """
+    with get_db_context() as db:
+        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        topics = db.query(StrategyTopic).filter(
+            StrategyTopic.thread_id == thread_id
+        ).order_by(StrategyTopic.position).all()
+
+        return TopicListResponse(topics=[topic_to_response(t) for t in topics])
+
+
+@router.post("/threads/{thread_id}/topics", response_model=TopicResponse, status_code=201)
+async def create_topic(thread_id: UUID, request: TopicCreate):
+    """
+    Create a new topic in a thread.
+
+    Use after_topic_id to insert after a specific topic, or null to insert
+    at the beginning.
+    """
+    with get_db_context() as db:
+        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        # Validate content_type
+        try:
+            content_type = ContentType(request.content_type) if request.content_type else ContentType.CLUSTER
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid content_type: {request.content_type}")
+
+        # Get primary keyword text if provided
+        primary_keyword_text = None
+        if request.primary_keyword_id:
+            keyword = db.query(Keyword).get(request.primary_keyword_id)
+            if keyword:
+                primary_keyword_text = keyword.keyword
+
+        # Determine position
+        if request.after_topic_id:
+            after_topic = db.query(StrategyTopic).filter(
+                StrategyTopic.id == request.after_topic_id,
+                StrategyTopic.thread_id == thread_id,
+            ).first()
+            if not after_topic:
+                raise HTTPException(status_code=404, detail="after_topic_id not found")
+
+            next_topic = db.query(StrategyTopic).filter(
+                StrategyTopic.thread_id == thread_id,
+                StrategyTopic.position > after_topic.position,
+            ).order_by(StrategyTopic.position).first()
+
+            if next_topic:
+                position = generate_position_between(after_topic.position, next_topic.position)
+            else:
+                position = generate_position_at_end(after_topic.position)
+        else:
+            first_topic = db.query(StrategyTopic).filter(
+                StrategyTopic.thread_id == thread_id
+            ).order_by(StrategyTopic.position).first()
+
+            if first_topic:
+                position = generate_position_at_start(first_topic.position)
+            else:
+                position = generate_first_position()
+
+        # Create topic
+        topic = StrategyTopic(
+            thread_id=thread_id,
+            name=request.name,
+            slug=slugify(request.name),
+            position=position,
+            version=1,
+            content_type=content_type,
+            status=TopicStatus.DRAFT,
+            primary_keyword_id=request.primary_keyword_id,
+            primary_keyword=primary_keyword_text,
+        )
+        db.add(topic)
+        db.flush()
+
+        # Log activity
+        log_activity(
+            db, thread.strategy_id, "topic_added",
+            entity_type="topic", entity_id=topic.id,
+            details={"name": request.name, "thread_id": str(thread_id)}
+        )
+
+        # Update thread version
+        thread.version += 1
+        thread.updated_at = datetime.utcnow()
+
+        db.commit()
+        db.refresh(topic)
+
+        logger.info(f"Created topic {topic.id} in thread {thread_id}")
+
+        return topic_to_response(topic)
+
+
+@router.patch("/topics/{topic_id}", response_model=TopicResponse)
+async def update_topic(topic_id: UUID, request: TopicUpdate):
+    """
+    Update a topic (with optimistic locking).
+    """
+    with get_db_context() as db:
+        topic = db.query(StrategyTopic).filter(StrategyTopic.id == topic_id).first()
+        if not topic:
+            raise HTTPException(status_code=404, detail="Topic not found")
+
+        # Optimistic locking check
+        if topic.version != request.version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "version_conflict",
+                    "current_version": topic.version,
+                    "message": "Topic was modified by another user"
+                }
+            )
+
+        changes = {}
+        if request.name is not None:
+            changes["name"] = {"old": topic.name, "new": request.name}
+            topic.name = request.name
+            topic.slug = slugify(request.name)
+
+        if request.content_type is not None:
+            try:
+                new_type = ContentType(request.content_type)
+                changes["content_type"] = {"old": topic.content_type.value, "new": request.content_type}
+                topic.content_type = new_type
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid content_type: {request.content_type}")
+
+        if request.status is not None:
+            try:
+                new_status = TopicStatus(request.status)
+                changes["status"] = {"old": topic.status.value, "new": request.status}
+                topic.status = new_status
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid status: {request.status}")
+
+        if request.target_url is not None:
+            changes["target_url"] = {"old": topic.target_url, "new": request.target_url}
+            topic.target_url = request.target_url
+
+        if request.primary_keyword_id is not None:
+            keyword = db.query(Keyword).get(request.primary_keyword_id)
+            if keyword:
+                topic.primary_keyword_id = keyword.id
+                topic.primary_keyword = keyword.keyword
+                changes["primary_keyword"] = {"new": keyword.keyword}
+
+        # Increment version
+        topic.version += 1
+        topic.updated_at = datetime.utcnow()
+
+        # Get thread for logging
+        thread = db.query(StrategyThread).get(topic.thread_id)
+
+        # Log activity
+        if changes and thread:
+            log_activity(
+                db, thread.strategy_id, "topic_updated",
+                entity_type="topic", entity_id=topic.id,
+                details={"changes": changes}
+            )
+
+        db.commit()
+        db.refresh(topic)
+
+        return topic_to_response(topic)
+
+
+@router.post("/topics/{topic_id}/move", response_model=TopicResponse)
+async def move_topic(topic_id: UUID, request: TopicMove):
+    """
+    Move a topic to a new position within the same thread.
+    """
+    with get_db_context() as db:
+        topic = db.query(StrategyTopic).filter(StrategyTopic.id == topic_id).first()
+        if not topic:
+            raise HTTPException(status_code=404, detail="Topic not found")
+
+        thread_id = topic.thread_id
+        old_position = topic.position
+
+        if request.after_topic_id:
+            if request.after_topic_id == topic_id:
+                raise HTTPException(status_code=400, detail="Cannot move topic after itself")
+
+            after_topic = db.query(StrategyTopic).filter(
+                StrategyTopic.id == request.after_topic_id,
+                StrategyTopic.thread_id == thread_id,
+            ).first()
+            if not after_topic:
+                raise HTTPException(status_code=404, detail="after_topic_id not found")
+
+            next_topic = db.query(StrategyTopic).filter(
+                StrategyTopic.thread_id == thread_id,
+                StrategyTopic.position > after_topic.position,
+                StrategyTopic.id != topic_id,
+            ).order_by(StrategyTopic.position).first()
+
+            if next_topic:
+                new_position = generate_position_between(after_topic.position, next_topic.position)
+            else:
+                new_position = generate_position_at_end(after_topic.position)
+        else:
+            first_topic = db.query(StrategyTopic).filter(
+                StrategyTopic.thread_id == thread_id,
+                StrategyTopic.id != topic_id,
+            ).order_by(StrategyTopic.position).first()
+
+            if first_topic:
+                new_position = generate_position_at_start(first_topic.position)
+            else:
+                new_position = generate_first_position()
+
+        topic.position = new_position
+        topic.version += 1
+        topic.updated_at = datetime.utcnow()
+
+        # Get thread for logging
+        thread = db.query(StrategyThread).get(thread_id)
+
+        # Log activity
+        if thread:
+            log_activity(
+                db, thread.strategy_id, "topic_moved",
+                entity_type="topic", entity_id=topic.id,
+                details={"old_position": old_position, "new_position": new_position}
+            )
+
+        db.commit()
+        db.refresh(topic)
+
+        logger.info(f"Moved topic {topic_id} from {old_position} to {new_position}")
+
+        return topic_to_response(topic)
+
+
+@router.post("/topics/{topic_id}/move-to-thread", response_model=TopicResponse)
+async def move_topic_to_thread(topic_id: UUID, request: TopicMoveToThread):
+    """
+    Move a topic to a different thread.
+    """
+    with get_db_context() as db:
+        topic = db.query(StrategyTopic).filter(StrategyTopic.id == topic_id).first()
+        if not topic:
+            raise HTTPException(status_code=404, detail="Topic not found")
+
+        old_thread_id = topic.thread_id
+
+        # Validate target thread exists and is in same strategy
+        old_thread = db.query(StrategyThread).get(old_thread_id)
+        target_thread = db.query(StrategyThread).filter(
+            StrategyThread.id == request.thread_id
+        ).first()
+
+        if not target_thread:
+            raise HTTPException(status_code=404, detail="Target thread not found")
+
+        if old_thread and target_thread.strategy_id != old_thread.strategy_id:
+            raise HTTPException(status_code=400, detail="Cannot move topic to a different strategy")
+
+        # Determine position in target thread
+        if request.after_topic_id:
+            after_topic = db.query(StrategyTopic).filter(
+                StrategyTopic.id == request.after_topic_id,
+                StrategyTopic.thread_id == request.thread_id,
+            ).first()
+            if not after_topic:
+                raise HTTPException(status_code=404, detail="after_topic_id not found in target thread")
+
+            next_topic = db.query(StrategyTopic).filter(
+                StrategyTopic.thread_id == request.thread_id,
+                StrategyTopic.position > after_topic.position,
+            ).order_by(StrategyTopic.position).first()
+
+            if next_topic:
+                new_position = generate_position_between(after_topic.position, next_topic.position)
+            else:
+                new_position = generate_position_at_end(after_topic.position)
+        else:
+            first_topic = db.query(StrategyTopic).filter(
+                StrategyTopic.thread_id == request.thread_id
+            ).order_by(StrategyTopic.position).first()
+
+            if first_topic:
+                new_position = generate_position_at_start(first_topic.position)
+            else:
+                new_position = generate_first_position()
+
+        # Update topic
+        topic.thread_id = request.thread_id
+        topic.position = new_position
+        topic.version += 1
+        topic.updated_at = datetime.utcnow()
+
+        # Log activity
+        if old_thread:
+            log_activity(
+                db, old_thread.strategy_id, "topic_moved_to_thread",
+                entity_type="topic", entity_id=topic.id,
+                details={
+                    "from_thread_id": str(old_thread_id),
+                    "to_thread_id": str(request.thread_id),
+                    "from_thread_name": old_thread.name,
+                    "to_thread_name": target_thread.name,
+                }
+            )
+
+        db.commit()
+        db.refresh(topic)
+
+        logger.info(f"Moved topic {topic_id} from thread {old_thread_id} to {request.thread_id}")
+
+        return topic_to_response(topic)
+
+
+@router.delete("/topics/{topic_id}", status_code=204)
+async def delete_topic(topic_id: UUID):
+    """
+    Delete a topic.
+    """
+    with get_db_context() as db:
+        topic = db.query(StrategyTopic).filter(StrategyTopic.id == topic_id).first()
+        if not topic:
+            raise HTTPException(status_code=404, detail="Topic not found")
+
+        thread = db.query(StrategyThread).get(topic.thread_id)
+        topic_name = topic.name
+
+        # Log activity before delete
+        if thread:
+            log_activity(
+                db, thread.strategy_id, "topic_deleted",
+                entity_type="topic", entity_id=topic_id,
+                details={"name": topic_name, "thread_id": str(topic.thread_id)}
+            )
+
+            # Update thread version
+            thread.version += 1
+            thread.updated_at = datetime.utcnow()
+
+        logger.info(f"Deleting topic {topic_id}")
+        db.delete(topic)
+        db.commit()
