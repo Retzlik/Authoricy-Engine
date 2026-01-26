@@ -38,6 +38,7 @@ Most SEO intelligence platforms fail new domains. They attempt to analyze domain
 14. [Success Metrics](#14-success-metrics)
 15. [Implementation Phases](#15-implementation-phases)
 16. [Validation Plan](#16-validation-plan)
+17. [AI Discoverability Foundation (AEO/GEO)](#17-ai-discoverability-foundation-aeogeo)
 
 ---
 
@@ -170,6 +171,277 @@ def classify_domain_maturity(metrics: DomainMetrics) -> DomainMaturity:
     # ESTABLISHED: Full data available
     return DomainMaturity.ESTABLISHED
 ```
+
+### 3.1 Emerging Mode: Hybrid Collection Specification
+
+Emerging domains (DR 20-35, 50-200 keywords, traffic <1K) represent **~25% of potential clients**. These domains have *some* data but not enough for full confidence in domain-only analysis.
+
+#### The Hybrid Philosophy
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                        EMERGING MODE PRINCIPLE                              │
+│                                                                             │
+│   Domain data provides: Current state, existing wins, proven capabilities   │
+│   Competitor data provides: Opportunity gaps, market sizing, growth paths   │
+│                                                                             │
+│   Hybrid = Use both, weight by confidence in each data source               │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Data Mixing Algorithm
+
+```python
+class EmergingModeConfig:
+    """Configuration for hybrid analysis in emerging mode."""
+
+    # Weight factors based on domain maturity signals
+    DOMAIN_DATA_WEIGHTS = {
+        # More domain data = higher weight on domain signals
+        "dr_20_25": 0.3,   # 30% domain, 70% competitor
+        "dr_25_30": 0.5,   # 50% domain, 50% competitor
+        "dr_30_35": 0.7,   # 70% domain, 30% competitor
+    }
+
+    KEYWORD_WEIGHTS = {
+        "kw_50_100": 0.3,
+        "kw_100_150": 0.5,
+        "kw_150_200": 0.7,
+    }
+
+def calculate_data_weights(metrics: DomainMetrics) -> Tuple[float, float]:
+    """
+    Calculate how much to weight domain vs competitor data.
+
+    Returns: (domain_weight, competitor_weight) where sum = 1.0
+    """
+    dr = metrics.domain_rating or 0
+    kw = metrics.organic_keywords or 0
+
+    # Calculate base weight from DR
+    if dr < 25:
+        dr_weight = 0.3
+    elif dr < 30:
+        dr_weight = 0.5
+    else:
+        dr_weight = 0.7
+
+    # Calculate base weight from keyword count
+    if kw < 100:
+        kw_weight = 0.3
+    elif kw < 150:
+        kw_weight = 0.5
+    else:
+        kw_weight = 0.7
+
+    # Combined weight = average of both signals
+    domain_weight = (dr_weight + kw_weight) / 2
+    competitor_weight = 1.0 - domain_weight
+
+    return (domain_weight, competitor_weight)
+```
+
+#### Hybrid Collection Pipeline
+
+```python
+async def _collect_hybrid(
+    self,
+    config: AnalysisConfig,
+    foundation: Dict
+) -> HybridAnalysisResult:
+    """
+    Hybrid collection for emerging domains.
+
+    Strategy:
+    1. Collect domain data (partial confidence)
+    2. Discover competitors using domain's existing keywords
+    3. Supplement with competitor opportunities
+    4. Blend recommendations using calculated weights
+    """
+
+    domain_weight, competitor_weight = calculate_data_weights(
+        DomainMetrics.from_foundation(foundation)
+    )
+
+    # Step 1: Domain-based analysis (what we CAN see)
+    domain_analysis = await self._analyze_existing_domain_data(foundation)
+
+    # Step 2: Discover competitors from domain's keyword overlap
+    # (Unlike greenfield, we have SOME keywords to work with)
+    competitors = await self._discover_competitors_from_overlap(
+        domain=config.domain,
+        existing_keywords=domain_analysis.keywords[:100],  # Use top 100
+        market=config.market
+    )
+
+    # Step 3: Competitor keyword expansion
+    competitor_keywords = await self._get_competitor_keyword_universe(
+        competitors=competitors[:7],
+        exclude_already_ranking=domain_analysis.keywords
+    )
+
+    # Step 4: Calculate winnability for ALL keywords
+    all_keywords = domain_analysis.keywords + competitor_keywords
+
+    for keyword in all_keywords:
+        keyword.winnability = await calculate_winnability(...)
+        keyword.source = "domain" if keyword in domain_analysis.keywords else "competitor"
+
+    # Step 5: Blend recommendations
+    return HybridAnalysisResult(
+        # Current state from domain data (high confidence)
+        current_performance=domain_analysis.performance,
+        existing_rankings=domain_analysis.keywords,
+
+        # Opportunities blended by weight
+        keyword_opportunities=blend_opportunities(
+            domain_opportunities=domain_analysis.opportunities,
+            competitor_opportunities=competitor_keywords,
+            domain_weight=domain_weight,
+            competitor_weight=competitor_weight
+        ),
+
+        # Market sizing from competitors (higher confidence for market view)
+        market_opportunity=calculate_market_from_competitors(competitors),
+
+        # Recommendations use blended approach
+        recommendations=generate_hybrid_recommendations(
+            domain_weight=domain_weight,
+            competitor_weight=competitor_weight
+        ),
+
+        # Metadata
+        analysis_mode="hybrid",
+        domain_data_confidence=domain_weight,
+        competitor_data_confidence=competitor_weight,
+    )
+
+
+def blend_opportunities(
+    domain_opportunities: List[Keyword],
+    competitor_opportunities: List[Keyword],
+    domain_weight: float,
+    competitor_weight: float
+) -> List[KeywordOpportunity]:
+    """
+    Blend keyword opportunities with weighted scoring.
+
+    Domain keywords get boosted by domain_weight.
+    Competitor keywords get boosted by competitor_weight.
+    Final ranking considers both source confidence and winnability.
+    """
+    blended = []
+
+    for kw in domain_opportunities:
+        blended.append(KeywordOpportunity(
+            keyword=kw.keyword,
+            source="domain",
+            base_priority=kw.opportunity_score,
+            weighted_priority=kw.opportunity_score * (1 + domain_weight * 0.3),
+            confidence="high",  # We know domain can rank here
+            reason="Already have traction or topical relevance"
+        ))
+
+    for kw in competitor_opportunities:
+        blended.append(KeywordOpportunity(
+            keyword=kw.keyword,
+            source="competitor",
+            base_priority=kw.winnability,
+            weighted_priority=kw.winnability * competitor_weight,
+            confidence="medium",  # Inferred from competitor success
+            reason="Competitors succeeding, gap opportunity"
+        ))
+
+    # Sort by weighted priority
+    return sorted(blended, key=lambda x: x.weighted_priority, reverse=True)
+```
+
+#### Signal Conflict Resolution
+
+When domain data and competitor data suggest different strategies:
+
+| Conflict Type | Resolution Rule |
+|---------------|-----------------|
+| Domain ranks for KW but competitors don't target it | **Keep**: Unique opportunity, prioritize |
+| Competitors target KW but domain has no traction | **Investigate**: Check winnability, may be too competitive |
+| Domain shows declining KW, competitors growing | **Pivot**: Follow market signal, consider new content |
+| Domain shows strong KW, competitor data suggests low volume | **Trust domain**: Domain has proven it works |
+
+```python
+def resolve_signal_conflict(
+    domain_signal: SignalStrength,
+    competitor_signal: SignalStrength,
+    domain_weight: float
+) -> ResolvedSignal:
+    """
+    Resolve conflicting signals between domain and competitor data.
+    """
+
+    # Strong domain signal always trusted
+    if domain_signal.strength == "strong":
+        return ResolvedSignal(
+            recommendation=domain_signal.recommendation,
+            confidence="high",
+            reason="Domain has proven performance"
+        )
+
+    # Weak domain + strong competitor = follow competitor
+    if domain_signal.strength == "weak" and competitor_signal.strength == "strong":
+        return ResolvedSignal(
+            recommendation=competitor_signal.recommendation,
+            confidence="medium",
+            reason="Market signal stronger than domain performance"
+        )
+
+    # Both medium = blend by weight
+    if domain_signal.strength == "medium" and competitor_signal.strength == "medium":
+        if domain_weight >= 0.5:
+            return ResolvedSignal(
+                recommendation=domain_signal.recommendation,
+                confidence="medium",
+                reason=f"Domain weight ({domain_weight:.0%}) favors domain signal"
+            )
+        else:
+            return ResolvedSignal(
+                recommendation=competitor_signal.recommendation,
+                confidence="medium",
+                reason=f"Competitor weight ({1-domain_weight:.0%}) favors market signal"
+            )
+
+    # Default: weighted blend
+    return weighted_blend(domain_signal, competitor_signal, domain_weight)
+```
+
+#### Emerging Mode User Experience
+
+Users in emerging mode see a **blended dashboard**:
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Analysis Mode: HYBRID (Emerging Domain)                                    │
+│  Data Confidence: Domain 40% | Competitor 60%                               │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  YOUR CURRENT PERFORMANCE          │  MARKET OPPORTUNITY                    │
+│  ─────────────────────────         │  ──────────────────                    │
+│  Rankings: 87 keywords              │  Total Market: 450K searches/mo        │
+│  Traffic: 850/month                 │  Addressable: 180K searches/mo         │
+│  Top positions: 12 in top 10        │  Current capture: 0.5%                 │
+│                                     │                                        │
+│  Source: Your domain data           │  Source: Competitor analysis           │
+│  Confidence: High ●●●○○             │  Confidence: High ●●●●○                │
+│                                                                             │
+├────────────────────────────────────────────────────────────────────────────┤
+│  BLENDED RECOMMENDATIONS                                                    │
+│  ───────────────────────                                                    │
+│  🟢 Expand: "project management software" - You rank #18, competitors #3-7  │
+│  🟡 Defend: "agile sprint planning" - Your #4, competitors targeting        │
+│  🔵 Attack: "team capacity planning" - Gap, 8K vol, winnability 72          │
+│                                                                             │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
 
 ### Required User Inputs for Greenfield Mode
 
@@ -323,6 +595,199 @@ def is_relevant_competitor(comp: ValidatedCompetitor, target_dr: int = 30) -> bo
         return False  # Not enough data
     return True
 ```
+
+### Phase G1.5: Competitor Validation & Warnings
+
+**Problem:** Users often list aspirational competitors (monday.com, HubSpot) rather than actual SEO competitors at their level. This leads to unrealistic difficulty assessments.
+
+**Solution:** Validate user-provided competitors against SERP-discovered competitors and warn when there's a significant mismatch.
+
+```python
+@dataclass
+class CompetitorValidationResult:
+    """Result of validating user-provided competitors."""
+    validated_competitors: List[ValidatedCompetitor]
+    warnings: List[CompetitorWarning]
+    suggested_replacements: List[SuggestedCompetitor]
+
+
+@dataclass
+class CompetitorWarning:
+    """Warning about competitor selection."""
+    severity: str  # "info", "warning", "critical"
+    domain: str
+    issue: str
+    recommendation: str
+
+
+async def validate_user_competitors(
+    user_provided: List[str],
+    serp_discovered: List[ValidatedCompetitor],
+    target_dr: int,
+    industry: str
+) -> CompetitorValidationResult:
+    """
+    Validate user-provided competitors against SERP reality.
+
+    Checks for:
+    1. DR mismatch - User listed DR 90 competitor but actual SEO competitors are DR 20-40
+    2. No SERP overlap - User's competitor doesn't rank for any seed keywords
+    3. Business model mismatch - User listed content site as competitor
+    4. Missing obvious competitors - SERP shows clear competitors user didn't mention
+    """
+
+    warnings = []
+    suggested_replacements = []
+
+    # Get metrics for user-provided competitors
+    user_competitor_metrics = {}
+    for domain in user_provided:
+        metrics = await client.get_domain_rank_overview(domain)
+        user_competitor_metrics[domain] = metrics
+
+    # Calculate SERP competitor averages
+    serp_avg_dr = sum(c.domain_rating for c in serp_discovered) / len(serp_discovered)
+    serp_dr_range = (
+        min(c.domain_rating for c in serp_discovered),
+        max(c.domain_rating for c in serp_discovered)
+    )
+
+    # Check 1: DR Mismatch Warning
+    for domain, metrics in user_competitor_metrics.items():
+        if metrics.domain_rating > serp_avg_dr * 2:
+            warnings.append(CompetitorWarning(
+                severity="warning",
+                domain=domain,
+                issue=f"DR {metrics.domain_rating} is significantly higher than SERP average ({serp_avg_dr:.0f})",
+                recommendation=f"This competitor may be aspirational rather than a direct SEO competitor. "
+                              f"Your actual ranking competitors appear to be DR {serp_dr_range[0]}-{serp_dr_range[1]}."
+            ))
+
+            # Find replacement suggestion
+            similar_serp_competitors = [
+                c for c in serp_discovered
+                if c.domain_rating <= target_dr * 2
+            ][:3]
+
+            if similar_serp_competitors:
+                suggested_replacements.append(SuggestedCompetitor(
+                    original=domain,
+                    suggested=[c.domain for c in similar_serp_competitors],
+                    reason=f"These competitors rank for your keywords and have achievable DR ({target_dr}-{target_dr*2})"
+                ))
+
+    # Check 2: No SERP Overlap Warning
+    serp_domains = {c.domain for c in serp_discovered}
+    for domain in user_provided:
+        if domain not in serp_domains:
+            # Check if they rank for ANY of the seed keywords
+            overlap = await check_keyword_overlap(domain, seed_keywords)
+            if overlap.count < 2:
+                warnings.append(CompetitorWarning(
+                    severity="info",
+                    domain=domain,
+                    issue=f"Doesn't rank for your seed keywords (only {overlap.count} overlap)",
+                    recommendation="This domain may serve a different market segment. "
+                                  "Consider if they're truly competing for the same searches."
+                ))
+
+    # Check 3: Missing Obvious Competitors
+    top_serp_competitors = [c for c in serp_discovered[:5]]
+    for comp in top_serp_competitors:
+        if comp.domain not in user_provided:
+            if comp.organic_traffic > 5000:  # Significant player
+                warnings.append(CompetitorWarning(
+                    severity="info",
+                    domain=comp.domain,
+                    issue="Ranks highly for your keywords but wasn't in your competitor list",
+                    recommendation=f"Consider adding {comp.domain} (DR {comp.domain_rating}, "
+                                  f"{comp.organic_traffic:,} traffic) to your competitor analysis."
+                ))
+
+    # Build validated list (merge user + SERP, prefer SERP for ranking data)
+    validated = []
+    seen_domains = set()
+
+    # First add user-provided that passed validation
+    for domain in user_provided:
+        if domain not in [w.domain for w in warnings if w.severity == "critical"]:
+            validated.append(user_competitor_metrics[domain])
+            seen_domains.add(domain)
+
+    # Then add SERP-discovered not already included
+    for comp in serp_discovered:
+        if comp.domain not in seen_domains:
+            validated.append(comp)
+            seen_domains.add(comp.domain)
+
+    return CompetitorValidationResult(
+        validated_competitors=validated[:15],
+        warnings=warnings,
+        suggested_replacements=suggested_replacements
+    )
+```
+
+**User-Facing Warning Display:**
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  ⚠️  COMPETITOR VALIDATION WARNINGS                                         │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  WARNING: monday.com (DR 92)                                                │
+│  ──────────────────────────────                                             │
+│  Issue: DR 92 is significantly higher than SERP average (38)                │
+│                                                                             │
+│  Your actual SEO competitors appear to be DR 25-55 tools like:              │
+│  • productive.io (DR 42) - Ranks for 8 of your keywords                     │
+│  • teamwork.com (DR 51) - Ranks for 12 of your keywords                     │
+│  • projectmanager.com (DR 38) - Ranks for 15 of your keywords               │
+│                                                                             │
+│  monday.com is likely an aspirational competitor, not a direct SEO          │
+│  competitor at your current stage.                                          │
+│                                                                             │
+│  [Keep monday.com] [Replace with suggestions] [Add suggestions + keep]      │
+│                                                                             │
+├────────────────────────────────────────────────────────────────────────────┤
+│  INFO: asana.com not in your list                                           │
+│  ────────────────────────────────                                           │
+│  Ranks for 23 of your seed keywords with DR 89, traffic 2.4M                │
+│  Consider adding for aspirational content analysis.                         │
+│                                                                             │
+│  [Add asana.com] [Ignore]                                                   │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+**API Response Structure:**
+
+```python
+class CompetitorAnalysisResponse(BaseModel):
+    # Validated competitors (used for analysis)
+    competitors: List[ValidatedCompetitor]
+
+    # Validation feedback
+    validation: CompetitorValidationSummary
+
+class CompetitorValidationSummary(BaseModel):
+    # Overall status
+    status: str  # "valid", "warnings", "needs_review"
+
+    # Breakdown
+    user_provided_count: int
+    serp_discovered_count: int
+    overlap_count: int
+    replaced_count: int
+
+    # Warnings for UI
+    warnings: List[CompetitorWarning]
+    suggestions: List[SuggestedCompetitor]
+
+    # Confidence in competitor set
+    confidence: str  # "high", "medium", "low"
+    confidence_reason: str
+```
+
+---
 
 ### Phase G2: Keyword Universe Construction
 
@@ -3964,6 +4429,121 @@ Before building, confirm users actually need this.
 
 Each algorithm requires validation before and after implementation.
 
+#### ⚠️ IMPORTANT: Validation Data Availability Reality Check
+
+**Not all validation can happen pre-launch.** Be explicit about what's possible:
+
+| Validation Type | Pre-Launch Possible? | Data Source | Notes |
+|-----------------|---------------------|-------------|-------|
+| **Synthetic Validation** | ✅ Yes | Public case studies, industry benchmarks | Use published SEO case studies (Ahrefs blog, SEMrush studies) |
+| **Authoricy's Own Domain** | ✅ Yes | Internal data | If Authoricy started as greenfield, use own data |
+| **Partner Agency Data** | ⚠️ Maybe | Agency partnerships | Requires willing partners with historical data |
+| **Retrospective Client Data** | ❌ Unlikely | Existing clients | Most clients won't have 12mo greenfield history yet |
+| **Forward Tracking** | ❌ No (requires time) | New analyses | Label feature as "beta" until 12mo data exists |
+
+**Recommended Pre-Launch Validation Strategy:**
+
+```python
+class PreLaunchValidationPlan:
+    """What we CAN validate before shipping."""
+
+    # Tier 1: Definitely possible (do these)
+    SYNTHETIC_VALIDATION = {
+        "method": "Use published SEO case studies",
+        "examples": [
+            "Ahrefs 'Zero to Hero' case studies",
+            "Backlinko growth case studies",
+            "HubSpot published 'we grew from 0 to X' data",
+            "Public SaaS growth stories with SEO attribution",
+        ],
+        "process": """
+            1. Find 10 published case studies of sites that grew from DR<20
+            2. Extract their starting state, keywords targeted, timeline
+            3. Fetch current SERP data for those keywords
+            4. Retroactively calculate what winnability WOULD have been
+            5. Compare to their actual outcomes
+        """,
+        "confidence": "medium",
+        "sample_size": "10-20 case studies"
+    }
+
+    # Tier 2: Possible with effort
+    INTERNAL_VALIDATION = {
+        "method": "Use Authoricy's own domain growth data",
+        "applicable_if": "Authoricy was once DR<20 with <50 keywords",
+        "process": """
+            1. Export Authoricy's historical ranking data (if available)
+            2. Identify keywords that were targeted early
+            3. Calculate winnability retroactively
+            4. Compare predictions to actual ranking timeline
+        """,
+        "confidence": "high (own data)",
+        "limitation": "Single data point, may not generalize"
+    }
+
+    # Tier 3: Requires partnerships
+    PARTNER_VALIDATION = {
+        "method": "Partner with friendly agencies",
+        "process": """
+            1. Identify 2-3 agency partners with greenfield client history
+            2. Request anonymized historical data
+            3. Run validation protocol on their data
+            4. Compensate with free Authoricy access or co-marketing
+        """,
+        "confidence": "high (real client data)",
+        "timeline": "2-4 weeks to establish partnerships"
+    }
+
+
+class PostLaunchValidationPlan:
+    """What we MUST track after shipping (label as beta until complete)."""
+
+    FORWARD_COHORT_TRACKING = {
+        "method": "Track greenfield analyses as they mature",
+        "launch_label": "Greenfield Intelligence (Beta)",
+        "remove_beta_when": "50+ analyses have 6mo+ of tracking data",
+        "tracking_protocol": """
+            For each greenfield analysis:
+            1. Store winnability predictions at analysis time
+            2. Track which keywords user actually targeted
+            3. Monitor ranking changes monthly
+            4. At 6mo, 12mo: compare predictions to outcomes
+            5. Feed back into coefficient tuning
+        """,
+        "minimum_for_confidence": {
+            "6_month_data": 50,   # analyses
+            "12_month_data": 20,  # analyses
+        }
+    }
+```
+
+**Launch Decision Framework:**
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│  CAN WE SHIP?                                                               │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Pre-Launch Checklist:                                                      │
+│  ✅ Synthetic validation on 10+ public case studies                         │
+│  ✅ Algorithm produces sensible outputs (no obvious errors)                 │
+│  ✅ Edge cases handled gracefully                                           │
+│  ✅ UI clearly communicates confidence levels                               │
+│  ✅ Forward tracking infrastructure in place                                │
+│                                                                             │
+│  If ALL checked: Ship as "Beta" with clear messaging                        │
+│                                                                             │
+│  Post-Launch Requirements:                                                  │
+│  ⏳ 6-month forward validation (50 analyses)                                │
+│  ⏳ 12-month forward validation (20 analyses)                               │
+│  ⏳ Coefficient tuning based on real outcomes                               │
+│                                                                             │
+│  When Post-Launch Complete: Remove "Beta" label                             │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 #### 16.2.1 Winnability Score Validation
 
 **Hypothesis:** Winnability score predicts ranking probability. Keywords with winnability >70 should rank in top 20 within 6 months at higher rate than keywords with winnability <50.
@@ -4649,6 +5229,503 @@ P0 Rollback Checklist:
   }
 }
 ```
+
+---
+
+## 17. AI Discoverability Foundation (AEO/GEO)
+
+**Status:** Foundation Architecture — Full implementation planned as separate feature
+**Vision:** Authoricy will be the best-in-class platform for AI-era SEO, optimizing for both traditional search AND AI discovery (ChatGPT, Perplexity, Claude, Google AI Overviews, Bing Copilot).
+
+### 17.1 The AI Discovery Paradigm Shift
+
+Traditional SEO optimizes for **ranking** (position 1-10 on SERP).
+AI-era SEO must ALSO optimize for **citation** (being referenced by AI systems).
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                    THE NEW DISCOVERY LANDSCAPE                              │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  TRADITIONAL (Still Important)      │  AI DISCOVERY (Emerging)              │
+│  ─────────────────────────────      │  ─────────────────────────            │
+│  • Google organic rankings          │  • Google AI Overviews (AIO)          │
+│  • Bing organic rankings            │  • ChatGPT citations (browsing mode)  │
+│  • Position-based CTR               │  • Perplexity source links            │
+│  • Featured snippets                │  • Claude citations                   │
+│  • Knowledge panels                 │  • Bing Copilot references            │
+│                                     │  • Google SGE (future)                │
+│                                                                             │
+│  Authoricy Strategy: OPTIMIZE FOR BOTH                                      │
+│                                                                             │
+│  Phase 1 (Current): Track AI presence, adjust difficulty/CTR                │
+│  Phase 2 (This Section): Build foundation for AI optimization               │
+│  Phase 3 (Future): Full AEO/GEO optimization suite                          │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 17.2 Current AI-Related Data (Already Collected)
+
+The greenfield system already collects AI-relevant signals:
+
+| Data Point | Where Collected | Current Usage | Future AEO Usage |
+|------------|-----------------|---------------|------------------|
+| `has_ai_overview` | SERP analysis | Winnability penalty | Identify AIO patterns |
+| `ai_overview_sources` | SERP detail | Not used | Track citation patterns |
+| `featured_snippet_present` | SERP analysis | Difficulty signal | Proto-AIO content |
+| `people_also_ask` | Keyword expansion | Content ideas | Question-answer format |
+| `content_freshness` | SERP analysis | Weak content signal | Recency for AI |
+| `schema_markup_present` | Competitor analysis | Not tracked | Structured data for AI |
+
+### 17.3 New Data Infrastructure for AEO
+
+#### Database Schema Extensions
+
+```python
+# New table: AI Discovery Tracking
+class AIDiscoveryMetrics(Base):
+    """Track AI citation and visibility metrics."""
+
+    __tablename__ = "ai_discovery_metrics"
+
+    id = Column(UUID, primary_key=True)
+    domain_id = Column(UUID, ForeignKey("domains.id"))
+    analysis_run_id = Column(UUID, ForeignKey("analysis_runs.id"))
+    collected_at = Column(DateTime, default=datetime.utcnow)
+
+    # Google AI Overview metrics
+    aio_appearance_rate = Column(Float)          # % of keywords where domain appears in AIO
+    aio_source_position = Column(Float)          # Avg position in AIO sources (1-5)
+    aio_keyword_count = Column(Integer)          # Keywords where domain cited in AIO
+
+    # Competitor AIO presence
+    competitor_aio_rate = Column(Float)          # % of keywords where competitors in AIO
+    aio_gap_keywords = Column(JSONB)             # Keywords where competitors in AIO but not us
+
+    # Content format analysis (for AIO optimization)
+    content_format_scores = Column(JSONB)        # Scores for different formats
+    """
+    {
+        "listicle": 0.72,        # Good for "best X" queries
+        "how_to": 0.85,          # Great for instructional AIO
+        "comparison": 0.68,      # Good for "X vs Y" queries
+        "definition": 0.90,      # Excellent for definitional AIO
+        "faq": 0.88,             # Strong for PAA/AIO
+        "data_table": 0.75,      # Good for data queries
+    }
+    """
+
+    # Future: External AI citation tracking
+    chatgpt_citation_score = Column(Float, nullable=True)
+    perplexity_citation_score = Column(Float, nullable=True)
+
+    # Freshness metrics (critical for AI)
+    avg_content_age_days = Column(Integer)
+    freshness_score = Column(Float)              # 0-100
+
+
+# Extension to Keyword table
+class KeywordAIMetrics(Base):
+    """AI-specific metrics per keyword."""
+
+    __tablename__ = "keyword_ai_metrics"
+
+    keyword_id = Column(UUID, ForeignKey("keywords.id"), primary_key=True)
+
+    # AIO analysis
+    has_ai_overview = Column(Boolean, default=False)
+    aio_type = Column(String(50))                # "summary", "list", "comparison", "steps"
+    aio_source_count = Column(Integer)           # How many sources cited
+    aio_source_domains = Column(JSONB)           # List of cited domains
+
+    # Citation likelihood prediction
+    aio_citation_probability = Column(Float)     # 0-1, likelihood of being cited if targeting
+    aio_optimization_potential = Column(String)  # "high", "medium", "low", "avoid"
+
+    # Content format recommendation
+    recommended_format = Column(String(50))      # Best format to target AIO citation
+    format_confidence = Column(Float)
+
+    # Intent alignment
+    ai_intent_match = Column(Float)              # How well query matches AI response patterns
+```
+
+#### API Extensions
+
+```python
+# New endpoint: AI Discovery Analysis
+@router.get("/analysis/{run_id}/ai-discovery")
+async def get_ai_discovery_analysis(
+    run_id: UUID,
+    db: Session = Depends(get_db)
+) -> AIDiscoveryResponse:
+    """
+    Get AI discovery analysis for a domain.
+
+    Returns:
+    - AIO presence across keyword portfolio
+    - Citation opportunities
+    - Content format recommendations
+    - Competitor AI visibility comparison
+    """
+
+class AIDiscoveryResponse(BaseModel):
+    # Summary metrics
+    aio_visibility_score: float              # 0-100, overall AI visibility
+    aio_opportunity_score: float             # 0-100, untapped AI potential
+
+    # Keyword breakdown
+    keywords_with_aio: int
+    keywords_domain_in_aio: int
+    keywords_competitors_in_aio: int
+
+    # Opportunities
+    aio_gap_keywords: List[AIOGapKeyword]    # High-opportunity keywords
+    quick_win_keywords: List[AIOQuickWin]    # Already ranking, easy AIO wins
+
+    # Recommendations
+    content_format_recommendations: List[ContentFormatRec]
+
+    # Future capability placeholders
+    chatgpt_analysis: Optional[ChatGPTAnalysis] = None
+    perplexity_analysis: Optional[PerplexityAnalysis] = None
+
+
+class AIOGapKeyword(BaseModel):
+    """Keyword where competitors appear in AIO but we don't."""
+    keyword: str
+    search_volume: int
+    competitor_in_aio: str
+    aio_type: str
+    our_position: Optional[int]
+    recommended_approach: str
+    effort_level: str  # "low", "medium", "high"
+
+
+class ContentFormatRec(BaseModel):
+    """Recommendation for content format to optimize AIO citation."""
+    keyword_cluster: str
+    current_format: Optional[str]
+    recommended_format: str
+    reason: str
+    aio_citation_lift_estimate: str  # "2-3x", "moderate", etc.
+    example_structure: str
+```
+
+### 17.4 AIO Optimization Score (New Algorithm)
+
+```python
+def calculate_aio_optimization_potential(
+    keyword: str,
+    current_serp: SERPAnalysis,
+    domain_metrics: DomainMetrics,
+    content_analysis: Optional[ContentAnalysis]
+) -> AIOOptimizationScore:
+    """
+    Calculate potential for appearing in AI Overviews for a keyword.
+
+    Factors:
+    1. Query type alignment (definitional, how-to, comparison favored)
+    2. Current AIO source quality (can we beat them?)
+    3. Content format match (does our content match AIO format?)
+    4. Authority signals (E-E-A-T for YMYL topics)
+    5. Freshness requirements
+    """
+
+    score = 100.0
+    factors = {}
+
+    # Factor 1: Query Type (some queries more AIO-friendly)
+    query_type = classify_query_for_aio(keyword)
+    AIO_QUERY_MULTIPLIERS = {
+        "definitional": 1.2,      # "What is X" - high AIO rate
+        "how_to": 1.15,           # "How to X" - very high AIO rate
+        "comparison": 1.1,        # "X vs Y" - moderate AIO rate
+        "list": 1.1,              # "Best X" - moderate AIO rate
+        "commercial": 0.8,        # "Buy X" - lower AIO rate
+        "navigational": 0.5,      # "X login" - rarely has AIO
+        "local": 0.6,             # "X near me" - local pack instead
+    }
+    query_multiplier = AIO_QUERY_MULTIPLIERS.get(query_type, 1.0)
+    factors["query_type"] = {"type": query_type, "multiplier": query_multiplier}
+
+    # Factor 2: Current AIO Source Quality
+    if current_serp.has_ai_overview:
+        current_sources = current_serp.ai_overview_sources
+        avg_source_dr = sum(s.domain_rating for s in current_sources) / len(current_sources)
+
+        if domain_metrics.domain_rating >= avg_source_dr * 0.7:
+            factors["source_competition"] = {"beatable": True, "bonus": 15}
+            score += 15
+        else:
+            factors["source_competition"] = {"beatable": False, "penalty": -10}
+            score -= 10
+    else:
+        # No AIO yet = opportunity to be first
+        factors["no_aio_yet"] = {"bonus": 20}
+        score += 20
+
+    # Factor 3: Content Format Match
+    if content_analysis:
+        ideal_format = get_ideal_aio_format(query_type)
+        current_format = content_analysis.detected_format
+
+        if current_format == ideal_format:
+            factors["format_match"] = {"match": True, "bonus": 10}
+            score += 10
+        else:
+            factors["format_match"] = {
+                "match": False,
+                "current": current_format,
+                "recommended": ideal_format,
+                "penalty": -5
+            }
+            score -= 5
+
+    # Factor 4: E-E-A-T Requirements
+    if is_ymyl_topic(keyword):
+        if domain_metrics.has_author_schema and domain_metrics.has_citations:
+            factors["eeat"] = {"required": True, "satisfied": True}
+        else:
+            factors["eeat"] = {"required": True, "satisfied": False, "penalty": -30}
+            score -= 30
+
+    # Factor 5: Freshness
+    topic_freshness_requirement = get_freshness_requirement(keyword)
+    if topic_freshness_requirement == "high":
+        if content_analysis and content_analysis.last_updated_days < 90:
+            factors["freshness"] = {"requirement": "high", "satisfied": True}
+        else:
+            factors["freshness"] = {"requirement": "high", "satisfied": False, "penalty": -15}
+            score -= 15
+
+    # Apply query type multiplier
+    score = score * query_multiplier
+
+    return AIOOptimizationScore(
+        score=max(0, min(100, score)),
+        potential=categorize_potential(score),  # "high", "medium", "low", "avoid"
+        factors=factors,
+        recommended_actions=generate_aio_recommendations(factors)
+    )
+
+
+def get_ideal_aio_format(query_type: str) -> str:
+    """Map query type to ideal content format for AIO citation."""
+
+    FORMAT_MAP = {
+        "definitional": "concise_definition",    # 2-3 sentence clear definition
+        "how_to": "numbered_steps",              # Clear step-by-step
+        "comparison": "comparison_table",        # Side-by-side comparison
+        "list": "bulleted_list",                 # Scannable list with brief descriptions
+        "commercial": "product_summary",         # Key features, specs, price
+    }
+    return FORMAT_MAP.get(query_type, "comprehensive_answer")
+```
+
+### 17.5 Integration with Existing Systems
+
+#### Greenfield Mode Integration
+
+```python
+async def _collect_greenfield(self, config: AnalysisConfig) -> GreenfieldAnalysis:
+    """Enhanced greenfield collection with AI discovery foundation."""
+
+    # ... existing collection logic ...
+
+    # NEW: AI Discovery Layer
+    ai_metrics = await self._collect_ai_discovery_metrics(
+        keywords=keyword_universe[:200],
+        competitors=validated_competitors
+    )
+
+    # NEW: Enhance beachhead selection with AIO potential
+    for keyword in beachhead_candidates:
+        keyword.aio_potential = await calculate_aio_optimization_potential(
+            keyword=keyword.keyword,
+            current_serp=keyword.serp_analysis,
+            domain_metrics=config.domain_metrics,
+            content_analysis=None  # No content yet for greenfield
+        )
+
+    # NEW: Flag high-AIO-potential beachheads
+    aio_beachheads = [
+        k for k in beachhead_candidates
+        if k.aio_potential.potential in ["high", "medium"]
+    ]
+
+    return GreenfieldAnalysis(
+        # ... existing fields ...
+
+        # NEW: AI Discovery section
+        ai_discovery=AIDiscoverySection(
+            aio_landscape=ai_metrics,
+            aio_beachhead_keywords=aio_beachheads[:10],
+            content_format_recommendations=generate_format_recommendations(
+                beachhead_candidates
+            ),
+            future_aio_roadmap=generate_aio_roadmap(keyword_universe)
+        )
+    )
+```
+
+#### Strategy Builder Integration
+
+```python
+class ThreadSuggestion(BaseModel):
+    """Enhanced thread suggestion with AI optimization."""
+
+    name: str
+    keywords: List[str]
+    priority: int
+
+    # NEW: AI Discovery fields
+    aio_optimization_level: str   # "standard", "aio_optimized", "aio_priority"
+    content_format_hint: str      # Recommended format for AIO citation
+    aio_keywords_count: int       # Keywords with AIO opportunity
+
+
+async def suggest_threads_with_aio(
+    analysis_run_id: UUID,
+    db: Session
+) -> List[ThreadSuggestion]:
+    """Suggest threads with AI discovery optimization hints."""
+
+    # ... existing thread suggestion logic ...
+
+    for thread in suggested_threads:
+        # Analyze AIO potential for thread's keywords
+        aio_keywords = [
+            k for k in thread.keywords
+            if k.aio_potential and k.aio_potential.potential in ["high", "medium"]
+        ]
+
+        if len(aio_keywords) > len(thread.keywords) * 0.5:
+            thread.aio_optimization_level = "aio_priority"
+            thread.content_format_hint = most_common_format(aio_keywords)
+        elif len(aio_keywords) > 0:
+            thread.aio_optimization_level = "aio_optimized"
+        else:
+            thread.aio_optimization_level = "standard"
+
+        thread.aio_keywords_count = len(aio_keywords)
+
+    return suggested_threads
+```
+
+#### Monok Export Integration
+
+```python
+class MonokExportWithAIO(BaseModel):
+    """Enhanced Monok export with AI optimization instructions."""
+
+    thread_name: str
+    topics: List[MonokTopic]
+
+    # NEW: AI optimization context
+    ai_optimization: AIOptimizationContext
+
+
+class AIOptimizationContext(BaseModel):
+    """AI optimization instructions for content creation."""
+
+    optimization_level: str
+    primary_format: str
+    format_instructions: str
+
+    # Specific guidance for AI citation
+    aio_optimization_tips: List[str]
+    """
+    Example tips:
+    - "Include a clear 2-sentence definition in the first paragraph"
+    - "Structure as numbered steps (AI Overviews favor this format)"
+    - "Include a comparison table for 'X vs Y' queries"
+    - "Add FAQ schema markup for PAA/AIO alignment"
+    """
+
+    # Keywords to emphasize for AIO
+    aio_priority_keywords: List[str]
+```
+
+### 17.6 Future AEO/GEO Roadmap
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                    AEO/GEO FEATURE ROADMAP                                  │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  PHASE 1: Foundation (This Section) ✅                                      │
+│  ─────────────────────────────────────                                      │
+│  • Database schema for AI metrics                                           │
+│  • AIO tracking in SERP analysis                                            │
+│  • Basic AIO optimization scoring                                           │
+│  • Integration hooks in greenfield/strategy builder                         │
+│                                                                             │
+│  PHASE 2: AIO Optimization Suite (Future Feature)                           │
+│  ────────────────────────────────────────────────────                       │
+│  • Deep AIO source analysis (why are these sites cited?)                    │
+│  • Content gap analysis for AIO (what format are we missing?)               │
+│  • AIO tracking over time (are we gaining/losing citations?)                │
+│  • Automated content format recommendations                                 │
+│  • Schema markup recommendations for structured data                        │
+│                                                                             │
+│  PHASE 3: Multi-AI Platform Tracking (Future Feature)                       │
+│  ─────────────────────────────────────────────────────                      │
+│  • ChatGPT citation monitoring (browsing mode)                              │
+│  • Perplexity source tracking                                               │
+│  • Claude citation analysis                                                 │
+│  • Cross-platform AI visibility score                                       │
+│  • API integrations where available                                         │
+│                                                                             │
+│  PHASE 4: Predictive AIO Optimization (Future Feature)                      │
+│  ──────────────────────────────────────────────────────                     │
+│  • Predict which keywords WILL get AIO (before they do)                     │
+│  • First-mover advantage recommendations                                    │
+│  • Content refresh alerts for AIO retention                                 │
+│  • Competitive AIO displacement strategies                                  │
+│                                                                             │
+│  PHASE 5: AI-Native Content Strategy (Vision)                               │
+│  ─────────────────────────────────────────────                              │
+│  • Content designed for AI understanding, not just ranking                  │
+│  • Semantic structure optimization                                          │
+│  • Entity-based content architecture                                        │
+│  • Multi-modal content recommendations (text + images + video)              │
+│                                                                             │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 17.7 Data Collection Requirements
+
+To fully support future AEO/GEO capabilities, ensure these data points are collected:
+
+**Already Collected (Verify):**
+- [ ] AI Overview presence per keyword
+- [ ] AI Overview source domains (list of cited sources)
+- [ ] Featured snippet presence
+- [ ] People Also Ask questions
+- [ ] Content freshness signals
+
+**Add to Current Collection:**
+- [ ] AI Overview type classification (summary, list, steps, etc.)
+- [ ] AI Overview source count per keyword
+- [ ] Schema markup detection on competitor pages
+- [ ] Author/entity information on top-ranking pages
+
+**Future Collection (Phase 2+):**
+- [ ] ChatGPT browsing mode citation sampling
+- [ ] Perplexity API integration (if available)
+- [ ] Content semantic analysis
+- [ ] Entity extraction and knowledge graph alignment
+
+### 17.8 Success Metrics for AI Discoverability
+
+| Metric | Definition | Target | Measurement |
+|--------|------------|--------|-------------|
+| AIO Appearance Rate | % of target keywords where domain appears in AI Overview | >15% (vs competitors) | Monthly tracking |
+| AIO Position | Average position in AIO source list (1-5) | <3 (higher is better) | Per keyword |
+| AIO Coverage Growth | Month-over-month increase in AIO appearances | +5%/month | Trend tracking |
+| Content Format Alignment | % of content matching ideal AIO format | >70% | Content audit |
+| AI Visibility Score | Composite score across AI platforms | Top quartile in niche | Quarterly benchmark |
 
 ---
 
