@@ -16,6 +16,22 @@ A **Strategy Builder** system that:
 2. Allows **user-driven** (not AI-automated) strategy creation via drag & drop
 3. Exports to **Monok** for content production execution
 
+### Quality Standard: USD 100m B2B SaaS
+
+The Strategy Builder must meet enterprise-grade UX standards:
+- **Instant feedback** on all drag & drop operations
+- **Optimistic updates** - UI updates immediately, syncs to backend
+- **Undo/redo support** for all operations
+- **Keyboard shortcuts** for power users
+- **Bulk operations** (select multiple, assign to thread)
+- **Real-time collaboration ready** (future: multiple users)
+
+Data structures must support:
+- Sub-second API responses for all operations
+- Efficient reordering without full reload
+- Partial updates (PATCH, not PUT)
+- Conflict detection for concurrent edits
+
 ### Core Principle: User-Driven Strategy Creation
 
 **NOT this (AI-automated):**
@@ -39,6 +55,56 @@ User approves → Export to Monok
 ---
 
 ## SYSTEM ARCHITECTURE
+
+### Critical: Analysis vs Strategy Builder Separation
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    ANALYSIS (Manual Trigger Only)                    │
+│                                                                      │
+│   User clicks "Run Analysis" → Phase 1-4 collection →               │
+│   Data stored in Authoricy DB (keywords, SERP, opportunities)       │
+│                                                                      │
+│   This is a SEPARATE action. Takes time. Costs money.               │
+│   NEVER triggered by Strategy Builder operations.                   │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              │ Data persisted in Authoricy DB
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    STRATEGY BUILDER (Uses Stored Data)               │
+│                                                                      │
+│   Lovable calls API → Authoricy returns latest analysis data →      │
+│   User drags/drops/reorders → Lovable calls API to persist          │
+│   strategy structure → NO new analysis triggered                     │
+│                                                                      │
+│   All keyword/SERP data comes from Authoricy backend.               │
+│   Lovable stores NOTHING except ephemeral UI state.                 │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+| Action | Triggers Analysis? | Data Source |
+|--------|-------------------|-------------|
+| Run Analysis | YES (manual) | DataForSEO API |
+| Open Strategy Builder | NO | Authoricy DB (latest analysis) |
+| Reorder threads | NO | Updates strategy in Authoricy DB |
+| Assign keywords | NO | Updates strategy in Authoricy DB |
+| Create/edit topics | NO | Updates strategy in Authoricy DB |
+| Export to Monok | NO | Reads from Authoricy DB |
+
+### Lovable Frontend Responsibilities
+
+**DOES:**
+- UI rendering (drag & drop, lists, forms)
+- Ephemeral UI state (what's being dragged, hover states)
+- API calls to Authoricy backend
+- Display data from API responses
+
+**DOES NOT:**
+- Store analysis data (keywords, SERP, etc.)
+- Trigger new analyses
+- Cache keyword data between sessions
+- Make decisions about data - only displays what API returns
 
 ### Data Flow
 
@@ -147,7 +213,12 @@ class Thread:
 ```python
 @dataclass
 class Topic:
-    """A content piece within a thread."""
+    """
+    A content piece within a thread.
+
+    NOTE: Topics are simple list items. Format recommendations
+    belong in Thread.custom_instructions, NOT on individual topics.
+    """
     id: UUID
     thread_id: UUID
 
@@ -164,8 +235,7 @@ class Topic:
 
     # Content specification
     content_type: str                  # "pillar" | "cluster" | "supporting"
-    recommended_format: Optional[str]   # "listicle" | "how-to" | "guide" | etc.
-    format_evidence: Optional[Dict]     # SERP-derived evidence
+    # NO format field here - format recommendations go in Thread.custom_instructions
 
     # Status
     status: str                        # "suggested" | "confirmed" | "in_production" | "published"
@@ -256,11 +326,15 @@ class MonokThread:
 
 @dataclass
 class MonokTopic:
-    """Single topic in Monok format."""
+    """
+    Single topic in Monok format.
+
+    NOTE: No format field here. Format recommendations
+    are included in MonokThread.custom_instructions.
+    """
     topic_name: str
     primary_keyword: str
     content_type: str                  # "pillar" | "cluster" | "supporting"
-    recommended_format: Optional[str]  # "listicle" | "how-to" | etc.
     target_url: str
 
 @dataclass
@@ -342,7 +416,7 @@ Response: { topics: [Topic] }
 
 # Create topic
 POST /api/threads/{thread_id}/topics
-Body: { name, content_type, primary_keyword_id?, recommended_format? }
+Body: { name, content_type, primary_keyword_id? }
 Response: { topic: Topic }
 
 # Update topic
@@ -459,14 +533,12 @@ Response: { exports: [{ id, format, exported_at, exported_by }] }
           "topic_name": "Enterprise Project Management Software Guide",
           "primary_keyword": "enterprise project management software",
           "content_type": "pillar",
-          "recommended_format": "comprehensive-guide",
           "target_url": "/solutions/enterprise-project-management/"
         },
         {
           "topic_name": "10 Best Enterprise PM Tools Compared",
           "primary_keyword": "best project management for enterprises",
           "content_type": "cluster",
-          "recommended_format": "listicle-comparison",
           "target_url": "/blog/best-enterprise-pm-tools/"
         }
       ],
@@ -505,12 +577,10 @@ TOPICS TO CREATE:
 
 1. [PILLAR] Enterprise Project Management Software Guide
    Primary KW: enterprise project management software
-   Format: Comprehensive guide
    Target URL: /solutions/enterprise-project-management/
 
 2. [CLUSTER] 10 Best Enterprise PM Tools Compared
    Primary KW: best project management for enterprises
-   Format: Listicle comparison
    Target URL: /blog/best-enterprise-pm-tools/
 
 CUSTOM INSTRUCTIONS FOR MONOK:
@@ -543,11 +613,13 @@ THREAD 2: Agile Transformation [Priority: P2]
 ### Format 3: CSV/Spreadsheet
 
 ```csv
-thread_name,thread_priority,topic_name,content_type,primary_keyword,search_volume,difficulty,format,target_url
-Enterprise Project Management,P1,Enterprise PM Software Guide,pillar,enterprise project management software,2400,52,comprehensive-guide,/solutions/enterprise-project-management/
-Enterprise Project Management,P1,10 Best Enterprise PM Tools,cluster,best project management for enterprises,1200,48,listicle-comparison,/blog/best-enterprise-pm-tools/
-Agile Transformation,P2,Agile at Scale Guide,pillar,agile transformation enterprise,1800,55,guide,/solutions/agile-transformation/
+thread_name,thread_priority,topic_name,content_type,primary_keyword,search_volume,difficulty,target_url
+Enterprise Project Management,P1,Enterprise PM Software Guide,pillar,enterprise project management software,2400,52,/solutions/enterprise-project-management/
+Enterprise Project Management,P1,10 Best Enterprise PM Tools,cluster,best project management for enterprises,1200,48,/blog/best-enterprise-pm-tools/
+Agile Transformation,P2,Agile at Scale Guide,pillar,agile transformation enterprise,1800,55,/solutions/agile-transformation/
 ```
+
+Note: Format recommendations are in custom_instructions (not in CSV - too complex for flat format).
 
 ---
 
