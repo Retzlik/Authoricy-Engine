@@ -35,10 +35,14 @@ from src.scoring.greenfield import (
     classify_domain_maturity,
     DomainMetrics,
 )
+from src.services.greenfield import GreenfieldService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/greenfield", tags=["greenfield"])
+
+# Service instance (will be initialized with client in production)
+greenfield_service = GreenfieldService()
 
 
 # =============================================================================
@@ -237,111 +241,90 @@ async def check_domain_maturity(domain: str) -> DomainMaturityResponse:
 
     Returns whether the domain should use greenfield analysis.
     """
-    # In production, this would call DataForSEO to get metrics
-    # For now, return mock data structure
-
-    # TODO: Implement actual DataForSEO call
-    metrics = DomainMetrics(
-        domain_rating=15,  # Example: low DR
-        organic_keywords=30,  # Example: few keywords
-        organic_traffic=100,
-        referring_domains=10,
-    )
-
-    maturity = classify_domain_maturity(metrics)
+    result = await greenfield_service.check_domain_maturity(domain)
 
     return DomainMaturityResponse(
-        domain=domain,
-        maturity=maturity.value,
-        domain_rating=metrics.domain_rating,
-        organic_keywords=metrics.organic_keywords,
-        organic_traffic=metrics.organic_traffic,
-        requires_greenfield=maturity == DomainMaturity.GREENFIELD,
-        message=_get_maturity_message(maturity),
+        domain=result["domain"],
+        maturity=result["maturity"],
+        domain_rating=result["domain_rating"],
+        organic_keywords=result["organic_keywords"],
+        organic_traffic=result["organic_traffic"],
+        requires_greenfield=result["requires_greenfield"],
+        message=result["message"],
     )
-
-
-def _get_maturity_message(maturity: DomainMaturity) -> str:
-    """Get user-friendly message for maturity level."""
-    if maturity == DomainMaturity.GREENFIELD:
-        return (
-            "Your domain has limited SEO data. We'll use competitor-first analysis "
-            "to identify market opportunities and beachhead keywords."
-        )
-    elif maturity == DomainMaturity.EMERGING:
-        return (
-            "Your domain has some SEO data. We'll combine your existing data "
-            "with competitor analysis for a comprehensive view."
-        )
-    else:
-        return (
-            "Your domain has established SEO data. We'll perform standard "
-            "analysis with competitive benchmarking."
-        )
 
 
 # =============================================================================
 # COMPETITOR INTELLIGENCE SESSION ENDPOINTS
 # =============================================================================
 
-@router.post("/sessions", response_model=CurationSession)
+@router.post("/sessions")
 async def create_competitor_session(
     analysis_run_id: UUID,
     seed_keywords: List[str] = [],
     known_competitors: List[str] = [],
-) -> CurationSession:
+) -> Dict[str, Any]:
     """
     Create a new competitor intelligence session.
 
     Triggers the competitor discovery pipeline and returns
     a session for user curation.
     """
-    session_id = uuid4()
+    from src.database import repository
+    from src.database.session import get_db_context
+    from src.database.models import AnalysisRun
 
-    # TODO: Trigger actual competitor discovery pipeline
-    # For now, return mock session structure
+    # Get analysis run to find domain_id
+    with get_db_context() as db:
+        run = db.query(AnalysisRun).get(analysis_run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Analysis run not found")
+        domain_id = run.domain_id
 
-    mock_candidates = [
-        CompetitorCandidate(
-            domain="competitor1.com",
-            discovery_source="serp",
-            domain_rating=45,
-            organic_traffic=50000,
-            organic_keywords=2500,
-            relevance_score=0.85,
-            suggested_purpose="keyword_source",
-            discovery_reason="Ranks for 8 of your seed keywords",
-        ),
-        # Add more mock candidates...
-    ]
-
-    return CurationSession(
-        session_id=session_id,
+    # Create session
+    session_id = repository.create_competitor_intelligence_session(
         analysis_run_id=analysis_run_id,
-        status="awaiting_curation",
-        candidates=mock_candidates,
-        candidates_count=len(mock_candidates),
-        required_removals=max(0, len(mock_candidates) - 10),
-        min_final_count=8,
-        max_final_count=10,
-        created_at=datetime.utcnow(),
+        domain_id=domain_id,
+        user_provided_competitors=known_competitors,
     )
 
+    # Trigger discovery
+    result = await greenfield_service.discover_competitors(
+        session_id=session_id,
+        seed_keywords=seed_keywords,
+        known_competitors=known_competitors,
+    )
 
-@router.get("/sessions/{session_id}", response_model=CurationSession)
-async def get_competitor_session(session_id: UUID) -> CurationSession:
+    return {
+        "session_id": str(session_id),
+        "analysis_run_id": str(analysis_run_id),
+        "status": result.get("status", "awaiting_curation"),
+        "candidates": result.get("candidates", []),
+        "candidates_count": result.get("candidates_count", 0),
+        "required_removals": result.get("required_removals", 0),
+        "min_final_count": 8,
+        "max_final_count": 10,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+
+@router.get("/sessions/{session_id}")
+async def get_competitor_session(session_id: UUID) -> Dict[str, Any]:
     """
     Get current state of a competitor intelligence session.
     """
-    # TODO: Fetch from database
-    raise HTTPException(status_code=404, detail="Session not found")
+    session = greenfield_service.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return session
 
 
-@router.post("/sessions/{session_id}/curate", response_model=FinalCompetitorSetResponse)
+@router.post("/sessions/{session_id}/curate")
 async def submit_curation(
     session_id: UUID,
     curation: CurationInput,
-) -> FinalCompetitorSetResponse:
+) -> Dict[str, Any]:
     """
     Submit user's curation decisions.
 
@@ -352,47 +335,28 @@ async def submit_curation(
 
     Returns the finalized competitor set.
     """
-    # Validate curation
-    if len(curation.removals) < 5:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Must remove at least 5 competitors (removed {len(curation.removals)})"
+    try:
+        result = greenfield_service.submit_curation(
+            session_id=session_id,
+            removals=[r.model_dump() for r in curation.removals],
+            additions=[a.model_dump() for a in curation.additions],
+            purpose_overrides=[p.model_dump() for p in curation.purpose_overrides],
         )
 
-    # TODO: Apply curation to session and finalize
+        if not result:
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    # Mock response
-    final_competitors = [
-        FinalCompetitor(
-            domain="competitor1.com",
-            display_name="Competitor 1",
-            purpose="keyword_source",
-            priority=1,
-            domain_rating=45,
-            organic_traffic=50000,
-            organic_keywords=2500,
-            keyword_overlap=234,
-            is_user_provided=False,
-            is_user_curated=True,
-        ),
-    ]
+        return result
 
-    return FinalCompetitorSetResponse(
-        session_id=session_id,
-        status="curated",
-        final_competitors=final_competitors,
-        competitor_count=len(final_competitors),
-        removed_count=len(curation.removals),
-        added_count=len(curation.additions),
-        finalized_at=datetime.utcnow(),
-    )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.patch("/sessions/{session_id}/competitors", response_model=FinalCompetitorSetResponse)
+@router.patch("/sessions/{session_id}/competitors")
 async def update_competitors(
     session_id: UUID,
     updates: CompetitorUpdateInput,
-) -> FinalCompetitorSetResponse:
+) -> Dict[str, Any]:
     """
     Update competitors after finalization.
 
@@ -403,16 +367,25 @@ async def update_competitors(
 
     Note: Significant changes may trigger reanalysis.
     """
-    # TODO: Implement post-finalization updates
-    raise HTTPException(status_code=501, detail="Not implemented")
+    result = greenfield_service.update_competitors(
+        session_id=session_id,
+        removals=[r.model_dump() for r in updates.removals] if updates.removals else None,
+        additions=[a.model_dump() for a in updates.additions] if updates.additions else None,
+        purpose_overrides=[p.model_dump() for p in updates.purpose_overrides] if updates.purpose_overrides else None,
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return result
 
 
 # =============================================================================
 # GREENFIELD DASHBOARD ENDPOINTS
 # =============================================================================
 
-@router.get("/dashboard/{analysis_run_id}", response_model=GreenfieldDashboardResponse)
-async def get_greenfield_dashboard(analysis_run_id: UUID) -> GreenfieldDashboardResponse:
+@router.get("/dashboard/{analysis_run_id}")
+async def get_greenfield_dashboard(analysis_run_id: UUID) -> Dict[str, Any]:
     """
     Get complete greenfield dashboard data.
 
@@ -423,16 +396,19 @@ async def get_greenfield_dashboard(analysis_run_id: UUID) -> GreenfieldDashboard
     - Traffic projections
     - Growth roadmap
     """
-    # TODO: Fetch from database
-    raise HTTPException(status_code=404, detail="Analysis not found")
+    result = greenfield_service.get_dashboard(analysis_run_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    return result
 
 
-@router.get("/dashboard/{analysis_run_id}/beachheads", response_model=List[BeachheadKeyword])
+@router.get("/dashboard/{analysis_run_id}/beachheads")
 async def get_beachhead_keywords(
     analysis_run_id: UUID,
     phase: Optional[int] = None,
     min_winnability: Optional[float] = None,
-) -> List[BeachheadKeyword]:
+) -> List[Dict[str, Any]]:
     """
     Get beachhead keywords for greenfield analysis.
 
@@ -440,8 +416,12 @@ async def get_beachhead_keywords(
     - Growth phase (1=Foundation, 2=Traction, 3=Authority)
     - Minimum winnability score
     """
-    # TODO: Fetch from database with filters
-    raise HTTPException(status_code=404, detail="Analysis not found")
+    keywords = greenfield_service.get_beachheads(
+        analysis_run_id=analysis_run_id,
+        phase=phase,
+        min_winnability=min_winnability,
+    )
+    return keywords
 
 
 @router.get("/dashboard/{analysis_run_id}/market-map")
@@ -451,23 +431,46 @@ async def get_market_map(analysis_run_id: UUID) -> Dict[str, Any]:
 
     Returns competitor positioning data for the market map component.
     """
-    # TODO: Implement market map data
-    raise HTTPException(status_code=501, detail="Not implemented")
+    dashboard = greenfield_service.get_dashboard(analysis_run_id)
+    if not dashboard:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    # Extract market map data from competitors
+    competitors = dashboard.get("competitors", [])
+
+    return {
+        "analysis_run_id": str(analysis_run_id),
+        "competitors": [
+            {
+                "domain": c.get("domain", ""),
+                "domain_rating": c.get("domain_rating", 0),
+                "organic_traffic": c.get("organic_traffic", 0),
+                "purpose": c.get("purpose", "keyword_source"),
+                "priority": c.get("priority", 0),
+            }
+            for c in competitors
+        ],
+        "market_opportunity": dashboard.get("market_opportunity", {}),
+    }
 
 
-@router.get("/dashboard/{analysis_run_id}/projections", response_model=TrafficProjectionsResponse)
-async def get_traffic_projections(analysis_run_id: UUID) -> TrafficProjectionsResponse:
+@router.get("/dashboard/{analysis_run_id}/projections")
+async def get_traffic_projections(analysis_run_id: UUID) -> Dict[str, Any]:
     """
     Get traffic projections for greenfield domain.
 
     Returns three scenarios: conservative, expected, aggressive
     """
-    # TODO: Fetch from database
-    raise HTTPException(status_code=404, detail="Analysis not found")
+    dashboard = greenfield_service.get_dashboard(analysis_run_id)
+    if not dashboard:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    projections = dashboard.get("traffic_projections", {})
+    return projections
 
 
-@router.get("/dashboard/{analysis_run_id}/roadmap", response_model=List[GrowthPhase])
-async def get_growth_roadmap(analysis_run_id: UUID) -> List[GrowthPhase]:
+@router.get("/dashboard/{analysis_run_id}/roadmap")
+async def get_growth_roadmap(analysis_run_id: UUID) -> List[Dict[str, Any]]:
     """
     Get growth roadmap for greenfield domain.
 
@@ -476,8 +479,12 @@ async def get_growth_roadmap(analysis_run_id: UUID) -> List[GrowthPhase]:
     - Phase 2: Traction (months 4-6)
     - Phase 3: Authority (months 7-12)
     """
-    # TODO: Fetch from database
-    raise HTTPException(status_code=404, detail="Analysis not found")
+    dashboard = greenfield_service.get_dashboard(analysis_run_id)
+    if not dashboard:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    roadmap = dashboard.get("growth_roadmap", [])
+    return roadmap
 
 
 # =============================================================================
@@ -497,11 +504,13 @@ async def assign_keyword_phase(
     - 2: Traction (medium difficulty, expansion)
     - 3: Authority (competitive, later targeting)
     """
-    if phase not in [1, 2, 3]:
-        raise HTTPException(status_code=400, detail="Phase must be 1, 2, or 3")
-
-    # TODO: Update keyword phase in database
-    return {"keyword_id": str(keyword_id), "phase": phase, "updated": True}
+    try:
+        success = greenfield_service.update_keyword_phase(keyword_id, phase)
+        if not success:
+            raise HTTPException(status_code=404, detail="Keyword not found")
+        return {"keyword_id": str(keyword_id), "phase": phase, "updated": True}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # =============================================================================
@@ -537,15 +546,39 @@ async def start_greenfield_analysis(
     - session_id: UUID of the competitor intelligence session
     - status: Current status (discovering)
     """
-    # TODO: Implement full greenfield analysis trigger
-
-    analysis_run_id = uuid4()
-    session_id = uuid4()
-
-    return {
-        "analysis_run_id": str(analysis_run_id),
-        "session_id": str(session_id),
-        "status": "discovering",
-        "message": "Greenfield analysis started. Competitor discovery in progress.",
-        "next_step": f"/api/greenfield/sessions/{session_id}",
+    greenfield_context = {
+        "business_name": request.business_name,
+        "business_description": request.business_description,
+        "primary_offering": request.primary_offering,
+        "target_market": request.target_market,
+        "industry_vertical": request.industry_vertical,
+        "seed_keywords": request.seed_keywords,
+        "known_competitors": request.known_competitors,
+        "target_audience": request.target_audience,
     }
+
+    try:
+        analysis_run_id, session_id = greenfield_service.start_greenfield_analysis(
+            domain=request.domain,
+            greenfield_context=greenfield_context,
+        )
+
+        # Trigger competitor discovery
+        await greenfield_service.discover_competitors(
+            session_id=session_id,
+            seed_keywords=request.seed_keywords,
+            known_competitors=request.known_competitors,
+            market=request.target_market.lower().replace(" ", "_")[:2] if request.target_market else "us",
+        )
+
+        return {
+            "analysis_run_id": str(analysis_run_id),
+            "session_id": str(session_id),
+            "status": "awaiting_curation",
+            "message": "Greenfield analysis started. Competitor discovery complete. Proceed to curation.",
+            "next_step": f"/api/greenfield/sessions/{session_id}",
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to start greenfield analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
