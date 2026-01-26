@@ -32,14 +32,31 @@ logger = logging.getLogger(__name__)
 class GreenfieldService:
     """Service for greenfield analysis operations."""
 
-    def __init__(self, dataforseo_client=None):
+    def __init__(
+        self,
+        dataforseo_client=None,
+        perplexity_client=None,
+        firecrawl_client=None,
+        external_api_clients=None,
+    ):
         """
         Initialize greenfield service.
 
         Args:
             dataforseo_client: Optional DataForSEO client for API calls
+            perplexity_client: Optional PerplexityClient for AI discovery
+            firecrawl_client: Optional FirecrawlClient for website scraping
+            external_api_clients: Optional ExternalAPIClients (provides both)
         """
         self.client = dataforseo_client
+
+        # External API clients for enhanced competitor discovery
+        if external_api_clients:
+            self.perplexity_client = external_api_clients.perplexity
+            self.firecrawl_client = external_api_clients.firecrawl
+        else:
+            self.perplexity_client = perplexity_client
+            self.firecrawl_client = firecrawl_client
 
     async def check_domain_maturity(self, domain: str) -> Dict[str, Any]:
         """
@@ -168,26 +185,50 @@ class GreenfieldService:
         seed_keywords: List[str],
         known_competitors: List[str],
         market: str = "us",
+        business_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Discover competitors for a session.
 
         Aggregates competitors from multiple sources and updates session.
+        Sources:
+        1. User-provided competitors
+        2. Perplexity AI discovery (if available)
+        3. SERP analysis for seed keywords
         """
         candidates = []
+        seen_domains = set()
 
         # Add user-provided competitors
         for domain in known_competitors:
-            candidates.append({
-                "domain": domain.lower().strip(),
-                "discovery_source": "user_provided",
-                "discovery_reason": "User-provided competitor",
-                "domain_rating": 0,
-                "organic_traffic": 0,
-                "organic_keywords": 0,
-                "relevance_score": 0.9,
-                "suggested_purpose": "benchmark_peer",
-            })
+            domain = domain.lower().strip()
+            if domain and domain not in seen_domains:
+                candidates.append({
+                    "domain": domain,
+                    "discovery_source": "user_provided",
+                    "discovery_reason": "User-provided competitor",
+                    "domain_rating": 0,
+                    "organic_traffic": 0,
+                    "organic_keywords": 0,
+                    "relevance_score": 0.9,
+                    "suggested_purpose": "benchmark_peer",
+                })
+                seen_domains.add(domain)
+
+        # Discover from Perplexity AI (intelligent, context-aware discovery)
+        if self.perplexity_client and business_context:
+            try:
+                perplexity_competitors = await self._discover_from_perplexity(
+                    business_context=business_context,
+                )
+                for comp in perplexity_competitors:
+                    domain = comp.get("domain", "").lower()
+                    if domain and domain not in seen_domains:
+                        candidates.append(comp)
+                        seen_domains.add(domain)
+                logger.info(f"Perplexity discovered {len(perplexity_competitors)} candidates")
+            except Exception as e:
+                logger.warning(f"Perplexity discovery failed: {e}")
 
         # Discover from SERPs if client available
         if self.client and seed_keywords:
@@ -196,7 +237,11 @@ class GreenfieldService:
                     seed_keywords[:5],
                     market,
                 )
-                candidates.extend(serp_competitors)
+                for comp in serp_competitors:
+                    domain = comp.get("domain", "").lower()
+                    if domain and domain not in seen_domains:
+                        candidates.append(comp)
+                        seen_domains.add(domain)
             except Exception as e:
                 logger.warning(f"SERP discovery failed: {e}")
 
@@ -261,6 +306,55 @@ class GreenfieldService:
                 })
 
         return competitors[:15]
+
+    async def _discover_from_perplexity(
+        self,
+        business_context: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """
+        Discover competitors using Perplexity AI search.
+
+        Perplexity provides intelligent, context-aware competitor discovery
+        that can find competitors DataForSEO might miss.
+        """
+        from src.integrations.perplexity import PerplexityDiscovery
+
+        # Create discovery instance if needed
+        if hasattr(self.perplexity_client, 'discover_competitors'):
+            discovery = self.perplexity_client
+        else:
+            discovery = PerplexityDiscovery(self.perplexity_client)
+
+        # Extract context fields
+        company_name = business_context.get("business_name", "the company")
+        category = business_context.get("primary_offering", "software")
+        offering = business_context.get("business_description", category)
+        customer_type = business_context.get("target_audience", "businesses")
+
+        # Run discovery
+        discovered = await discovery.discover_competitors(
+            company_name=company_name,
+            category=category,
+            offering=offering,
+            customer_type=customer_type,
+        )
+
+        # Convert to dict format
+        competitors = []
+        for disc in discovered:
+            if disc.domain:
+                competitors.append({
+                    "domain": disc.domain,
+                    "discovery_source": disc.discovery_source,
+                    "discovery_reason": disc.discovery_reason or f"AI discovery: {disc.name}",
+                    "domain_rating": 0,  # Will be enriched later
+                    "organic_traffic": 0,
+                    "organic_keywords": 0,
+                    "relevance_score": disc.confidence,
+                    "suggested_purpose": "keyword_source",
+                })
+
+        return competitors
 
     async def _enrich_candidates(
         self,

@@ -159,6 +159,8 @@ async def collect_greenfield_data(
     config,  # CollectionConfig
     foundation: Dict[str, Any],
     start_time: datetime,
+    perplexity_client=None,  # Optional PerplexityClient for AI discovery
+    firecrawl_client=None,  # Optional FirecrawlClient for context scraping
 ) -> GreenfieldCollectionResult:
     """
     Execute greenfield collection pipeline.
@@ -175,6 +177,8 @@ async def collect_greenfield_data(
         config: Collection configuration with greenfield_context
         foundation: Phase 1 foundation data (domain overview)
         start_time: Pipeline start time
+        perplexity_client: Optional Perplexity client for AI-powered discovery
+        firecrawl_client: Optional Firecrawl client for website scraping
 
     Returns:
         GreenfieldCollectionResult with all collected data
@@ -203,6 +207,16 @@ async def collect_greenfield_data(
     target_dr = result.domain_metrics.domain_rating or 10  # Default to 10 for new domains
     industry = get_industry_from_string(ctx.industry_vertical)
 
+    # Build business context dict for external APIs
+    business_context = {
+        "business_name": ctx.business_name,
+        "business_description": ctx.business_description,
+        "primary_offering": ctx.primary_offering,
+        "target_market": ctx.target_market,
+        "industry_vertical": ctx.industry_vertical,
+        "target_audience": ctx.target_audience,
+    }
+
     # =========================================================================
     # Phase G1: Competitor Discovery & Validation
     # =========================================================================
@@ -215,6 +229,8 @@ async def collect_greenfield_data(
             known_competitors=ctx.known_competitors,
             market=config.market,
             language=config.language,
+            perplexity_client=perplexity_client,
+            business_context=business_context,
         )
 
         # Validate and enrich with metrics
@@ -422,14 +438,17 @@ async def _discover_competitors(
     known_competitors: List[str],
     market: str,
     language: str,
+    perplexity_client=None,
+    business_context: Optional[Dict[str, Any]] = None,
 ) -> List[GreenfieldCompetitorCandidate]:
     """
     Discover competitors through multiple sources.
 
     Sources:
     1. User-provided competitors
-    2. SERP analysis for seed keywords
-    3. Traffic share competitors
+    2. Perplexity AI discovery (if client provided)
+    3. SERP analysis for seed keywords
+    4. Traffic share competitors
     """
     candidates = []
     seen_domains = set()
@@ -446,7 +465,25 @@ async def _discover_competitors(
             ))
             seen_domains.add(domain)
 
-    # Source 2: SERP analysis for seed keywords
+    # Source 2: Perplexity AI discovery (intelligent search)
+    if perplexity_client and business_context:
+        try:
+            perplexity_competitors = await _discover_from_perplexity(
+                client=perplexity_client,
+                business_context=business_context,
+            )
+
+            for comp in perplexity_competitors:
+                if comp.domain and comp.domain not in seen_domains:
+                    candidates.append(comp)
+                    seen_domains.add(comp.domain)
+
+            logger.info(f"Perplexity discovered {len(perplexity_competitors)} candidates")
+
+        except Exception as e:
+            logger.warning(f"Perplexity discovery failed: {e}")
+
+    # Source 3: SERP analysis for seed keywords
     try:
         serp_competitors = await _discover_from_serps(
             client=client,
@@ -463,7 +500,7 @@ async def _discover_competitors(
     except Exception as e:
         logger.warning(f"SERP discovery failed: {e}")
 
-    # Source 3: Traffic share (if we have at least one competitor)
+    # Source 4: Traffic share (if we have at least one competitor)
     if candidates:
         try:
             traffic_competitors = await _discover_from_traffic_share(
@@ -481,6 +518,52 @@ async def _discover_competitors(
             logger.warning(f"Traffic share discovery failed: {e}")
 
     logger.info(f"Discovered {len(candidates)} competitor candidates")
+    return candidates
+
+
+async def _discover_from_perplexity(
+    client,  # PerplexityClient or PerplexityDiscovery
+    business_context: Dict[str, Any],
+) -> List[GreenfieldCompetitorCandidate]:
+    """
+    Discover competitors using Perplexity AI search.
+
+    Perplexity provides intelligent, context-aware competitor discovery
+    that can find competitors DataForSEO might miss.
+    """
+    from src.integrations.perplexity import PerplexityDiscovery
+
+    # Create discovery instance if raw client provided
+    if hasattr(client, 'discover_competitors'):
+        discovery = client
+    else:
+        discovery = PerplexityDiscovery(client)
+
+    # Extract context fields
+    company_name = business_context.get("business_name", "the company")
+    category = business_context.get("primary_offering", "software")
+    offering = business_context.get("business_description", category)
+    customer_type = business_context.get("target_audience", "businesses")
+
+    # Run discovery
+    discovered = await discovery.discover_competitors(
+        company_name=company_name,
+        category=category,
+        offering=offering,
+        customer_type=customer_type,
+    )
+
+    # Convert to GreenfieldCompetitorCandidate
+    candidates = []
+    for disc in discovered:
+        if disc.domain:
+            candidates.append(GreenfieldCompetitorCandidate(
+                domain=disc.domain,
+                discovery_source=disc.discovery_source,
+                discovery_reason=disc.discovery_reason or f"AI discovery: {disc.name}",
+                relevance_score=disc.confidence,
+            ))
+
     return candidates
 
 

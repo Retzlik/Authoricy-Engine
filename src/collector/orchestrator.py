@@ -224,16 +224,39 @@ class DataCollectionOrchestrator:
     2. Keywords - Rankings, gaps, clusters
     3. Competitive - Detailed competitor analysis, link gaps
     4. AI & Technical - AI visibility, deep technical audit
+
+    For greenfield analysis, can optionally use external APIs:
+    - Perplexity: AI-powered competitor discovery
+    - Firecrawl: Website scraping for context acquisition
     """
 
-    def __init__(self, client):
+    def __init__(
+        self,
+        client,
+        perplexity_client=None,
+        firecrawl_client=None,
+        external_api_clients=None,
+    ):
         """
-        Initialize orchestrator with DataForSEO client.
+        Initialize orchestrator with DataForSEO client and optional external APIs.
 
         Args:
             client: DataForSEOClient instance
+            perplexity_client: Optional PerplexityClient for competitor discovery
+            firecrawl_client: Optional FirecrawlClient for website scraping
+            external_api_clients: Optional ExternalAPIClients instance (provides both)
         """
         self.client = client
+
+        # External API clients for enhanced greenfield analysis
+        if external_api_clients:
+            # Use unified client manager if provided
+            self.perplexity_client = external_api_clients.perplexity
+            self.firecrawl_client = external_api_clients.firecrawl
+        else:
+            # Use individual clients
+            self.perplexity_client = perplexity_client
+            self.firecrawl_client = firecrawl_client
 
     async def collect_all(self, config: CollectionConfig) -> CollectionResult:
         """
@@ -496,6 +519,8 @@ class DataCollectionOrchestrator:
                 config=config,
                 foundation=foundation,
                 start_time=start_time,
+                perplexity_client=self.perplexity_client,
+                firecrawl_client=self.firecrawl_client,
             )
 
             # Merge greenfield results with foundation data
