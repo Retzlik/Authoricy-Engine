@@ -1333,3 +1333,285 @@ class MarketOpportunityRecord(Base):
         Index("idx_market_opportunity_score", "domain_id", "opportunity_score"),
         Index("idx_market_recommended", "domain_id", "is_recommended"),
     )
+
+
+# =============================================================================
+# STRATEGY BUILDER - User-driven content strategy creation
+# =============================================================================
+
+class StrategyStatus(enum.Enum):
+    """Strategy status"""
+    DRAFT = "draft"
+    APPROVED = "approved"
+    ARCHIVED = "archived"
+
+
+class ThreadStatus(enum.Enum):
+    """Thread status"""
+    DRAFT = "draft"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+
+
+class TopicStatus(enum.Enum):
+    """Topic status"""
+    DRAFT = "draft"
+    CONFIRMED = "confirmed"
+    IN_PRODUCTION = "in_production"
+    PUBLISHED = "published"
+
+
+class ContentType(enum.Enum):
+    """Content type for topics"""
+    PILLAR = "pillar"
+    CLUSTER = "cluster"
+    SUPPORTING = "supporting"
+
+
+class Strategy(Base):
+    """
+    Content strategy container.
+
+    A strategy is bound to a specific analysis_run_id and contains
+    threads (topic clusters), topics (content pieces), and keyword assignments.
+    """
+    __tablename__ = "strategies"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id", ondelete="CASCADE"), nullable=False)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id", ondelete="RESTRICT"), nullable=False)
+
+    # Identity
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+
+    # Versioning (for optimistic locking)
+    version = Column(Integer, nullable=False, default=1)
+
+    # Status
+    status = Column(Enum(StrategyStatus), nullable=False, default=StrategyStatus.DRAFT)
+    approved_at = Column(DateTime)
+    approved_by = Column(String(255))
+
+    # Soft delete
+    is_archived = Column(Boolean, nullable=False, default=False)
+    archived_at = Column(DateTime)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    domain = relationship("Domain")
+    analysis_run = relationship("AnalysisRun")
+    threads = relationship("StrategyThread", back_populates="strategy", cascade="all, delete-orphan")
+    exports = relationship("StrategyExport", back_populates="strategy", cascade="all, delete-orphan")
+    activity_log = relationship("StrategyActivityLog", back_populates="strategy", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_strategy_domain", "domain_id", "created_at"),
+        Index("idx_strategy_status", "domain_id", "status"),
+    )
+
+
+class StrategyThread(Base):
+    """
+    Thread (topic cluster) within a strategy.
+
+    Represents a market position to own. Contains topics and has keywords assigned.
+    Uses lexicographic ordering for efficient drag & drop reordering.
+    """
+    __tablename__ = "strategy_threads"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    strategy_id = Column(UUID(as_uuid=True), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False)
+
+    # Identity
+    name = Column(String(255), nullable=False)
+    slug = Column(String(255))
+
+    # Ordering (lexicographic for efficient reordering)
+    # Uses fractional indexing: "a", "b", "c" or "aU", "am", "b" between items
+    position = Column(String(50), nullable=False)
+
+    # Versioning
+    version = Column(Integer, nullable=False, default=1)
+
+    # Status
+    status = Column(Enum(ThreadStatus), nullable=False, default=ThreadStatus.DRAFT)
+    priority = Column(Integer, CheckConstraint("priority BETWEEN 1 AND 5"))
+
+    # SERP-derived recommendations (cached, read-only)
+    recommended_format = Column(String(50))
+    format_confidence = Column(Float)
+    format_evidence = Column(JSONB)
+
+    # Custom instructions (structured JSONB)
+    # Schema: {strategic_context, differentiation_points[], competitors_to_address[],
+    #          content_angle, format_recommendations, target_audience, additional_notes}
+    custom_instructions = Column(JSONB, nullable=False, default={})
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    strategy = relationship("Strategy", back_populates="threads")
+    topics = relationship("StrategyTopic", back_populates="thread", cascade="all, delete-orphan")
+    thread_keywords = relationship("ThreadKeyword", back_populates="thread", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_thread_strategy", "strategy_id", "position"),
+        UniqueConstraint("strategy_id", "position", name="uq_thread_position"),
+    )
+
+
+class ThreadKeyword(Base):
+    """
+    Junction table for thread-keyword many-to-many relationship.
+
+    A keyword can only be assigned to one thread per strategy (enforced by trigger).
+    Uses lexicographic ordering for display order within thread.
+    """
+    __tablename__ = "thread_keywords"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    thread_id = Column(UUID(as_uuid=True), ForeignKey("strategy_threads.id", ondelete="CASCADE"), nullable=False)
+    keyword_id = Column(UUID(as_uuid=True), ForeignKey("keywords.id", ondelete="CASCADE"), nullable=False)
+
+    # Ordering within thread (lexicographic)
+    position = Column(String(50), nullable=False)
+
+    # When assigned
+    assigned_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    thread = relationship("StrategyThread", back_populates="thread_keywords")
+    keyword = relationship("Keyword")
+
+    __table_args__ = (
+        UniqueConstraint("thread_id", "keyword_id", name="uq_thread_keyword"),
+        Index("idx_thread_keyword_thread", "thread_id", "position"),
+        Index("idx_thread_keyword_keyword", "keyword_id"),
+    )
+
+
+class StrategyTopic(Base):
+    """
+    Topic (content piece) within a thread.
+
+    Represents a specific piece of content to create.
+    Format recommendations belong in Thread.custom_instructions, not here.
+    """
+    __tablename__ = "strategy_topics"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    thread_id = Column(UUID(as_uuid=True), ForeignKey("strategy_threads.id", ondelete="CASCADE"), nullable=False)
+
+    # Identity
+    name = Column(String(500), nullable=False)
+    slug = Column(String(255))
+
+    # Ordering (lexicographic)
+    position = Column(String(50), nullable=False)
+
+    # Versioning
+    version = Column(Integer, nullable=False, default=1)
+
+    # Primary keyword (optional)
+    primary_keyword_id = Column(UUID(as_uuid=True), ForeignKey("keywords.id", ondelete="SET NULL"))
+    primary_keyword = Column(String(500))  # Denormalized for display
+
+    # Content type
+    content_type = Column(Enum(ContentType), nullable=False, default=ContentType.CLUSTER)
+
+    # Status
+    status = Column(Enum(TopicStatus), nullable=False, default=TopicStatus.DRAFT)
+
+    # URLs
+    target_url = Column(String(2000))
+    existing_url = Column(String(2000))
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    thread = relationship("StrategyThread", back_populates="topics")
+    primary_keyword_rel = relationship("Keyword")
+
+    __table_args__ = (
+        Index("idx_topic_thread", "thread_id", "position"),
+        UniqueConstraint("thread_id", "position", name="uq_topic_position"),
+    )
+
+
+class StrategyExport(Base):
+    """
+    Export history for strategies.
+
+    Tracks all exports with a snapshot of what was exported for audit trail.
+    """
+    __tablename__ = "strategy_exports"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    strategy_id = Column(UUID(as_uuid=True), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False)
+
+    # Export details
+    format = Column(String(20), nullable=False)  # monok_json, monok_display, csv
+
+    # Snapshot of what was exported (for audit trail)
+    exported_data = Column(JSONB, nullable=False)
+
+    # Metadata
+    exported_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    exported_by = Column(String(255))
+
+    # File storage (if applicable)
+    file_path = Column(String(1000))
+    file_size_bytes = Column(Integer)
+
+    # Summary stats at export time
+    thread_count = Column(Integer)
+    topic_count = Column(Integer)
+    keyword_count = Column(Integer)
+
+    # Relationships
+    strategy = relationship("Strategy", back_populates="exports")
+
+    __table_args__ = (
+        Index("idx_export_strategy", "strategy_id", "exported_at"),
+    )
+
+
+class StrategyActivityLog(Base):
+    """
+    Activity log for strategies.
+
+    Tracks all changes for audit trail (not for undo/redo).
+    """
+    __tablename__ = "strategy_activity_log"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    strategy_id = Column(UUID(as_uuid=True), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False)
+
+    # What happened
+    action = Column(String(50), nullable=False)  # created, updated, thread_added, keyword_assigned, exported, etc.
+    entity_type = Column(String(30))  # strategy, thread, topic, keyword
+    entity_id = Column(UUID(as_uuid=True))
+
+    # Who did it
+    user_id = Column(String(255))
+
+    # Details
+    details = Column(JSONB)
+
+    # When
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    strategy = relationship("Strategy", back_populates="activity_log")
+
+    __table_args__ = (
+        Index("idx_activity_strategy", "strategy_id", "created_at"),
+    )

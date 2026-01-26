@@ -329,6 +329,110 @@ async def run_migration():
         # Keywords table: parent_topic for semantic clustering
         "ALTER TABLE keywords ADD COLUMN IF NOT EXISTS parent_topic VARCHAR(500)",
         "CREATE INDEX IF NOT EXISTS idx_keyword_parent_topic ON keywords(domain_id, parent_topic)",
+
+        # ========================================
+        # Strategy Builder tables
+        # ========================================
+
+        # Strategies table
+        """CREATE TABLE IF NOT EXISTS strategies (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            domain_id UUID NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+            analysis_run_id UUID NOT NULL REFERENCES analysis_runs(id) ON DELETE RESTRICT,
+            name VARCHAR(255) NOT NULL,
+            description TEXT,
+            version INTEGER NOT NULL DEFAULT 1,
+            status VARCHAR(20) NOT NULL DEFAULT 'draft',
+            approved_at TIMESTAMP,
+            approved_by VARCHAR(255),
+            is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+            archived_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_strategy_domain ON strategies(domain_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_strategy_status ON strategies(domain_id, status)",
+
+        # Strategy threads table
+        """CREATE TABLE IF NOT EXISTS strategy_threads (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            strategy_id UUID NOT NULL REFERENCES strategies(id) ON DELETE CASCADE,
+            name VARCHAR(255) NOT NULL,
+            slug VARCHAR(255),
+            position VARCHAR(50) NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            status VARCHAR(20) NOT NULL DEFAULT 'draft',
+            priority INTEGER CHECK (priority BETWEEN 1 AND 5),
+            recommended_format VARCHAR(50),
+            format_confidence FLOAT,
+            format_evidence JSONB,
+            custom_instructions JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_thread_strategy ON strategy_threads(strategy_id, position)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_position ON strategy_threads(strategy_id, position)",
+
+        # Thread keywords junction table
+        """CREATE TABLE IF NOT EXISTS thread_keywords (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            thread_id UUID NOT NULL REFERENCES strategy_threads(id) ON DELETE CASCADE,
+            keyword_id UUID NOT NULL REFERENCES keywords(id) ON DELETE CASCADE,
+            position VARCHAR(50) NOT NULL,
+            assigned_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            UNIQUE(thread_id, keyword_id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_thread_keyword_thread ON thread_keywords(thread_id, position)",
+        "CREATE INDEX IF NOT EXISTS idx_thread_keyword_keyword ON thread_keywords(keyword_id)",
+
+        # Strategy topics table
+        """CREATE TABLE IF NOT EXISTS strategy_topics (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            thread_id UUID NOT NULL REFERENCES strategy_threads(id) ON DELETE CASCADE,
+            name VARCHAR(500) NOT NULL,
+            slug VARCHAR(255),
+            position VARCHAR(50) NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            primary_keyword_id UUID REFERENCES keywords(id) ON DELETE SET NULL,
+            primary_keyword VARCHAR(500),
+            content_type VARCHAR(20) NOT NULL DEFAULT 'cluster',
+            status VARCHAR(30) NOT NULL DEFAULT 'draft',
+            target_url VARCHAR(2000),
+            existing_url VARCHAR(2000),
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_topic_thread ON strategy_topics(thread_id, position)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_position ON strategy_topics(thread_id, position)",
+
+        # Strategy exports table
+        """CREATE TABLE IF NOT EXISTS strategy_exports (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            strategy_id UUID NOT NULL REFERENCES strategies(id) ON DELETE CASCADE,
+            format VARCHAR(20) NOT NULL,
+            exported_data JSONB NOT NULL,
+            exported_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            exported_by VARCHAR(255),
+            file_path VARCHAR(1000),
+            file_size_bytes INTEGER,
+            thread_count INTEGER,
+            topic_count INTEGER,
+            keyword_count INTEGER
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_export_strategy ON strategy_exports(strategy_id, exported_at DESC)",
+
+        # Strategy activity log table
+        """CREATE TABLE IF NOT EXISTS strategy_activity_log (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            strategy_id UUID NOT NULL REFERENCES strategies(id) ON DELETE CASCADE,
+            action VARCHAR(50) NOT NULL,
+            entity_type VARCHAR(30),
+            entity_id UUID,
+            user_id VARCHAR(255),
+            details JSONB,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_activity_strategy ON strategy_activity_log(strategy_id, created_at DESC)",
     ]
 
     # Enum migrations - PostgreSQL enum ADD VALUE can't be in transaction
