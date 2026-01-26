@@ -28,6 +28,16 @@ from .phase2 import collect_keyword_data
 from .phase3 import collect_competitive_data
 from .phase4 import collect_ai_technical_data
 
+# Greenfield pipeline
+from .greenfield_pipeline import (
+    collect_greenfield_data,
+    GreenfieldContext,
+    GreenfieldCompetitorCandidate,
+    GreenfieldKeyword,
+    GreenfieldCollectionResult,
+    ValidatedCompetitorSet,
+)
+
 __all__ = [
     # Client
     "DataForSEOClient",
@@ -48,4 +58,12 @@ __all__ = [
     "collect_keyword_data",
     "collect_competitive_data",
     "collect_ai_technical_data",
+
+    # Greenfield pipeline
+    "collect_greenfield_data",
+    "GreenfieldContext",
+    "GreenfieldCompetitorCandidate",
+    "GreenfieldKeyword",
+    "GreenfieldCollectionResult",
+    "ValidatedCompetitorSet",
 ]

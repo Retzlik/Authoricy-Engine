@@ -62,6 +62,22 @@ class DataQualityLevel(enum.Enum):
     INVALID = "invalid"      # Critical data missing
 
 
+class AnalysisMode(enum.Enum):
+    """Analysis mode based on domain maturity"""
+    STANDARD = "standard"        # Established domain (DR>35, KW>200)
+    GREENFIELD = "greenfield"    # New domain (DR<20, KW<50)
+    HYBRID = "hybrid"            # Emerging domain (DR 20-35)
+
+
+class CompetitorPurpose(enum.Enum):
+    """Purpose classification for competitors in greenfield analysis"""
+    BENCHMARK_PEER = "benchmark_peer"      # Similar size, direct comparison
+    KEYWORD_SOURCE = "keyword_source"      # Good for keyword mining
+    LINK_SOURCE = "link_source"            # Learn from their backlinks
+    CONTENT_MODEL = "content_model"        # Excellent content to learn from
+    ASPIRATIONAL = "aspirational"          # Long-term target, market leader
+
+
 class SearchIntent(enum.Enum):
     """Search intent classification"""
     INFORMATIONAL = "informational"
@@ -150,6 +166,27 @@ class AnalysisRun(Base):
 
     # Configuration
     config = Column(JSONB, default={})
+
+    # Analysis mode tracking (greenfield support)
+    analysis_mode = Column(Enum(AnalysisMode), default=AnalysisMode.STANDARD)
+    domain_maturity_at_analysis = Column(String(20))  # greenfield, emerging, established
+    domain_rating_at_analysis = Column(Integer)
+    organic_keywords_at_analysis = Column(Integer)
+    organic_traffic_at_analysis = Column(Integer)
+
+    # Greenfield context (user-provided business context)
+    greenfield_context = Column(JSONB, nullable=True)
+    """
+    {
+        "business_name": "CloudInvoice",
+        "business_description": "...",
+        "primary_offering": "Invoice software",
+        "target_market": "United States",
+        "industry_vertical": "saas",
+        "seed_keywords": ["invoice software", "billing automation", ...],
+        "known_competitors": ["freshbooks.com", "zoho.com/invoice", ...]
+    }
+    """
 
     # Quality assessment
     data_quality = Column(Enum(DataQualityLevel))
@@ -278,6 +315,32 @@ class Keyword(Base):
 
     # Historical search volume (for trends)
     monthly_searches = Column(JSONB)  # [{year, month, volume}, ...]
+
+    # Greenfield-specific fields: Winnability scoring
+    winnability_score = Column(Float)           # 0-100, likelihood of ranking
+    winnability_components = Column(JSONB)      # Breakdown of score factors
+    personalized_difficulty = Column(Integer)   # Adjusted KD for this domain
+
+    # Beachhead tracking
+    is_beachhead = Column(Boolean, default=False)
+    beachhead_priority = Column(Integer)        # 1-10 ranking among beachheads
+    beachhead_score = Column(Float)             # Combined winnability + opportunity
+    growth_phase = Column(Integer)              # 1=Foundation, 2=Traction, 3=Authority
+
+    # SERP analysis for winnability
+    serp_avg_dr = Column(Float)                 # Average DR of top 10
+    serp_min_dr = Column(Integer)               # Lowest DR in top 10
+    serp_has_low_dr = Column(Boolean)           # Any DR<30 in top 10?
+    serp_weak_signals = Column(JSONB)           # ["outdated_content", "thin_content", ...]
+
+    # AI/AEO tracking
+    has_ai_overview = Column(Boolean, default=False)
+    aio_source_count = Column(Integer)
+    aio_optimization_potential = Column(Float)  # 0-100
+
+    # Source tracking for greenfield (which competitor this came from)
+    source_competitor = Column(String(255))
+    competitor_position = Column(Integer)       # Their position for this keyword
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -1614,4 +1677,262 @@ class StrategyActivityLog(Base):
 
     __table_args__ = (
         Index("idx_activity_strategy", "strategy_id", "created_at"),
+    )
+
+
+# =============================================================================
+# GREENFIELD INTELLIGENCE - Competitor-first analysis for new domains
+# =============================================================================
+
+class GreenfieldAnalysis(Base):
+    """
+    Greenfield-specific analysis results.
+
+    Stores market opportunity sizing, beachhead summary, and growth projections
+    for domains analyzed in greenfield mode.
+    """
+    __tablename__ = "greenfield_analyses"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+
+    # Market Opportunity (TAM/SAM/SOM)
+    total_addressable_market = Column(Integer)      # Total search volume in universe
+    serviceable_addressable_market = Column(Integer)  # Business-relevant keywords volume
+    serviceable_obtainable_market = Column(Integer)   # Winnable keywords volume
+    tam_keyword_count = Column(Integer)
+    sam_keyword_count = Column(Integer)
+    som_keyword_count = Column(Integer)
+
+    market_opportunity_score = Column(Float)        # 0-100
+    competition_intensity = Column(Float)           # 0-100
+
+    # Competitor Landscape
+    competitor_count = Column(Integer)
+    avg_competitor_dr = Column(Float)
+    competitor_dr_range = Column(JSONB)             # {"min": 15, "max": 65}
+    competitor_traffic_share = Column(JSONB)        # [{domain, traffic, share_percent}, ...]
+
+    # Beachhead Summary
+    beachhead_keyword_count = Column(Integer)
+    total_beachhead_volume = Column(Integer)
+    avg_beachhead_winnability = Column(Float)
+    beachhead_keywords = Column(JSONB)              # Top 20 beachhead keywords
+
+    # Traffic Projections (3 scenarios)
+    projection_conservative = Column(JSONB)
+    projection_expected = Column(JSONB)
+    projection_aggressive = Column(JSONB)
+    """
+    {
+        "month_3": 50,
+        "month_6": 500,
+        "month_12": 2500,
+        "month_18": 8000,
+        "month_24": 15000,
+        "confidence": 0.75
+    }
+    """
+
+    # Growth Roadmap
+    growth_roadmap = Column(JSONB)
+    """
+    [
+        {"phase": "Foundation", "months": "1-3", "focus": "Beachheads", "target_keywords": 10},
+        {"phase": "Traction", "months": "4-6", "focus": "Expansion", "target_keywords": 25},
+        {"phase": "Authority", "months": "7-12", "focus": "Competitive", "target_keywords": 50}
+    ]
+    """
+
+    # Validation
+    data_completeness_score = Column(Float)
+    validation_warnings = Column(JSONB, default=[])
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    analysis_run = relationship("AnalysisRun")
+    domain = relationship("Domain")
+
+    __table_args__ = (
+        Index("idx_greenfield_analysis_run", "analysis_run_id"),
+        Index("idx_greenfield_domain", "domain_id", "created_at"),
+    )
+
+
+class CompetitorIntelligenceSession(Base):
+    """
+    Competitor intelligence discovery and curation session.
+
+    Tracks the multi-phase competitor discovery process:
+    1. Context acquisition (website scraping)
+    2. AI-powered discovery (Perplexity)
+    3. Candidate generation
+    4. User curation (remove 5 from 15)
+    5. Final competitor set with purpose classification
+    """
+    __tablename__ = "competitor_intelligence_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+
+    # Session status
+    status = Column(String(30), default="pending")
+    # pending, discovering, awaiting_curation, curated, completed, failed
+
+    # Phase 1: Context Acquisition
+    website_context = Column(JSONB)                 # Scraped website data (via Firecrawl)
+    business_description = Column(Text)
+    detected_offerings = Column(JSONB, default=[])
+    detected_industry = Column(String(100))
+
+    # Phase 2: AI-Powered Discovery
+    perplexity_query = Column(Text)
+    perplexity_response = Column(JSONB)
+    ai_discovered_competitors = Column(JSONB, default=[])
+
+    # Phase 3: Multi-Source Aggregation
+    serp_discovered_competitors = Column(JSONB, default=[])
+    traffic_share_competitors = Column(JSONB, default=[])
+    user_provided_competitors = Column(JSONB, default=[])
+
+    # Candidate pool (15+ before curation)
+    candidate_competitors = Column(JSONB, default=[])
+    """
+    [
+        {
+            "domain": "competitor.com",
+            "discovery_source": "perplexity|serp|traffic_share|user_provided",
+            "domain_rating": 45,
+            "organic_traffic": 50000,
+            "organic_keywords": 2500,
+            "relevance_score": 0.85,
+            "suggested_purpose": "keyword_source",
+            "discovery_reason": "Ranks for 15 of your seed keywords"
+        }
+    ]
+    """
+    candidates_generated_at = Column(DateTime)
+
+    # Phase 4: User Curation
+    curation_started_at = Column(DateTime)
+    curation_completed_at = Column(DateTime)
+    removed_competitors = Column(JSONB, default=[])
+    """
+    [
+        {
+            "domain": "removed.com",
+            "removal_reason": "not_relevant|too_large|too_small|different_market|other",
+            "removal_note": "User comment"
+        }
+    ]
+    """
+    added_competitors = Column(JSONB, default=[])   # User-added during curation
+
+    # Phase 5: Final Set with Purpose
+    final_competitors = Column(JSONB, default=[])
+    """
+    [
+        {
+            "domain": "competitor.com",
+            "purpose": "benchmark_peer|keyword_source|link_source|content_model|aspirational",
+            "priority": 1,
+            "domain_rating": 45,
+            "organic_traffic": 50000,
+            "keyword_overlap": 234,
+            "is_user_provided": false,
+            "is_user_curated": true
+        }
+    ]
+    """
+    finalized_at = Column(DateTime)
+
+    # Cost tracking
+    api_calls_count = Column(Integer, default=0)
+    perplexity_cost_usd = Column(Float, default=0)
+    firecrawl_cost_usd = Column(Float, default=0)
+    dataforseo_cost_usd = Column(Float, default=0)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    analysis_run = relationship("AnalysisRun")
+    domain = relationship("Domain")
+    competitors = relationship("GreenfieldCompetitor", back_populates="session", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_ci_session_analysis", "analysis_run_id"),
+        Index("idx_ci_session_domain", "domain_id"),
+        Index("idx_ci_session_status", "status"),
+    )
+
+
+class GreenfieldCompetitor(Base):
+    """
+    Competitors discovered/validated for greenfield analysis.
+
+    Individual competitor records with purpose classification and
+    metrics for use in the greenfield pipeline.
+    """
+    __tablename__ = "greenfield_competitors"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("competitor_intelligence_sessions.id"), nullable=False)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+
+    # Competitor identification
+    domain = Column(String(255), nullable=False)
+    display_name = Column(String(255))
+
+    # Classification
+    purpose = Column(Enum(CompetitorPurpose), nullable=False)
+    purpose_override = Column(Enum(CompetitorPurpose), nullable=True)  # User override
+    priority = Column(Integer)                      # 1-10
+
+    # Discovery
+    discovery_source = Column(String(50))           # perplexity, serp, traffic_share, user_provided
+    discovery_reason = Column(Text)
+    relevance_score = Column(Float)                 # 0-1
+
+    # Metrics (from DataForSEO)
+    domain_rating = Column(Integer)
+    organic_traffic = Column(Integer)
+    organic_keywords = Column(Integer)
+    referring_domains = Column(Integer)
+
+    # Relationship to target domain
+    keyword_overlap_count = Column(Integer)
+    keyword_overlap_percent = Column(Float)
+    traffic_share_percent = Column(Float)
+
+    # Validation
+    is_validated = Column(Boolean, default=False)
+    validation_status = Column(String(30))          # valid, warning, replaced
+    validation_warnings = Column(JSONB, default=[])
+
+    # Curation tracking
+    is_user_provided = Column(Boolean, default=False)
+    is_removed = Column(Boolean, default=False)
+    removal_reason = Column(String(50))
+    removal_note = Column(Text)
+
+    # Usage in analysis
+    keywords_extracted = Column(Integer, default=0)
+    used_for_market_sizing = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    session = relationship("CompetitorIntelligenceSession", back_populates="competitors")
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "domain", name="uq_session_competitor"),
+        Index("idx_gf_competitor_session", "session_id"),
+        Index("idx_gf_competitor_purpose", "session_id", "purpose"),
+        Index("idx_gf_competitor_removed", "session_id", "is_removed"),
     )
