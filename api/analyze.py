@@ -68,6 +68,10 @@ app = FastAPI(
     version="0.3.0",
 )
 
+# Include Strategy Builder router
+from api.strategy import router as strategy_router
+app.include_router(strategy_router)
+
 
 # ============================================================================
 # STARTUP - Initialize Database
