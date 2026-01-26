@@ -453,9 +453,42 @@ class DataCollectionOrchestrator:
         beachhead opportunities.
         """
         from .greenfield_pipeline import collect_greenfield_data, GreenfieldContext
-        from dataclasses import asdict
 
         logger.info("Starting greenfield collection pipeline...")
+
+        # Convert dict to GreenfieldContext if needed
+        ctx = config.greenfield_context
+        if isinstance(ctx, dict):
+            try:
+                config.greenfield_context = GreenfieldContext(
+                    business_name=ctx.get("business_name", ""),
+                    business_description=ctx.get("business_description", ""),
+                    primary_offering=ctx.get("primary_offering", ""),
+                    target_market=ctx.get("target_market", "United States"),
+                    industry_vertical=ctx.get("industry_vertical", "saas"),
+                    seed_keywords=ctx.get("seed_keywords", []),
+                    known_competitors=ctx.get("known_competitors", []),
+                    target_audience=ctx.get("target_audience"),
+                    unique_value_prop=ctx.get("unique_value_prop"),
+                    content_budget=ctx.get("content_budget"),
+                )
+            except Exception as e:
+                logger.error(f"Failed to convert greenfield context: {e}")
+                errors.append(f"Invalid greenfield context: {str(e)}")
+                duration = (datetime.utcnow() - start_time).total_seconds()
+                return CollectionResult(
+                    domain=config.domain,
+                    timestamp=start_time,
+                    market=config.market,
+                    language=config.language,
+                    industry=config.industry,
+                    success=False,
+                    errors=errors,
+                    warnings=warnings,
+                    duration_seconds=duration,
+                    analysis_mode="greenfield",
+                    **foundation,
+                )
 
         try:
             greenfield_result = await collect_greenfield_data(
@@ -501,33 +534,45 @@ class DataCollectionOrchestrator:
             ]
 
             # Convert beachhead keywords to dict format
+            # Note: BeachheadKeyword uses beachhead_priority, not priority
+            # growth_phase is assigned during roadmap building, not stored in BeachheadKeyword
             gf_beachheads = [
                 {
                     "keyword": bh.keyword,
                     "search_volume": bh.search_volume,
                     "winnability_score": bh.winnability_score,
                     "personalized_difficulty": bh.personalized_difficulty,
-                    "priority": bh.priority,
-                    "growth_phase": bh.growth_phase,
+                    "keyword_difficulty": bh.keyword_difficulty,
+                    "beachhead_priority": bh.beachhead_priority,
                     "beachhead_score": bh.beachhead_score,
+                    "avg_serp_dr": bh.avg_serp_dr,
+                    "has_ai_overview": bh.has_ai_overview,
+                    "recommended_content_type": bh.recommended_content_type,
+                    "estimated_time_to_rank_weeks": bh.estimated_time_to_rank_weeks,
+                    "estimated_traffic_gain": bh.estimated_traffic_gain,
                 }
                 for bh in greenfield_result.beachhead_keywords
             ]
 
             # Convert winnability analyses to dict format
+            # Note: WinnabilityAnalysis uses avg_serp_dr (not serp_avg_dr), weak_content_signals (not weak_signals)
             gf_winnability = {
                 kw: {
                     "winnability_score": analysis.winnability_score,
                     "personalized_difficulty": analysis.personalized_difficulty,
-                    "serp_avg_dr": analysis.serp_avg_dr,
-                    "serp_min_dr": analysis.serp_min_dr,
-                    "weak_signals": analysis.weak_signals,
-                    "ranking_potential": analysis.ranking_potential,
+                    "avg_serp_dr": analysis.avg_serp_dr,
+                    "min_serp_dr": analysis.min_serp_dr,
+                    "has_low_dr_rankings": analysis.has_low_dr_rankings,
+                    "weak_content_signals": analysis.weak_content_signals,
+                    "has_ai_overview": analysis.has_ai_overview,
+                    "is_beachhead_candidate": analysis.is_beachhead_candidate,
+                    "beachhead_score": analysis.beachhead_score,
                 }
                 for kw, analysis in greenfield_result.winnability_analyses.items()
             }
 
             # Convert market opportunity to dict
+            # Note: MarketOpportunity uses tam_keywords (not tam_keyword_count)
             gf_market = {}
             if greenfield_result.market_opportunity:
                 mo = greenfield_result.market_opportunity
@@ -535,42 +580,33 @@ class DataCollectionOrchestrator:
                     "tam_volume": mo.tam_volume,
                     "sam_volume": mo.sam_volume,
                     "som_volume": mo.som_volume,
-                    "tam_keyword_count": mo.tam_keyword_count,
-                    "sam_keyword_count": mo.sam_keyword_count,
-                    "som_keyword_count": mo.som_keyword_count,
-                    "market_opportunity_score": mo.market_opportunity_score,
-                    "competition_intensity": mo.competition_intensity,
+                    "tam_keyword_count": mo.tam_keywords,
+                    "sam_keyword_count": mo.sam_keywords,
+                    "som_keyword_count": mo.som_keywords,
+                    "competitor_shares": mo.competitor_shares,
                 }
 
             # Convert traffic projections to dict
+            # Note: TrafficProjection uses traffic_by_month dict, not individual month_X fields
             gf_projections = {}
             if greenfield_result.traffic_projections:
                 tp = greenfield_result.traffic_projections
+
+                def projection_to_dict(proj):
+                    return {
+                        "scenario": proj.scenario,
+                        "confidence": proj.confidence,
+                        "month_3": proj.traffic_by_month.get(3, 0),
+                        "month_6": proj.traffic_by_month.get(6, 0),
+                        "month_12": proj.traffic_by_month.get(12, 0),
+                        "month_18": proj.traffic_by_month.get(18, 0),
+                        "month_24": proj.traffic_by_month.get(24, 0),
+                    }
+
                 gf_projections = {
-                    "conservative": {
-                        "month_3": tp.conservative.month_3,
-                        "month_6": tp.conservative.month_6,
-                        "month_12": tp.conservative.month_12,
-                        "month_18": tp.conservative.month_18,
-                        "month_24": tp.conservative.month_24,
-                        "confidence": tp.conservative.confidence,
-                    },
-                    "expected": {
-                        "month_3": tp.expected.month_3,
-                        "month_6": tp.expected.month_6,
-                        "month_12": tp.expected.month_12,
-                        "month_18": tp.expected.month_18,
-                        "month_24": tp.expected.month_24,
-                        "confidence": tp.expected.confidence,
-                    },
-                    "aggressive": {
-                        "month_3": tp.aggressive.month_3,
-                        "month_6": tp.aggressive.month_6,
-                        "month_12": tp.aggressive.month_12,
-                        "month_18": tp.aggressive.month_18,
-                        "month_24": tp.aggressive.month_24,
-                        "confidence": tp.aggressive.confidence,
-                    },
+                    "conservative": projection_to_dict(tp.conservative),
+                    "expected": projection_to_dict(tp.expected),
+                    "aggressive": projection_to_dict(tp.aggressive),
                 }
 
             # Merge errors and warnings
@@ -794,6 +830,9 @@ def compile_analysis_data(result: CollectionResult) -> Dict[str, Any]:
                 "tam_volume": result.market_opportunity.get("tam_volume", 0),
                 "sam_volume": result.market_opportunity.get("sam_volume", 0),
                 "som_volume": result.market_opportunity.get("som_volume", 0),
+                "tam_keyword_count": result.market_opportunity.get("tam_keyword_count", 0),
+                "sam_keyword_count": result.market_opportunity.get("sam_keyword_count", 0),
+                "som_keyword_count": result.market_opportunity.get("som_keyword_count", 0),
             }
 
     return compiled
