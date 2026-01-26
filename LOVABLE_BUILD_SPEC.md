@@ -16,6 +16,22 @@ Build a **world-class SEO intelligence platform** for Authoricy that rivals SEMR
 **Design Standard:** USD 100M B2B SaaS (Linear, Notion, Figma quality)
 **Backend API:** `https://authoricy-engine-production.up.railway.app`
 
+### Implementation Notes for Lovable
+
+Use standard, polished patterns for these common states:
+
+| State | Pattern | Example |
+|-------|---------|---------|
+| **Loading** | Skeleton screens matching component shapes | Dashboard cards show grey pulsing rectangles before data loads |
+| **Error** | Toast notification with retry option | "Failed to load competitors. [Retry]" - red toast, bottom-right |
+| **Empty** | Friendly illustration + CTA | "No beachheads found" with illustration and "Adjust competitor set" button |
+| **Success** | Brief toast confirmation | "Competitor removed" - green toast, auto-dismiss 3s |
+| **Destructive Action** | Confirmation modal | "Remove competitor?" with reason selector (already specified in Section 3.3) |
+
+**Optimistic Updates:** For instant-feel interactions, update UI immediately on user action (e.g., removing competitor), then sync with backend. Revert on failure with toast.
+
+**Offline Handling:** Show "You're offline" banner. Cache dashboard data in localStorage for read-only viewing.
+
 ---
 
 ## Table of Contents
@@ -1026,9 +1042,9 @@ Clicking [⚙️ Edit Competitors] opens modal:
 │ │ ┌──────────────────┐ │ │ │ 🎯 Software Comparison         │ │ │ AIO Ready:   ││
 │ │ │ ⚔️ PHASE 3       │ │ │ │    P2 • Phase 2 • 34 kws       │ │ │ [Yes ▼]      ││
 │ │ │ 89 hard kws      │ │ │ │    Winnability: 65% avg        │ │ │              ││
-│ │ │ [Expand]         │ │ │ └────────────────────────────────┘ │ │ Content      ││
-│ │ └──────────────────┘ │ │                                    │ │ Brief:       ││
-│ │                      │ │ [+ Add Thread]                     │ │ [Generate]   ││
+│ │ │ [Expand]         │ │ │ └────────────────────────────────┘ │ │              ││
+│ │ └──────────────────┘ │ │                                    │ │ Notes:       ││
+│ │                      │ │ [+ Add Thread]                     │ │ [Edit ✏️]    ││
 │ │ ──────────────────   │ │                                    │ │              ││
 │ │ ALL KEYWORDS         │ │                                    │ │              ││
 │ │ 234 total            │ │                                    │ │              ││
@@ -1659,8 +1675,7 @@ const canProceed = (state: CurationState) =>
 1. Three-panel layout
 2. Phase-aware keyword grouping (greenfield)
 3. Winnability display
-4. Content brief generator
-5. Export flow
+4. Export flow with Intelligence-Informed Custom Instructions
 
 ### Phase 6: Analysis Flow (Week 6)
 1. Analysis questionnaire
