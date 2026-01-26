@@ -16,6 +16,22 @@ Build a **world-class SEO intelligence platform** for Authoricy that rivals SEMR
 **Design Standard:** USD 100M B2B SaaS (Linear, Notion, Figma quality)
 **Backend API:** `https://authoricy-engine-production.up.railway.app`
 
+### Implementation Notes for Lovable
+
+Use standard, polished patterns for these common states:
+
+| State | Pattern | Example |
+|-------|---------|---------|
+| **Loading** | Skeleton screens matching component shapes | Dashboard cards show grey pulsing rectangles before data loads |
+| **Error** | Toast notification with retry option | "Failed to load competitors. [Retry]" - red toast, bottom-right |
+| **Empty** | Friendly illustration + CTA | "No beachheads found" with illustration and "Adjust competitor set" button |
+| **Success** | Brief toast confirmation | "Competitor removed" - green toast, auto-dismiss 3s |
+| **Destructive Action** | Confirmation modal | "Remove competitor?" with reason selector (already specified in Section 3.3) |
+
+**Optimistic Updates:** For instant-feel interactions, update UI immediately on user action (e.g., removing competitor), then sync with backend. Revert on failure with toast.
+
+**Offline Handling:** Show "You're offline" banner. Cache dashboard data in localStorage for read-only viewing.
+
 ---
 
 ## Table of Contents
