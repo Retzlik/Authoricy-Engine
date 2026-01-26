@@ -2776,3 +2776,104 @@ async def download_export(export_id: UUID):
                     "Content-Disposition": f"attachment; filename=strategy_export_{export_id}.json"
                 }
             )
+
+
+# =============================================================================
+# PHASE 6: ACTIVITY LOG
+# =============================================================================
+
+class ActivityLogItem(BaseModel):
+    """Activity log entry."""
+    id: UUID
+    action: str
+    entity_type: Optional[str]
+    entity_id: Optional[UUID]
+    user_id: Optional[str]
+    details: Optional[Dict[str, Any]]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ActivityLogPagination(BaseModel):
+    """Pagination info for activity log."""
+    next_cursor: Optional[str]
+    has_more: bool
+
+
+class ActivityLogResponse(BaseModel):
+    """Response for activity log."""
+    activities: List[ActivityLogItem]
+    pagination: ActivityLogPagination
+
+
+@router.get("/strategies/{strategy_id}/activity", response_model=ActivityLogResponse)
+async def get_activity_log(
+    strategy_id: UUID,
+    limit: int = Query(50, ge=1, le=200),
+    cursor: Optional[str] = Query(None, description="Cursor for pagination"),
+):
+    """
+    Get activity log for a strategy.
+
+    Returns a chronological list of all changes made to the strategy,
+    its threads, topics, and keyword assignments.
+    """
+    import base64
+    import json
+
+    with get_db_context() as db:
+        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+
+        query = db.query(StrategyActivityLog).filter(
+            StrategyActivityLog.strategy_id == strategy_id
+        ).order_by(StrategyActivityLog.created_at.desc())
+
+        # Apply cursor
+        if cursor:
+            try:
+                cursor_data = json.loads(base64.b64decode(cursor).decode())
+                offset = cursor_data.get("offset", 0)
+                query = query.offset(offset)
+            except:
+                pass
+
+        # Get results with limit + 1 to check for more
+        activities = query.limit(limit + 1).all()
+        has_more = len(activities) > limit
+        activities = activities[:limit]
+
+        # Generate next cursor
+        next_cursor = None
+        if has_more:
+            current_offset = 0
+            if cursor:
+                try:
+                    cursor_data = json.loads(base64.b64decode(cursor).decode())
+                    current_offset = cursor_data.get("offset", 0)
+                except:
+                    pass
+            cursor_data = {"offset": current_offset + limit}
+            next_cursor = base64.b64encode(json.dumps(cursor_data).encode()).decode()
+
+        return ActivityLogResponse(
+            activities=[
+                ActivityLogItem(
+                    id=a.id,
+                    action=a.action,
+                    entity_type=a.entity_type,
+                    entity_id=a.entity_id,
+                    user_id=a.user_id,
+                    details=a.details,
+                    created_at=a.created_at,
+                )
+                for a in activities
+            ],
+            pagination=ActivityLogPagination(
+                next_cursor=next_cursor,
+                has_more=has_more,
+            )
+        )
