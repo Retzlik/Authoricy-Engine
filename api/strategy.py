@@ -1837,3 +1837,427 @@ async def delete_topic(topic_id: UUID):
         logger.info(f"Deleting topic {topic_id}")
         db.delete(topic)
         db.commit()
+
+
+# =============================================================================
+# PHASE 4: DATA & SUGGESTIONS ENDPOINTS
+# =============================================================================
+
+# --- Available Keywords Response Models ---
+
+class AvailableKeywordResponse(BaseModel):
+    """Keyword available for assignment."""
+    id: UUID
+    keyword: str
+    search_volume: Optional[int]
+    keyword_difficulty: Optional[int]
+    opportunity_score: Optional[float]
+    search_intent: Optional[str]
+    parent_topic: Optional[str]
+    estimated_traffic: Optional[int]
+    assigned_thread_id: Optional[UUID]
+    assigned_thread_name: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+class PaginationInfo(BaseModel):
+    """Cursor-based pagination info."""
+    next_cursor: Optional[str]
+    has_more: bool
+    total_count: int
+    unassigned_count: int
+
+
+class AvailableKeywordsResponse(BaseModel):
+    """Response for available keywords with pagination."""
+    keywords: List[AvailableKeywordResponse]
+    pagination: PaginationInfo
+
+
+class SuggestedCluster(BaseModel):
+    """Suggested cluster based on parent_topic grouping."""
+    parent_topic: str
+    keyword_count: int
+    total_volume: int
+    avg_opportunity_score: float
+    sample_keywords: List[str]
+    keyword_ids: List[UUID]
+
+
+class SuggestedClustersResponse(BaseModel):
+    """Response for suggested clusters."""
+    clusters: List[SuggestedCluster]
+    unclustered_count: int
+
+
+class FormatPattern(BaseModel):
+    """SERP format pattern evidence."""
+    pattern: str
+    count: int
+    example_titles: List[str]
+
+
+class FormatRecommendationResponse(BaseModel):
+    """Format recommendation based on SERP analysis."""
+    keyword: str
+    recommended_format: Optional[str]
+    confidence: float
+    evidence: Optional[Dict] = None
+
+
+@router.get("/strategies/{strategy_id}/available-keywords", response_model=AvailableKeywordsResponse)
+async def get_available_keywords(
+    strategy_id: UUID,
+    cursor: Optional[str] = Query(None, description="Cursor for pagination"),
+    limit: int = Query(50, ge=1, le=200, description="Number of results"),
+    sort_by: str = Query("opportunity_score", description="Sort field"),
+    sort_dir: str = Query("desc", description="Sort direction: asc or desc"),
+    intent: Optional[str] = Query(None, description="Filter by search intent"),
+    min_volume: Optional[int] = Query(None, ge=0, description="Minimum search volume"),
+    max_difficulty: Optional[int] = Query(None, ge=0, le=100, description="Maximum difficulty"),
+    search: Optional[str] = Query(None, description="Search keyword text"),
+    assigned: Optional[str] = Query("all", description="Filter: true, false, or all"),
+):
+    """
+    Get available keywords for a strategy with cursor-based pagination.
+
+    Keywords come from the analysis bound to this strategy.
+    Supports filtering, sorting, and assignment status.
+    """
+    import base64
+    import json
+
+    with get_db_context() as db:
+        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+
+        # Base query - keywords from this analysis
+        base_query = db.query(Keyword).filter(
+            Keyword.analysis_run_id == strategy.analysis_run_id
+        )
+
+        # Get all threads for this strategy for assignment lookup
+        thread_lookup = {}
+        threads = db.query(StrategyThread).filter(
+            StrategyThread.strategy_id == strategy_id
+        ).all()
+        for t in threads:
+            thread_lookup[t.id] = t.name
+
+        # Get assigned keyword IDs for this strategy
+        assigned_keyword_ids = db.query(ThreadKeyword.keyword_id).join(
+            StrategyThread
+        ).filter(
+            StrategyThread.strategy_id == strategy_id
+        ).subquery()
+
+        # Apply filters
+        query = base_query
+
+        if intent:
+            from src.database.models import SearchIntent
+            try:
+                intent_enum = SearchIntent(intent)
+                query = query.filter(Keyword.search_intent == intent_enum)
+            except ValueError:
+                pass  # Ignore invalid intent
+
+        if min_volume is not None:
+            query = query.filter(Keyword.search_volume >= min_volume)
+
+        if max_difficulty is not None:
+            query = query.filter(
+                or_(
+                    Keyword.keyword_difficulty <= max_difficulty,
+                    Keyword.keyword_difficulty.is_(None)
+                )
+            )
+
+        if search:
+            query = query.filter(Keyword.keyword.ilike(f"%{search}%"))
+
+        if assigned == "true":
+            query = query.filter(Keyword.id.in_(assigned_keyword_ids))
+        elif assigned == "false":
+            query = query.filter(~Keyword.id.in_(assigned_keyword_ids))
+
+        # Get counts before pagination
+        total_count = query.count()
+        unassigned_query = base_query.filter(~Keyword.id.in_(assigned_keyword_ids))
+        if intent:
+            try:
+                intent_enum = SearchIntent(intent)
+                unassigned_query = unassigned_query.filter(Keyword.search_intent == intent_enum)
+            except ValueError:
+                pass
+        if min_volume is not None:
+            unassigned_query = unassigned_query.filter(Keyword.search_volume >= min_volume)
+        if max_difficulty is not None:
+            unassigned_query = unassigned_query.filter(
+                or_(
+                    Keyword.keyword_difficulty <= max_difficulty,
+                    Keyword.keyword_difficulty.is_(None)
+                )
+            )
+        if search:
+            unassigned_query = unassigned_query.filter(Keyword.keyword.ilike(f"%{search}%"))
+        unassigned_count = unassigned_query.count()
+
+        # Apply sorting
+        sort_column = {
+            "opportunity_score": Keyword.opportunity_score,
+            "volume": Keyword.search_volume,
+            "difficulty": Keyword.keyword_difficulty,
+            "keyword": Keyword.keyword,
+        }.get(sort_by, Keyword.opportunity_score)
+
+        if sort_dir == "asc":
+            query = query.order_by(sort_column.asc().nullslast())
+        else:
+            query = query.order_by(sort_column.desc().nullsfirst())
+
+        # Secondary sort by ID for stability
+        query = query.order_by(Keyword.id)
+
+        # Apply cursor
+        if cursor:
+            try:
+                cursor_data = json.loads(base64.b64decode(cursor).decode())
+                cursor_id = cursor_data.get("id")
+                if cursor_id:
+                    # Simple offset-based cursor for now
+                    offset = cursor_data.get("offset", 0)
+                    query = query.offset(offset)
+            except:
+                pass  # Ignore invalid cursor
+
+        # Execute with limit + 1 to check for more
+        keywords = query.limit(limit + 1).all()
+        has_more = len(keywords) > limit
+        keywords = keywords[:limit]
+
+        # Get assignment info for these keywords
+        keyword_ids = [k.id for k in keywords]
+        assignments = db.query(
+            ThreadKeyword.keyword_id, ThreadKeyword.thread_id
+        ).join(
+            StrategyThread
+        ).filter(
+            StrategyThread.strategy_id == strategy_id,
+            ThreadKeyword.keyword_id.in_(keyword_ids)
+        ).all()
+        assignment_map = {a[0]: a[1] for a in assignments}
+
+        # Build response
+        result = []
+        for kw in keywords:
+            thread_id = assignment_map.get(kw.id)
+            result.append(AvailableKeywordResponse(
+                id=kw.id,
+                keyword=kw.keyword,
+                search_volume=kw.search_volume,
+                keyword_difficulty=kw.keyword_difficulty,
+                opportunity_score=kw.opportunity_score,
+                search_intent=kw.search_intent.value if kw.search_intent else None,
+                parent_topic=kw.parent_topic,
+                estimated_traffic=kw.estimated_traffic,
+                assigned_thread_id=thread_id,
+                assigned_thread_name=thread_lookup.get(thread_id) if thread_id else None,
+            ))
+
+        # Generate next cursor
+        next_cursor = None
+        if has_more and keywords:
+            # Use offset-based cursor
+            current_offset = 0
+            if cursor:
+                try:
+                    cursor_data = json.loads(base64.b64decode(cursor).decode())
+                    current_offset = cursor_data.get("offset", 0)
+                except:
+                    pass
+            cursor_data = {"offset": current_offset + limit, "id": str(keywords[-1].id)}
+            next_cursor = base64.b64encode(json.dumps(cursor_data).encode()).decode()
+
+        return AvailableKeywordsResponse(
+            keywords=result,
+            pagination=PaginationInfo(
+                next_cursor=next_cursor,
+                has_more=has_more,
+                total_count=total_count,
+                unassigned_count=unassigned_count,
+            )
+        )
+
+
+@router.get("/strategies/{strategy_id}/suggested-clusters", response_model=SuggestedClustersResponse)
+async def get_suggested_clusters(strategy_id: UUID):
+    """
+    Get suggested clusters based on parent_topic grouping.
+
+    Groups unassigned keywords by their parent_topic field (from DataForSEO)
+    and returns cluster suggestions with aggregated metrics.
+    """
+    with get_db_context() as db:
+        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+
+        # Get assigned keyword IDs
+        assigned_ids = db.query(ThreadKeyword.keyword_id).join(
+            StrategyThread
+        ).filter(
+            StrategyThread.strategy_id == strategy_id
+        ).subquery()
+
+        # Get unassigned keywords with parent_topic
+        keywords_with_topic = db.query(Keyword).filter(
+            Keyword.analysis_run_id == strategy.analysis_run_id,
+            ~Keyword.id.in_(assigned_ids),
+            Keyword.parent_topic.isnot(None),
+            Keyword.parent_topic != "",
+        ).all()
+
+        # Count unclustered (no parent_topic)
+        unclustered_count = db.query(func.count(Keyword.id)).filter(
+            Keyword.analysis_run_id == strategy.analysis_run_id,
+            ~Keyword.id.in_(assigned_ids),
+            or_(Keyword.parent_topic.is_(None), Keyword.parent_topic == ""),
+        ).scalar() or 0
+
+        # Group by parent_topic
+        topic_groups: Dict[str, List[Keyword]] = {}
+        for kw in keywords_with_topic:
+            topic = kw.parent_topic
+            if topic not in topic_groups:
+                topic_groups[topic] = []
+            topic_groups[topic].append(kw)
+
+        # Build cluster suggestions
+        clusters = []
+        for parent_topic, kws in topic_groups.items():
+            if len(kws) < 2:  # Skip single-keyword topics
+                continue
+
+            total_volume = sum(k.search_volume or 0 for k in kws)
+            avg_opportunity = sum(k.opportunity_score or 0 for k in kws) / len(kws) if kws else 0
+
+            # Get top 3 by opportunity score for samples
+            sorted_kws = sorted(kws, key=lambda k: k.opportunity_score or 0, reverse=True)
+            sample_keywords = [k.keyword for k in sorted_kws[:3]]
+
+            clusters.append(SuggestedCluster(
+                parent_topic=parent_topic,
+                keyword_count=len(kws),
+                total_volume=total_volume,
+                avg_opportunity_score=round(avg_opportunity, 2),
+                sample_keywords=sample_keywords,
+                keyword_ids=[k.id for k in kws],
+            ))
+
+        # Sort by total volume descending
+        clusters.sort(key=lambda c: c.total_volume, reverse=True)
+
+        return SuggestedClustersResponse(
+            clusters=clusters[:50],  # Limit to top 50
+            unclustered_count=unclustered_count,
+        )
+
+
+@router.get("/keywords/{keyword_id}/format-recommendation", response_model=FormatRecommendationResponse)
+async def get_format_recommendation(keyword_id: UUID):
+    """
+    Get SERP-based format recommendation for a keyword.
+
+    Analyzes SERP titles from the analysis data to suggest content format.
+    """
+    with get_db_context() as db:
+        keyword = db.query(Keyword).filter(Keyword.id == keyword_id).first()
+        if not keyword:
+            raise HTTPException(status_code=404, detail="Keyword not found")
+
+        # Try to get SERP data from serp_competitors or api_calls
+        from src.database.models import SERPCompetitor, APICall
+
+        # Get SERP competitor data for this keyword
+        serp_competitors = db.query(SERPCompetitor).filter(
+            SERPCompetitor.keyword_id == keyword_id
+        ).order_by(SERPCompetitor.position).limit(10).all()
+
+        # Analyze title patterns
+        patterns = {
+            "listicle": 0,
+            "how_to": 0,
+            "comparison": 0,
+            "guide": 0,
+            "review": 0,
+            "question": 0,
+            "other": 0,
+        }
+        example_titles: Dict[str, List[str]] = {k: [] for k in patterns.keys()}
+
+        for sc in serp_competitors:
+            title = sc.page_title or ""
+            title_lower = title.lower()
+
+            # Pattern detection
+            if any(x in title_lower for x in ["top", "best", "list of", "ranking"]) or \
+               any(c.isdigit() for c in title[:10]):
+                patterns["listicle"] += 1
+                example_titles["listicle"].append(title)
+            elif any(x in title_lower for x in ["how to", "how do", "tutorial", "step"]):
+                patterns["how_to"] += 1
+                example_titles["how_to"].append(title)
+            elif any(x in title_lower for x in ["vs", "versus", "comparison", "compare"]):
+                patterns["comparison"] += 1
+                example_titles["comparison"].append(title)
+            elif any(x in title_lower for x in ["guide", "ultimate", "complete", "comprehensive"]):
+                patterns["guide"] += 1
+                example_titles["guide"].append(title)
+            elif any(x in title_lower for x in ["review", "tested", "honest"]):
+                patterns["review"] += 1
+                example_titles["review"].append(title)
+            elif title.endswith("?") or any(x in title_lower for x in ["what is", "why", "when"]):
+                patterns["question"] += 1
+                example_titles["question"].append(title)
+            else:
+                patterns["other"] += 1
+                example_titles["other"].append(title)
+
+        # Determine recommended format
+        total_analyzed = sum(patterns.values())
+        if total_analyzed == 0:
+            return FormatRecommendationResponse(
+                keyword=keyword.keyword,
+                recommended_format=None,
+                confidence=0.0,
+                evidence=None,
+            )
+
+        # Find dominant pattern
+        dominant_pattern = max(patterns.items(), key=lambda x: x[1])
+        confidence = dominant_pattern[1] / total_analyzed if total_analyzed > 0 else 0
+
+        # Build evidence
+        evidence = {
+            "titles_analyzed": total_analyzed,
+            "patterns": [
+                {
+                    "pattern": pattern,
+                    "count": count,
+                    "example_titles": example_titles[pattern][:2],
+                }
+                for pattern, count in sorted(patterns.items(), key=lambda x: x[1], reverse=True)
+                if count > 0
+            ]
+        }
+
+        return FormatRecommendationResponse(
+            keyword=keyword.keyword,
+            recommended_format=dominant_pattern[0] if confidence >= 0.3 else None,
+            confidence=round(confidence, 2),
+            evidence=evidence,
+        )
