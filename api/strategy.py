@@ -2261,3 +2261,518 @@ async def get_format_recommendation(keyword_id: UUID):
             confidence=round(confidence, 2),
             evidence=evidence,
         )
+
+
+# =============================================================================
+# PHASE 5: EXPORT & VALIDATION
+# =============================================================================
+
+# --- Validation Models ---
+
+class ValidationError(BaseModel):
+    """Hard validation error that blocks export."""
+    code: str
+    message: str
+    thread_id: Optional[UUID] = None
+
+
+class ValidationWarning(BaseModel):
+    """Soft validation warning (export still allowed)."""
+    code: str
+    message: str
+    thread_id: Optional[UUID] = None
+
+
+class ExportValidationResponse(BaseModel):
+    """Response for export validation."""
+    is_valid: bool
+    errors: List[ValidationError]
+    warnings: List[ValidationWarning]
+
+
+# --- Export Models ---
+
+class ExportRequest(BaseModel):
+    """Request to export a strategy."""
+    format: str = Field("monok_json", description="Export format: monok_json, monok_display, csv")
+    include_empty_threads: bool = Field(False, description="Include threads without keywords")
+
+
+class ExportSummary(BaseModel):
+    """Summary statistics for an export."""
+    total_threads: int
+    confirmed_threads: int
+    total_topics: int
+    total_keywords: int
+    total_search_volume: int
+
+
+class ExportResponse(BaseModel):
+    """Response for strategy export."""
+    export_id: UUID
+    format: str
+    data: Dict[str, Any]
+    download_url: str
+    validation: Dict[str, Any]
+
+
+class ExportHistoryItem(BaseModel):
+    """Export history list item."""
+    id: UUID
+    format: str
+    exported_at: datetime
+    exported_by: Optional[str]
+    thread_count: Optional[int]
+    topic_count: Optional[int]
+    keyword_count: Optional[int]
+
+    class Config:
+        from_attributes = True
+
+
+class ExportHistoryResponse(BaseModel):
+    """Response for export history."""
+    exports: List[ExportHistoryItem]
+
+
+def validate_strategy_for_export(db: Session, strategy: Strategy) -> ExportValidationResponse:
+    """Validate a strategy meets export requirements."""
+    errors: List[ValidationError] = []
+    warnings: List[ValidationWarning] = []
+
+    # Get threads
+    threads = db.query(StrategyThread).filter(
+        StrategyThread.strategy_id == strategy.id
+    ).all()
+
+    # HARD REQUIREMENTS
+
+    # 1. Must have at least one thread
+    if len(threads) == 0:
+        errors.append(ValidationError(
+            code="no_threads",
+            message="Strategy must have at least one thread"
+        ))
+
+    # 2. Each confirmed thread must have at least one keyword
+    for thread in threads:
+        if thread.status == ThreadStatus.CONFIRMED:
+            keyword_count = db.query(func.count(ThreadKeyword.id)).filter(
+                ThreadKeyword.thread_id == thread.id
+            ).scalar() or 0
+
+            if keyword_count == 0:
+                errors.append(ValidationError(
+                    code="thread_no_keywords",
+                    message=f"Thread '{thread.name}' has no keywords assigned",
+                    thread_id=thread.id,
+                ))
+
+    # 3. Each confirmed thread must have strategic_context
+    for thread in threads:
+        if thread.status == ThreadStatus.CONFIRMED:
+            instructions = thread.custom_instructions or {}
+            if not instructions.get("strategic_context"):
+                errors.append(ValidationError(
+                    code="thread_no_context",
+                    message=f"Thread '{thread.name}' missing strategic context",
+                    thread_id=thread.id,
+                ))
+
+    # SOFT REQUIREMENTS (warnings)
+
+    # 1. Threads without topics
+    for thread in threads:
+        topic_count = db.query(func.count(StrategyTopic.id)).filter(
+            StrategyTopic.thread_id == thread.id
+        ).scalar() or 0
+
+        if topic_count == 0:
+            warnings.append(ValidationWarning(
+                code="thread_no_topics",
+                message=f"Thread '{thread.name}' has no topics defined",
+                thread_id=thread.id,
+            ))
+
+    # 2. Topics without target_url
+    for thread in threads:
+        topics_without_url = db.query(StrategyTopic).filter(
+            StrategyTopic.thread_id == thread.id,
+            or_(StrategyTopic.target_url.is_(None), StrategyTopic.target_url == ""),
+        ).all()
+
+        for topic in topics_without_url:
+            warnings.append(ValidationWarning(
+                code="topic_no_url",
+                message=f"Topic '{topic.name}' has no target URL",
+                thread_id=thread.id,
+            ))
+
+    # 3. Draft threads included
+    draft_threads = [t for t in threads if t.status == ThreadStatus.DRAFT]
+    if draft_threads:
+        warnings.append(ValidationWarning(
+            code="draft_threads",
+            message=f"{len(draft_threads)} threads are still in draft status"
+        ))
+
+    # 4. Missing format recommendations
+    for thread in threads:
+        instructions = thread.custom_instructions or {}
+        if not instructions.get("format_recommendations"):
+            warnings.append(ValidationWarning(
+                code="no_format_recommendation",
+                message=f"Thread '{thread.name}' has no format recommendations",
+                thread_id=thread.id,
+            ))
+
+    return ExportValidationResponse(
+        is_valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+    )
+
+
+def build_monok_export(db: Session, strategy: Strategy, include_empty_threads: bool) -> Dict[str, Any]:
+    """Build Monok JSON export package."""
+    # Get domain info
+    domain = db.query(Domain).get(strategy.domain_id)
+    analysis = db.query(AnalysisRun).get(strategy.analysis_run_id)
+
+    # Get threads with keywords and topics
+    threads_data = []
+    total_keywords = 0
+    total_volume = 0
+    total_topics = 0
+    confirmed_threads = 0
+
+    threads = db.query(StrategyThread).filter(
+        StrategyThread.strategy_id == strategy.id
+    ).order_by(StrategyThread.position).all()
+
+    for thread in threads:
+        # Get keywords
+        thread_keywords = db.query(
+            ThreadKeyword, Keyword
+        ).join(
+            Keyword, ThreadKeyword.keyword_id == Keyword.id
+        ).filter(
+            ThreadKeyword.thread_id == thread.id
+        ).order_by(ThreadKeyword.position).all()
+
+        if not include_empty_threads and len(thread_keywords) == 0:
+            continue
+
+        # Get topics
+        topics = db.query(StrategyTopic).filter(
+            StrategyTopic.thread_id == thread.id
+        ).order_by(StrategyTopic.position).all()
+
+        keywords_data = []
+        thread_volume = 0
+        for tk, kw in thread_keywords:
+            keywords_data.append({
+                "keyword": kw.keyword,
+                "search_volume": kw.search_volume,
+                "difficulty": kw.keyword_difficulty,
+                "opportunity_score": kw.opportunity_score,
+                "intent": kw.search_intent.value if kw.search_intent else None,
+            })
+            thread_volume += kw.search_volume or 0
+
+        topics_data = []
+        for topic in topics:
+            topics_data.append({
+                "topic_name": topic.name,
+                "primary_keyword": topic.primary_keyword,
+                "content_type": topic.content_type.value if topic.content_type else "cluster",
+                "target_url": topic.target_url,
+                "status": topic.status.value if topic.status else "draft",
+            })
+
+        threads_data.append({
+            "thread_name": thread.name,
+            "thread_id": str(thread.id),
+            "priority": thread.priority,
+            "status": thread.status.value if thread.status else "draft",
+            "keywords": keywords_data,
+            "topics": topics_data,
+            "custom_instructions": thread.custom_instructions or {},
+        })
+
+        total_keywords += len(keywords_data)
+        total_volume += thread_volume
+        total_topics += len(topics_data)
+        if thread.status == ThreadStatus.CONFIRMED:
+            confirmed_threads += 1
+
+    export_data = {
+        "export_id": None,  # Will be set after DB insert
+        "domain": domain.domain if domain else None,
+        "strategy_name": strategy.name,
+        "strategy_id": str(strategy.id),
+        "analysis_id": str(strategy.analysis_run_id),
+        "analysis_date": analysis.created_at.isoformat() if analysis and analysis.created_at else None,
+        "exported_at": datetime.utcnow().isoformat(),
+        "exported_by": None,  # Would come from auth
+        "threads": threads_data,
+        "summary": {
+            "total_threads": len(threads_data),
+            "confirmed_threads": confirmed_threads,
+            "total_topics": total_topics,
+            "total_keywords": total_keywords,
+            "total_search_volume": total_volume,
+        },
+    }
+
+    return export_data
+
+
+@router.post("/strategies/{strategy_id}/validate-export", response_model=ExportValidationResponse)
+async def validate_export(strategy_id: UUID):
+    """
+    Validate a strategy for export.
+
+    Returns hard errors (blocking) and soft warnings (informational).
+    Export is only allowed if there are no hard errors.
+    """
+    with get_db_context() as db:
+        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+
+        return validate_strategy_for_export(db, strategy)
+
+
+@router.post("/strategies/{strategy_id}/export", response_model=ExportResponse)
+async def export_strategy(strategy_id: UUID, request: ExportRequest):
+    """
+    Export a strategy to the specified format.
+
+    Supported formats:
+    - monok_json: Structured JSON for Monok
+    - monok_display: Human-readable format
+    - csv: Spreadsheet format
+    """
+    with get_db_context() as db:
+        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+
+        # Validate first
+        validation = validate_strategy_for_export(db, strategy)
+
+        # Allow export even with warnings, but block on errors
+        if not validation.is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "export_validation_failed",
+                    "errors": [e.model_dump() for e in validation.errors],
+                    "message": "Strategy does not meet export requirements"
+                }
+            )
+
+        # Build export data
+        if request.format in ["monok_json", "monok_display"]:
+            export_data = build_monok_export(db, strategy, request.include_empty_threads)
+        elif request.format == "csv":
+            # CSV format - flatten the data
+            export_data = build_monok_export(db, strategy, request.include_empty_threads)
+            # For CSV, we'll just store the JSON and let the download endpoint convert
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported format: {request.format}")
+
+        # Store export record
+        export_record = StrategyExport(
+            strategy_id=strategy_id,
+            format=request.format,
+            exported_data=export_data,
+            exported_at=datetime.utcnow(),
+            thread_count=export_data["summary"]["total_threads"],
+            topic_count=export_data["summary"]["total_topics"],
+            keyword_count=export_data["summary"]["total_keywords"],
+        )
+        db.add(export_record)
+        db.flush()
+
+        # Update export_id in the data
+        export_data["export_id"] = str(export_record.id)
+        export_record.exported_data = export_data
+
+        # Log activity
+        log_activity(
+            db, strategy_id, "exported",
+            entity_type="export", entity_id=export_record.id,
+            details={
+                "format": request.format,
+                "thread_count": export_data["summary"]["total_threads"],
+                "keyword_count": export_data["summary"]["total_keywords"],
+            }
+        )
+
+        db.commit()
+
+        logger.info(f"Exported strategy {strategy_id} in {request.format} format")
+
+        return ExportResponse(
+            export_id=export_record.id,
+            format=request.format,
+            data=export_data,
+            download_url=f"/api/exports/{export_record.id}/download",
+            validation={
+                "warnings": [w.model_dump() for w in validation.warnings]
+            }
+        )
+
+
+@router.get("/strategies/{strategy_id}/exports", response_model=ExportHistoryResponse)
+async def get_export_history(
+    strategy_id: UUID,
+    limit: int = Query(10, ge=1, le=100),
+):
+    """
+    Get export history for a strategy.
+    """
+    with get_db_context() as db:
+        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+
+        exports = db.query(StrategyExport).filter(
+            StrategyExport.strategy_id == strategy_id
+        ).order_by(StrategyExport.exported_at.desc()).limit(limit).all()
+
+        return ExportHistoryResponse(
+            exports=[
+                ExportHistoryItem(
+                    id=e.id,
+                    format=e.format,
+                    exported_at=e.exported_at,
+                    exported_by=e.exported_by,
+                    thread_count=e.thread_count,
+                    topic_count=e.topic_count,
+                    keyword_count=e.keyword_count,
+                )
+                for e in exports
+            ]
+        )
+
+
+@router.get("/exports/{export_id}/download")
+async def download_export(export_id: UUID):
+    """
+    Download a previous export.
+
+    Returns the export data in the original format.
+    """
+    from fastapi.responses import JSONResponse, Response
+
+    with get_db_context() as db:
+        export = db.query(StrategyExport).filter(StrategyExport.id == export_id).first()
+        if not export:
+            raise HTTPException(status_code=404, detail="Export not found")
+
+        if export.format == "csv":
+            # Convert to CSV
+            import csv
+            import io
+
+            output = io.StringIO()
+            writer = csv.writer(output)
+
+            # Header
+            writer.writerow([
+                "Thread", "Priority", "Status", "Keyword", "Search Volume",
+                "Difficulty", "Opportunity Score", "Intent"
+            ])
+
+            # Data
+            for thread in export.exported_data.get("threads", []):
+                for keyword in thread.get("keywords", []):
+                    writer.writerow([
+                        thread["thread_name"],
+                        thread.get("priority", ""),
+                        thread.get("status", ""),
+                        keyword["keyword"],
+                        keyword.get("search_volume", ""),
+                        keyword.get("difficulty", ""),
+                        keyword.get("opportunity_score", ""),
+                        keyword.get("intent", ""),
+                    ])
+
+            csv_content = output.getvalue()
+            return Response(
+                content=csv_content,
+                media_type="text/csv",
+                headers={
+                    "Content-Disposition": f"attachment; filename=strategy_export_{export_id}.csv"
+                }
+            )
+
+        elif export.format == "monok_display":
+            # Human-readable text format
+            lines = []
+            data = export.exported_data
+
+            lines.append(f"# {data.get('strategy_name', 'Strategy Export')}")
+            lines.append(f"Domain: {data.get('domain', 'N/A')}")
+            lines.append(f"Exported: {data.get('exported_at', 'N/A')}")
+            lines.append("")
+
+            summary = data.get("summary", {})
+            lines.append(f"## Summary")
+            lines.append(f"- Threads: {summary.get('total_threads', 0)}")
+            lines.append(f"- Topics: {summary.get('total_topics', 0)}")
+            lines.append(f"- Keywords: {summary.get('total_keywords', 0)}")
+            lines.append(f"- Total Search Volume: {summary.get('total_search_volume', 0):,}")
+            lines.append("")
+
+            for thread in data.get("threads", []):
+                lines.append(f"## Thread: {thread['thread_name']}")
+                lines.append(f"Priority: P{thread.get('priority', 'N/A')} | Status: {thread.get('status', 'draft')}")
+                lines.append("")
+
+                instructions = thread.get("custom_instructions", {})
+                if instructions.get("strategic_context"):
+                    lines.append(f"### Strategic Context")
+                    lines.append(instructions["strategic_context"])
+                    lines.append("")
+
+                if thread.get("keywords"):
+                    lines.append(f"### Keywords ({len(thread['keywords'])})")
+                    for kw in thread["keywords"][:20]:  # Limit display
+                        lines.append(f"- {kw['keyword']} (vol: {kw.get('search_volume', 'N/A')}, "
+                                   f"diff: {kw.get('difficulty', 'N/A')}, opp: {kw.get('opportunity_score', 'N/A')})")
+                    if len(thread["keywords"]) > 20:
+                        lines.append(f"  ... and {len(thread['keywords']) - 20} more")
+                    lines.append("")
+
+                if thread.get("topics"):
+                    lines.append(f"### Topics ({len(thread['topics'])})")
+                    for topic in thread["topics"]:
+                        lines.append(f"- [{topic.get('content_type', 'cluster').upper()}] {topic['topic_name']}")
+                        if topic.get("target_url"):
+                            lines.append(f"  URL: {topic['target_url']}")
+                    lines.append("")
+
+                lines.append("---")
+                lines.append("")
+
+            content = "\n".join(lines)
+            return Response(
+                content=content,
+                media_type="text/plain",
+                headers={
+                    "Content-Disposition": f"attachment; filename=strategy_export_{export_id}.txt"
+                }
+            )
+
+        else:
+            # JSON format (default)
+            return JSONResponse(
+                content=export.exported_data,
+                headers={
+                    "Content-Disposition": f"attachment; filename=strategy_export_{export_id}.json"
+                }
+            )
