@@ -237,6 +237,73 @@ def compute_thread_metrics(db: Session, thread_id: UUID) -> ThreadMetricsRespons
     )
 
 
+def compute_thread_metrics_bulk(db: Session, thread_ids: List[UUID]) -> Dict[UUID, ThreadMetricsResponse]:
+    """
+    Compute metrics for multiple threads in a single query.
+
+    Performance: O(1) queries instead of O(n) for n threads.
+    """
+    if not thread_ids:
+        return {}
+
+    # Single query with GROUP BY for all threads
+    results = db.query(
+        ThreadKeyword.thread_id,
+        func.count(ThreadKeyword.id).label("keyword_count"),
+        func.coalesce(func.sum(Keyword.search_volume), 0).label("total_volume"),
+        func.coalesce(func.sum(Keyword.estimated_traffic), 0).label("total_traffic"),
+        func.coalesce(func.avg(Keyword.keyword_difficulty), 0).label("avg_difficulty"),
+        func.coalesce(func.avg(Keyword.opportunity_score), 0).label("avg_opportunity"),
+    ).join(
+        Keyword, ThreadKeyword.keyword_id == Keyword.id
+    ).filter(
+        ThreadKeyword.thread_id.in_(thread_ids)
+    ).group_by(ThreadKeyword.thread_id).all()
+
+    metrics_map = {}
+    for r in results:
+        metrics_map[r.thread_id] = ThreadMetricsResponse(
+            keyword_count=r.keyword_count or 0,
+            total_search_volume=int(r.total_volume or 0),
+            total_traffic_potential=int(r.total_traffic or 0),
+            avg_difficulty=float(r.avg_difficulty or 0),
+            avg_opportunity_score=float(r.avg_opportunity or 0),
+        )
+
+    # Fill in empty metrics for threads with no keywords
+    for tid in thread_ids:
+        if tid not in metrics_map:
+            metrics_map[tid] = ThreadMetricsResponse()
+
+    return metrics_map
+
+
+def compute_topic_counts_bulk(db: Session, thread_ids: List[UUID]) -> Dict[UUID, int]:
+    """
+    Get topic counts for multiple threads in a single query.
+
+    Performance: O(1) queries instead of O(n) for n threads.
+    """
+    if not thread_ids:
+        return {}
+
+    results = db.query(
+        StrategyTopic.thread_id,
+        func.count(StrategyTopic.id).label("count")
+    ).filter(
+        StrategyTopic.thread_id.in_(thread_ids)
+    ).group_by(StrategyTopic.thread_id).all()
+
+    counts = {r.thread_id: r.count for r in results}
+
+    # Fill zeros for threads with no topics
+    for tid in thread_ids:
+        if tid not in counts:
+            counts[tid] = 0
+
+    return counts
+
+
 def thread_to_response(db: Session, thread: StrategyThread) -> ThreadResponse:
     """Convert thread model to response with computed metrics."""
     metrics = compute_thread_metrics(db, thread.id)
@@ -262,6 +329,45 @@ def thread_to_response(db: Session, thread: StrategyThread) -> ThreadResponse:
         metrics=metrics,
         topic_count=topic_count,
     )
+
+
+def threads_to_responses_bulk(db: Session, threads: List[StrategyThread]) -> List[ThreadResponse]:
+    """
+    Convert multiple threads to responses with bulk-computed metrics.
+
+    Performance: 2 queries total instead of 2n queries.
+    """
+    if not threads:
+        return []
+
+    thread_ids = [t.id for t in threads]
+
+    # Bulk compute metrics and topic counts
+    metrics_map = compute_thread_metrics_bulk(db, thread_ids)
+    topic_counts = compute_topic_counts_bulk(db, thread_ids)
+
+    responses = []
+    for thread in threads:
+        responses.append(ThreadResponse(
+            id=thread.id,
+            strategy_id=thread.strategy_id,
+            name=thread.name,
+            slug=thread.slug,
+            position=thread.position,
+            version=thread.version,
+            status=thread.status.value if isinstance(thread.status, ThreadStatus) else thread.status,
+            priority=thread.priority,
+            recommended_format=thread.recommended_format,
+            format_confidence=thread.format_confidence,
+            format_evidence=thread.format_evidence,
+            custom_instructions=thread.custom_instructions or {},
+            created_at=thread.created_at,
+            updated_at=thread.updated_at,
+            metrics=metrics_map.get(thread.id, ThreadMetricsResponse()),
+            topic_count=topic_counts.get(thread.id, 0),
+        ))
+
+    return responses
 
 
 def log_activity(
@@ -308,6 +414,8 @@ async def list_strategies(
     List strategies for a domain.
 
     Returns strategies with aggregated counts for threads, topics, and keywords.
+
+    Performance: Uses 4 total queries regardless of result count (no N+1).
     """
     with get_db_context() as db:
         # Build query
@@ -326,31 +434,53 @@ async def list_strategies(
         query = query.order_by(Strategy.created_at.desc())
         strategies = query.all()
 
-        # Build response with aggregations
+        if not strategies:
+            return StrategyListResponse(strategies=[])
+
+        strategy_ids = [s.id for s in strategies]
+        analysis_run_ids = list(set(s.analysis_run_id for s in strategies))
+
+        # BULK QUERY 1: Thread counts per strategy
+        thread_counts_result = db.query(
+            StrategyThread.strategy_id,
+            func.count(StrategyThread.id).label("count")
+        ).filter(
+            StrategyThread.strategy_id.in_(strategy_ids)
+        ).group_by(StrategyThread.strategy_id).all()
+        thread_counts = {r.strategy_id: r.count for r in thread_counts_result}
+
+        # BULK QUERY 2: Topic counts per strategy (via thread join)
+        topic_counts_result = db.query(
+            StrategyThread.strategy_id,
+            func.count(StrategyTopic.id).label("count")
+        ).join(
+            StrategyTopic, StrategyTopic.thread_id == StrategyThread.id
+        ).filter(
+            StrategyThread.strategy_id.in_(strategy_ids)
+        ).group_by(StrategyThread.strategy_id).all()
+        topic_counts = {r.strategy_id: r.count for r in topic_counts_result}
+
+        # BULK QUERY 3: Keyword counts per strategy (via thread join)
+        keyword_counts_result = db.query(
+            StrategyThread.strategy_id,
+            func.count(ThreadKeyword.id).label("count")
+        ).join(
+            ThreadKeyword, ThreadKeyword.thread_id == StrategyThread.id
+        ).filter(
+            StrategyThread.strategy_id.in_(strategy_ids)
+        ).group_by(StrategyThread.strategy_id).all()
+        keyword_counts = {r.strategy_id: r.count for r in keyword_counts_result}
+
+        # BULK QUERY 4: Analysis info
+        analyses = db.query(AnalysisRun).filter(
+            AnalysisRun.id.in_(analysis_run_ids)
+        ).all()
+        analysis_map = {a.id: a for a in analyses}
+
+        # Build response
         result = []
         for strategy in strategies:
-            # Get thread count
-            thread_count = db.query(func.count(StrategyThread.id)).filter(
-                StrategyThread.strategy_id == strategy.id
-            ).scalar() or 0
-
-            # Get topic count (across all threads)
-            topic_count = db.query(func.count(StrategyTopic.id)).join(
-                StrategyThread
-            ).filter(
-                StrategyThread.strategy_id == strategy.id
-            ).scalar() or 0
-
-            # Get keyword count (distinct keywords across all threads)
-            keyword_count = db.query(func.count(ThreadKeyword.id)).join(
-                StrategyThread
-            ).filter(
-                StrategyThread.strategy_id == strategy.id
-            ).scalar() or 0
-
-            # Get analysis info
-            analysis = db.query(AnalysisRun).get(strategy.analysis_run_id)
-
+            analysis = analysis_map.get(strategy.analysis_run_id)
             result.append(StrategySummaryResponse(
                 id=strategy.id,
                 name=strategy.name,
@@ -361,9 +491,9 @@ async def list_strategies(
                 updated_at=strategy.updated_at,
                 analysis_run_id=strategy.analysis_run_id,
                 analysis_created_at=analysis.created_at if analysis else None,
-                thread_count=thread_count,
-                topic_count=topic_count,
-                keyword_count=keyword_count,
+                thread_count=thread_counts.get(strategy.id, 0),
+                topic_count=topic_counts.get(strategy.id, 0),
+                keyword_count=keyword_counts.get(strategy.id, 0),
             ))
 
         return StrategyListResponse(strategies=result)
@@ -376,6 +506,8 @@ async def get_strategy(strategy_id: UUID):
 
     Returns the full strategy with all threads (including computed metrics)
     and source analysis information.
+
+    Performance: Uses 3 queries total regardless of thread count (no N+1).
     """
     with get_db_context() as db:
         strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
@@ -387,9 +519,10 @@ async def get_strategy(strategy_id: UUID):
             StrategyThread.strategy_id == strategy_id
         ).order_by(StrategyThread.position).all()
 
-        thread_responses = [thread_to_response(db, t) for t in threads]
+        # Use bulk conversion (2 queries for all threads instead of 2n)
+        thread_responses = threads_to_responses_bulk(db, threads)
 
-        # Calculate aggregations
+        # Calculate aggregations from already-computed data
         thread_count = len(threads)
         topic_count = sum(t.topic_count for t in thread_responses)
         keyword_count = sum(t.metrics.keyword_count for t in thread_responses)
@@ -857,6 +990,8 @@ async def list_threads(strategy_id: UUID):
     List threads for a strategy (ordered by position).
 
     Returns threads with computed metrics from assigned keywords.
+
+    Performance: Uses 3 queries total regardless of thread count (no N+1).
     """
     with get_db_context() as db:
         # Validate strategy exists
@@ -868,7 +1003,8 @@ async def list_threads(strategy_id: UUID):
             StrategyThread.strategy_id == strategy_id
         ).order_by(StrategyThread.position).all()
 
-        thread_responses = [thread_to_response(db, t) for t in threads]
+        # Use bulk conversion (2 queries for all threads instead of 2n)
+        thread_responses = threads_to_responses_bulk(db, threads)
 
         return ThreadListResponse(threads=thread_responses)
 
@@ -1479,6 +1615,259 @@ async def remove_keywords_from_thread(thread_id: UUID, request: KeywordRemove):
 
 
 # =============================================================================
+# BATCH OPERATIONS
+# =============================================================================
+
+class BatchMoveKeywords(BaseModel):
+    """Request to move keywords from one thread to another."""
+    keyword_ids: List[UUID] = Field(..., min_length=1, max_length=1000)
+    source_thread_id: UUID
+    target_thread_id: UUID
+
+
+class BatchMoveResponse(BaseModel):
+    """Response for batch move operation."""
+    moved_count: int
+    source_thread: ThreadResponse
+    target_thread: ThreadResponse
+
+
+class AssignClusterRequest(BaseModel):
+    """Request to assign a suggested cluster to a new or existing thread."""
+    keyword_ids: List[UUID] = Field(..., min_length=1)
+    thread_id: Optional[UUID] = None  # If null, create new thread
+    new_thread_name: Optional[str] = Field(None, max_length=255)
+
+
+class AssignClusterResponse(BaseModel):
+    """Response for cluster assignment."""
+    thread: ThreadResponse
+    assigned_count: int
+    skipped_count: int  # Already assigned elsewhere
+
+
+@router.post("/strategies/{strategy_id}/keywords/batch-move", response_model=BatchMoveResponse)
+async def batch_move_keywords(strategy_id: UUID, request: BatchMoveKeywords):
+    """
+    Move multiple keywords from one thread to another in a single operation.
+
+    This is atomic: either all keywords move or none do.
+    Keywords already in the target thread are skipped.
+    """
+    with get_db_context() as db:
+        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+
+        # Validate both threads exist and belong to this strategy
+        source_thread = db.query(StrategyThread).filter(
+            StrategyThread.id == request.source_thread_id,
+            StrategyThread.strategy_id == strategy_id,
+        ).first()
+        if not source_thread:
+            raise HTTPException(status_code=404, detail="Source thread not found")
+
+        target_thread = db.query(StrategyThread).filter(
+            StrategyThread.id == request.target_thread_id,
+            StrategyThread.strategy_id == strategy_id,
+        ).first()
+        if not target_thread:
+            raise HTTPException(status_code=404, detail="Target thread not found")
+
+        if request.source_thread_id == request.target_thread_id:
+            raise HTTPException(status_code=400, detail="Source and target thread cannot be the same")
+
+        # Get existing assignments in source thread
+        source_assignments = db.query(ThreadKeyword).filter(
+            ThreadKeyword.thread_id == request.source_thread_id,
+            ThreadKeyword.keyword_id.in_(request.keyword_ids),
+        ).all()
+
+        if not source_assignments:
+            raise HTTPException(
+                status_code=400,
+                detail="None of the specified keywords are in the source thread"
+            )
+
+        # Get last position in target thread
+        last_position = db.query(func.max(ThreadKeyword.position)).filter(
+            ThreadKeyword.thread_id == request.target_thread_id
+        ).scalar()
+
+        # Move keywords: delete from source, add to target
+        moved_count = 0
+        current_position = last_position
+
+        for assignment in source_assignments:
+            # Delete from source
+            db.delete(assignment)
+
+            # Add to target with new position
+            new_position = generate_position_at_end(current_position)
+            new_assignment = ThreadKeyword(
+                thread_id=request.target_thread_id,
+                keyword_id=assignment.keyword_id,
+                position=new_position,
+            )
+            db.add(new_assignment)
+            current_position = new_position
+            moved_count += 1
+
+        # Update both thread versions
+        source_thread.version += 1
+        source_thread.updated_at = datetime.utcnow()
+        target_thread.version += 1
+        target_thread.updated_at = datetime.utcnow()
+
+        # Log activity
+        log_activity(
+            db, strategy_id, "keywords_batch_moved",
+            entity_type="thread",
+            details={
+                "source_thread_id": str(request.source_thread_id),
+                "target_thread_id": str(request.target_thread_id),
+                "moved_count": moved_count,
+            }
+        )
+
+        db.commit()
+        db.refresh(source_thread)
+        db.refresh(target_thread)
+
+        logger.info(f"Batch moved {moved_count} keywords from thread {request.source_thread_id} to {request.target_thread_id}")
+
+        return BatchMoveResponse(
+            moved_count=moved_count,
+            source_thread=thread_to_response(db, source_thread),
+            target_thread=thread_to_response(db, target_thread),
+        )
+
+
+@router.post("/strategies/{strategy_id}/assign-cluster", response_model=AssignClusterResponse)
+async def assign_cluster(strategy_id: UUID, request: AssignClusterRequest):
+    """
+    Assign a suggested cluster (list of keywords) to a thread.
+
+    If thread_id is provided, assigns to existing thread.
+    If new_thread_name is provided, creates a new thread first.
+
+    Keywords already assigned to other threads are skipped.
+    """
+    with get_db_context() as db:
+        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+
+        # Determine target thread
+        thread = None
+        if request.thread_id:
+            thread = db.query(StrategyThread).filter(
+                StrategyThread.id == request.thread_id,
+                StrategyThread.strategy_id == strategy_id,
+            ).first()
+            if not thread:
+                raise HTTPException(status_code=404, detail="Thread not found")
+        elif request.new_thread_name:
+            # Create new thread
+            # Find last thread position
+            last_thread = db.query(StrategyThread).filter(
+                StrategyThread.strategy_id == strategy_id
+            ).order_by(StrategyThread.position.desc()).first()
+
+            position = generate_position_at_end(last_thread.position if last_thread else None)
+
+            thread = StrategyThread(
+                strategy_id=strategy_id,
+                name=request.new_thread_name,
+                slug=slugify(request.new_thread_name),
+                position=position,
+                version=1,
+                status=ThreadStatus.DRAFT,
+            )
+            db.add(thread)
+            db.flush()
+
+            log_activity(
+                db, strategy_id, "thread_added",
+                entity_type="thread", entity_id=thread.id,
+                details={"name": request.new_thread_name, "from_cluster_assign": True}
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Either thread_id or new_thread_name is required"
+            )
+
+        # Validate keywords exist and belong to this analysis
+        keywords = db.query(Keyword).filter(
+            Keyword.id.in_(request.keyword_ids),
+            Keyword.analysis_run_id == strategy.analysis_run_id,
+        ).all()
+
+        if not keywords:
+            raise HTTPException(status_code=400, detail="No valid keywords found")
+
+        # Check which keywords are already assigned to other threads
+        existing_assignments = db.query(ThreadKeyword.keyword_id).join(
+            StrategyThread
+        ).filter(
+            StrategyThread.strategy_id == strategy_id,
+            ThreadKeyword.keyword_id.in_(request.keyword_ids),
+        ).all()
+        already_assigned = {a[0] for a in existing_assignments}
+
+        # Get last position in target thread
+        last_position = db.query(func.max(ThreadKeyword.position)).filter(
+            ThreadKeyword.thread_id == thread.id
+        ).scalar()
+
+        # Assign keywords that aren't already assigned
+        assigned_count = 0
+        skipped_count = 0
+        current_position = last_position
+
+        for keyword in keywords:
+            if keyword.id in already_assigned:
+                skipped_count += 1
+                continue
+
+            new_position = generate_position_at_end(current_position)
+            assignment = ThreadKeyword(
+                thread_id=thread.id,
+                keyword_id=keyword.id,
+                position=new_position,
+            )
+            db.add(assignment)
+            current_position = new_position
+            assigned_count += 1
+
+        # Update thread version
+        thread.version += 1
+        thread.updated_at = datetime.utcnow()
+
+        # Log activity
+        log_activity(
+            db, strategy_id, "cluster_assigned",
+            entity_type="thread", entity_id=thread.id,
+            details={
+                "assigned_count": assigned_count,
+                "skipped_count": skipped_count,
+            }
+        )
+
+        db.commit()
+        db.refresh(thread)
+
+        logger.info(f"Assigned cluster of {assigned_count} keywords to thread {thread.id} (skipped {skipped_count})")
+
+        return AssignClusterResponse(
+            thread=thread_to_response(db, thread),
+            assigned_count=assigned_count,
+            skipped_count=skipped_count,
+        )
+
+
+# =============================================================================
 # TOPIC ENDPOINTS
 # =============================================================================
 
@@ -1921,10 +2310,13 @@ async def get_available_keywords(
     assigned: Optional[str] = Query("all", description="Filter: true, false, or all"),
 ):
     """
-    Get available keywords for a strategy with cursor-based pagination.
+    Get available keywords for a strategy with keyset pagination.
 
     Keywords come from the analysis bound to this strategy.
     Supports filtering, sorting, and assignment status.
+
+    Performance: Uses keyset pagination (O(1)) instead of offset (O(n)).
+    Even page 1000 is as fast as page 1.
     """
     import base64
     import json
@@ -1954,92 +2346,112 @@ async def get_available_keywords(
             StrategyThread.strategy_id == strategy_id
         ).subquery()
 
-        # Apply filters
-        query = base_query
-
-        if intent:
+        # Apply filters to base query for counts
+        def apply_filters(q):
             from src.database.models import SearchIntent
-            try:
-                intent_enum = SearchIntent(intent)
-                query = query.filter(Keyword.search_intent == intent_enum)
-            except ValueError:
-                pass  # Ignore invalid intent
-
-        if min_volume is not None:
-            query = query.filter(Keyword.search_volume >= min_volume)
-
-        if max_difficulty is not None:
-            query = query.filter(
-                or_(
-                    Keyword.keyword_difficulty <= max_difficulty,
-                    Keyword.keyword_difficulty.is_(None)
+            if intent:
+                try:
+                    intent_enum = SearchIntent(intent)
+                    q = q.filter(Keyword.search_intent == intent_enum)
+                except ValueError:
+                    pass
+            if min_volume is not None:
+                q = q.filter(Keyword.search_volume >= min_volume)
+            if max_difficulty is not None:
+                q = q.filter(
+                    or_(
+                        Keyword.keyword_difficulty <= max_difficulty,
+                        Keyword.keyword_difficulty.is_(None)
+                    )
                 )
-            )
+            if search:
+                q = q.filter(Keyword.keyword.ilike(f"%{search}%"))
+            return q
 
-        if search:
-            query = query.filter(Keyword.keyword.ilike(f"%{search}%"))
+        query = apply_filters(base_query)
 
         if assigned == "true":
             query = query.filter(Keyword.id.in_(assigned_keyword_ids))
         elif assigned == "false":
             query = query.filter(~Keyword.id.in_(assigned_keyword_ids))
 
-        # Get counts before pagination
-        total_count = query.count()
-        unassigned_query = base_query.filter(~Keyword.id.in_(assigned_keyword_ids))
-        if intent:
-            try:
-                intent_enum = SearchIntent(intent)
-                unassigned_query = unassigned_query.filter(Keyword.search_intent == intent_enum)
-            except ValueError:
-                pass
-        if min_volume is not None:
-            unassigned_query = unassigned_query.filter(Keyword.search_volume >= min_volume)
-        if max_difficulty is not None:
-            unassigned_query = unassigned_query.filter(
-                or_(
-                    Keyword.keyword_difficulty <= max_difficulty,
-                    Keyword.keyword_difficulty.is_(None)
-                )
-            )
-        if search:
-            unassigned_query = unassigned_query.filter(Keyword.keyword.ilike(f"%{search}%"))
-        unassigned_count = unassigned_query.count()
+        # Get counts (only on first page to avoid overhead)
+        total_count = 0
+        unassigned_count = 0
+        if not cursor:
+            total_count = query.count()
+            unassigned_query = apply_filters(base_query).filter(~Keyword.id.in_(assigned_keyword_ids))
+            unassigned_count = unassigned_query.count()
 
-        # Apply sorting
-        sort_column = {
+        # Determine sort column and direction
+        sort_column_map = {
             "opportunity_score": Keyword.opportunity_score,
             "volume": Keyword.search_volume,
             "difficulty": Keyword.keyword_difficulty,
             "keyword": Keyword.keyword,
-        }.get(sort_by, Keyword.opportunity_score)
+        }
+        sort_column = sort_column_map.get(sort_by, Keyword.opportunity_score)
+        sort_column_name = sort_by if sort_by in sort_column_map else "opportunity_score"
+        is_desc = sort_dir != "asc"
 
-        if sort_dir == "asc":
-            query = query.order_by(sort_column.asc().nullslast())
-        else:
-            query = query.order_by(sort_column.desc().nullsfirst())
-
-        # Secondary sort by ID for stability
-        query = query.order_by(Keyword.id)
-
-        # Apply cursor
+        # KEYSET PAGINATION: Apply cursor filter
         if cursor:
             try:
                 cursor_data = json.loads(base64.b64decode(cursor).decode())
+                cursor_value = cursor_data.get("v")  # sort column value
                 cursor_id = cursor_data.get("id")
+                cursor_total = cursor_data.get("total", 0)
+                cursor_unassigned = cursor_data.get("unassigned", 0)
+
+                # Restore counts from cursor
+                total_count = cursor_total
+                unassigned_count = cursor_unassigned
+
                 if cursor_id:
-                    # Simple offset-based cursor for now
-                    offset = cursor_data.get("offset", 0)
-                    query = query.offset(offset)
-            except:
-                pass  # Ignore invalid cursor
+                    cursor_uuid = UUID(cursor_id)
+
+                    # Keyset condition: (sort_col, id) > (cursor_val, cursor_id)
+                    # For DESC: (sort_col < cursor_val) OR (sort_col = cursor_val AND id > cursor_id)
+                    # For ASC: (sort_col > cursor_val) OR (sort_col = cursor_val AND id > cursor_id)
+                    if cursor_value is not None:
+                        if is_desc:
+                            query = query.filter(
+                                or_(
+                                    sort_column < cursor_value,
+                                    and_(
+                                        sort_column == cursor_value,
+                                        Keyword.id > cursor_uuid
+                                    )
+                                )
+                            )
+                        else:
+                            query = query.filter(
+                                or_(
+                                    sort_column > cursor_value,
+                                    and_(
+                                        sort_column == cursor_value,
+                                        Keyword.id > cursor_uuid
+                                    )
+                                )
+                            )
+                    else:
+                        # Cursor value was null, just filter by ID
+                        query = query.filter(Keyword.id > cursor_uuid)
+            except Exception:
+                pass  # Ignore invalid cursor, start from beginning
+
+        # Apply sorting
+        if is_desc:
+            query = query.order_by(sort_column.desc().nullslast(), Keyword.id)
+        else:
+            query = query.order_by(sort_column.asc().nullslast(), Keyword.id)
 
         # Execute with limit + 1 to check for more
         keywords = query.limit(limit + 1).all()
         has_more = len(keywords) > limit
         keywords = keywords[:limit]
 
-        # Get assignment info for these keywords
+        # Get assignment info for these keywords (single query)
         keyword_ids = [k.id for k in keywords]
         assignments = db.query(
             ThreadKeyword.keyword_id, ThreadKeyword.thread_id
@@ -2068,18 +2480,18 @@ async def get_available_keywords(
                 assigned_thread_name=thread_lookup.get(thread_id) if thread_id else None,
             ))
 
-        # Generate next cursor
+        # Generate keyset cursor
         next_cursor = None
         if has_more and keywords:
-            # Use offset-based cursor
-            current_offset = 0
-            if cursor:
-                try:
-                    cursor_data = json.loads(base64.b64decode(cursor).decode())
-                    current_offset = cursor_data.get("offset", 0)
-                except:
-                    pass
-            cursor_data = {"offset": current_offset + limit, "id": str(keywords[-1].id)}
+            last_kw = keywords[-1]
+            # Get the sort column value
+            sort_value = getattr(last_kw, sort_column_name.replace("volume", "search_volume"))
+            cursor_data = {
+                "v": sort_value,  # sort column value
+                "id": str(last_kw.id),
+                "total": total_count,
+                "unassigned": unassigned_count,
+            }
             next_cursor = base64.b64encode(json.dumps(cursor_data).encode()).decode()
 
         return AvailableKeywordsResponse(
