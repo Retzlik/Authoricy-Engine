@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import List, Literal, Optional
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
 from src.collector import (
@@ -66,6 +67,33 @@ app = FastAPI(
     title="Authoricy SEO Analyzer",
     description="Automated SEO analysis powered by DataForSEO and Claude AI",
     version="0.3.0",
+)
+
+# Configure CORS - Allow frontend origins
+# In production, replace with specific origins
+cors_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",      # Vite default
+    "http://localhost:8080",
+    "https://localhost:3000",
+    "https://localhost:5173",
+    # Lovable preview URLs
+    "https://*.lovable.app",
+    "https://*.lovableproject.com",
+    # Add your production frontend URL here
+    os.getenv("FRONTEND_URL", ""),
+]
+# Filter out empty strings
+cors_origins = [o for o in cors_origins if o]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_origin_regex=r"https://.*\.lovable\.app|https://.*\.lovableproject\.com|https://.*\.vercel\.app|https://.*\.netlify\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Include User Management router (auth endpoints)
