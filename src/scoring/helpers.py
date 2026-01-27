@@ -88,44 +88,20 @@ def get_intent_weight(intent: Optional[str]) -> int:
 
 
 # ============================================================================
-# DOMAIN RATING NORMALIZATION
+# DOMAIN RATING (DR) - NOTE ON DATA SOURCE
 # ============================================================================
-
-def normalize_domain_rating(dataforseo_rank: int) -> int:
-    """
-    Normalize DataForSEO domain rank to standard 0-100 DR scale.
-
-    DataForSEO's "rank" from backlinks/summary API is NOT the same as Ahrefs DR.
-    It can range from 0 to hundreds of thousands based on referring domains.
-
-    This function converts it to a 0-100 scale similar to Ahrefs DR using
-    logarithmic normalization.
-
-    Approximate mapping (based on DataForSEO rank vs typical Ahrefs DR):
-    - rank 0-10: DR 0-20
-    - rank 10-100: DR 20-40
-    - rank 100-1000: DR 40-60
-    - rank 1000-10000: DR 60-80
-    - rank 10000+: DR 80-100
-
-    Args:
-        dataforseo_rank: Raw rank value from DataForSEO backlinks API
-
-    Returns:
-        Normalized domain rating (0-100)
-    """
-    if dataforseo_rank <= 0:
-        return 0
-
-    # Use logarithmic scale with base adjustments
-    # log10(1) = 0, log10(10) = 1, log10(100) = 2, log10(1000) = 3, etc.
-    import math
-
-    # Scale: we want log10(100000) = 5 to map to ~100
-    # So DR = log10(rank + 1) * 20, capped at 100
-    dr = math.log10(dataforseo_rank + 1) * 20
-
-    return min(100, max(0, int(dr)))
+#
+# Domain Rating (DR) is retrieved from DataForSEO Backlinks Summary API.
+#
+# IMPORTANT: We use the `rank_scale="one_hundred"` parameter in the API request
+# to get DR on a 0-100 scale directly (similar to Ahrefs DR).
+#
+# Without this parameter, DataForSEO returns rank on a 0-1000 scale.
+# See: https://dataforseo.com/help-center/what_is_rank_in_backlinks_api
+# See: https://dataforseo.com/update/new-rank-scale-in-backlinks-api
+#
+# The actual API call is in src/collector/client.py:get_backlink_summary()
+#
 
 
 # ============================================================================

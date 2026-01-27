@@ -333,11 +333,21 @@ async def fetch_competitors(client, domain: str, market: str, language: str) -> 
 
 
 async def fetch_backlink_summary(client, domain: str) -> Dict:
-    """Fetch backlink overview."""
+    """
+    Fetch backlink overview.
+
+    IMPORTANT: Uses rank_scale="one_hundred" to get Domain Rating on 0-100 scale
+    (similar to Ahrefs DR). Without this, DataForSEO returns 0-1000 scale.
+    See: https://dataforseo.com/update/new-rank-scale-in-backlinks-api
+    """
     try:
         result = await client.post(
             "backlinks/summary/live",
-            [{"target": domain}]
+            [{
+                "target": domain,
+                # CRITICAL: Request 0-100 scale instead of default 0-1000
+                "rank_scale": "one_hundred",
+            }]
         )
 
         item = safe_get_result(result, get_items=False)
@@ -347,7 +357,7 @@ async def fetch_backlink_summary(client, domain: str) -> Dict:
             "referring_domains": item.get("referring_domains") or 0,
             "referring_ips": item.get("referring_ips") or 0,
             "dofollow_backlinks": item.get("backlinks_nofollow") or 0,
-            "domain_rank": item.get("rank") or 0,
+            "domain_rank": item.get("rank") or 0,  # Now 0-100 scale (like Ahrefs DR)
         }
     except Exception as e:
         logger.error(f"Backlink summary failed: {e}")

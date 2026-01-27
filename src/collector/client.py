@@ -457,11 +457,17 @@ class DataForSEOClient:
 
         Uses DataForSEO Backlinks Summary API.
 
+        IMPORTANT: We use rank_scale="one_hundred" to get Domain Rating on a 0-100 scale
+        (similar to Ahrefs DR). Without this parameter, DataForSEO returns rank on 0-1000 scale.
+
+        See: https://dataforseo.com/help-center/what_is_rank_in_backlinks_api
+        See: https://dataforseo.com/update/new-rank-scale-in-backlinks-api
+
         Args:
             domain: Target domain
 
         Returns:
-            Dict with domain_rank (DR), referring_domains, backlinks, etc. or None on error
+            Dict with domain_rank (DR 0-100), referring_domains, backlinks, etc. or None on error
         """
         try:
             result = await self.post(
@@ -470,6 +476,9 @@ class DataForSEOClient:
                     "target": domain,
                     "internal_list_limit": 0,  # We don't need internal links
                     "backlinks_status_type": "all",
+                    # CRITICAL: Request 0-100 scale instead of default 0-1000
+                    # This gives us Domain Rating comparable to Ahrefs DR
+                    "rank_scale": "one_hundred",
                 }]
             )
 
@@ -478,17 +487,13 @@ class DataForSEOClient:
                 task_result = tasks[0]["result"]
                 if task_result and len(task_result) > 0:
                     item = task_result[0]
-                    raw_rank = item.get("rank", 0)
+                    # With rank_scale="one_hundred", this is already 0-100
+                    domain_rank = int(item.get("rank", 0) or 0)
 
-                    # Normalize DataForSEO rank to 0-100 DR scale
-                    from src.scoring.helpers import normalize_domain_rating
-                    normalized_dr = normalize_domain_rating(raw_rank)
-
-                    logger.debug(f"Backlink summary for {domain}: raw_rank={raw_rank}, normalized_dr={normalized_dr}")
+                    logger.info(f"Backlink summary for {domain}: DR={domain_rank} (0-100 scale)")
 
                     return {
-                        "domain_rank": normalized_dr,  # Normalized to 0-100
-                        "raw_dataforseo_rank": raw_rank,  # Keep raw for debugging
+                        "domain_rank": domain_rank,  # 0-100 scale (like Ahrefs DR)
                         "referring_domains": item.get("referring_domains", 0),
                         "backlinks": item.get("backlinks", 0),
                         "referring_main_domains": item.get("referring_main_domains", 0),

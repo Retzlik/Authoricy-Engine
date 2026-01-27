@@ -532,6 +532,8 @@ async def fetch_backlinks(
     """
     Fetch backlinks to the domain.
     Returns link source, anchor, ranks, and attributes.
+
+    Uses rank_scale="one_hundred" for consistent 0-100 DR scale.
     """
     result = await client.post(
         "backlinks/backlinks/live",
@@ -539,7 +541,7 @@ async def fetch_backlinks(
             "target": domain,
             "limit": limit,
             "mode": "as_is",  # All links, not one per domain
-            # Note: order_by removed for consistency
+            "rank_scale": "one_hundred",  # 0-100 scale for domain_from_rank
         }]
     )
 
@@ -606,6 +608,8 @@ async def fetch_referring_domains(
     """
     Fetch referring domains.
     Returns domains linking to target with metrics.
+
+    Uses rank_scale="one_hundred" for consistent 0-100 DR scale.
     """
     result = await client.post(
         "backlinks/referring_domains/live",
@@ -613,6 +617,7 @@ async def fetch_referring_domains(
             "target": domain,
             "limit": limit,
             "order_by": ["rank,desc"],  # Best domains first
+            "rank_scale": "one_hundred",  # 0-100 scale for domain rank
         }]
     )
 
@@ -650,6 +655,7 @@ async def fetch_backlink_domain_intersection(
         [{
             "targets": targets_dict,  # FIXED: was array, now dict
             "limit": limit,
+            "rank_scale": "one_hundred",  # 0-100 scale for domain ranks
             # Note: order_by removed - was causing issues with some domain combinations
         }]
     )
@@ -799,6 +805,8 @@ async def fetch_broken_backlinks(
     """
     Fetch broken backlinks pointing to the domain.
     Opportunities for link recovery via redirects or content restoration.
+
+    Uses rank_scale="one_hundred" for consistent 0-100 DR scale.
     """
     result = await client.post(
         "backlinks/backlinks/live",
@@ -808,6 +816,7 @@ async def fetch_broken_backlinks(
             "mode": "as_is",
             "filters": [["is_broken", "=", True]],
             "order_by": ["domain_from_rank,desc"],
+            "rank_scale": "one_hundred",  # 0-100 scale for domain_from_rank
         }]
     )
 
@@ -837,6 +846,8 @@ async def fetch_backlink_history(
     """
     Fetch historical backlink counts.
     Shows backlink growth/decline over time.
+
+    Uses rank_scale="one_hundred" for consistent 0-100 DR scale.
     """
     date_to = datetime.now().strftime("%Y-%m-%d")
     date_from = (datetime.now() - timedelta(days=months * 30)).strftime("%Y-%m-%d")
@@ -847,6 +858,7 @@ async def fetch_backlink_history(
             "target": domain,
             "date_from": date_from,
             "date_to": date_to,
+            "rank_scale": "one_hundred",  # 0-100 scale for rank history
         }]
     )
 
@@ -903,12 +915,15 @@ async def fetch_backlink_competitors(
     """
     Find domains with similar backlink profiles (link competitors).
     Different from keyword competitors - these share similar link sources.
+
+    Uses rank_scale="one_hundred" for consistent 0-100 DR scale.
     """
     result = await client.post(
         "backlinks/competitors/live",
         [{
             "target": domain,
             "limit": limit,
+            "rank_scale": "one_hundred",  # 0-100 scale for competitor ranks
         }]
     )
 
