@@ -1,6 +1,6 @@
 # Authoricy Frontend Specification
 
-> **Version:** 1.0
+> **Version:** 2.0
 > **Last Updated:** 2026-01-27
 > **Purpose:** Complete specification for frontend implementation to ensure perfect alignment with backend
 
@@ -10,7 +10,7 @@
 
 1. [System Overview](#1-system-overview)
 2. [Authentication Flow](#2-authentication-flow)
-3. [Analysis Flow (SINGLE FLOW)](#3-analysis-flow-single-flow)
+3. [Analysis Flows (TWO PATHS)](#3-analysis-flows-two-paths)
 4. [API Endpoints Reference](#4-api-endpoints-reference)
 5. [Data Models](#5-data-models)
 6. [Caching Strategy](#6-caching-strategy)
@@ -48,11 +48,11 @@
 
 ### Key Principles
 
-1. **ONE Analysis Flow** - There is only ONE way to trigger analysis
+1. **TWO Analysis Paths** - Standard for established domains, Greenfield for new domains
 2. **Supabase for Auth Only** - All data comes from our backend API
 3. **JWT in Every Request** - Backend validates Supabase JWT
 4. **Domain Ownership** - Users only see their own domains (unless admin)
-5. **Precomputed Cache** - Dashboard data is precomputed, not computed on request
+5. **Precomputed Cache** - Dashboard data is precomputed after analysis
 
 ---
 
@@ -110,408 +110,456 @@ async function apiClient(endpoint: string, options: RequestInit = {}) {
   })
 
   if (response.status === 401) {
-    // Token expired - redirect to login
     await supabase.auth.signOut()
     window.location.href = '/login'
     throw new Error('Session expired')
   }
 
-  if (response.status === 403) {
-    throw new Error('Access denied')
-  }
-
   if (!response.ok) {
-    throw new Error(`API Error: ${response.status}`)
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.detail || `API Error: ${response.status}`)
   }
 
   return response.json()
 }
 ```
 
-### 2.3 Auth State Management
-
-```typescript
-// Listen for auth changes
-supabase.auth.onAuthStateChange((event, session) => {
-  if (event === 'SIGNED_IN') {
-    // User logged in - fetch their domains
-    queryClient.invalidateQueries(['domains'])
-  }
-
-  if (event === 'SIGNED_OUT') {
-    // Clear all cached data
-    queryClient.clear()
-  }
-
-  if (event === 'TOKEN_REFRESHED') {
-    // Supabase automatically refreshes tokens
-    // No action needed - next API call will use new token
-  }
-})
-```
-
-### 2.4 User Roles
+### 2.3 User Roles
 
 | Role | Permissions |
 |------|-------------|
 | `USER` | View/manage own domains only |
 | `ADMIN` | View/manage all domains, manage users |
 
-The backend automatically assigns roles. Admin emails are configured server-side.
-
 ---
 
-## 3. Analysis Flow (SINGLE FLOW)
+## 3. Analysis Flows (TWO PATHS)
 
-> **CRITICAL:** There is only ONE analysis flow. Do NOT implement multiple flows.
+> **CRITICAL:** The system has TWO analysis paths based on domain maturity.
 
-### 3.1 The Single Analysis Endpoint
-
-```
-POST /api/analyze
-```
-
-This is the ONLY endpoint to trigger analysis. Period.
-
-### 3.2 Request Payload
-
-```typescript
-interface AnalysisRequest {
-  // REQUIRED
-  domain: string              // e.g., "example.com" (no https://, no www.)
-  email: string               // User's email for report delivery
-
-  // OPTIONAL - Business Context
-  company_name?: string       // Company display name
-  primary_market?: string     // "se", "us", "uk", "de", etc.
-  primary_goal?: 'traffic' | 'leads' | 'authority' | 'balanced'
-  primary_language?: string   // "en", "sv", "de", etc.
-  secondary_markets?: string[] // Additional markets to analyze
-  known_competitors?: string[] // User-provided competitors
-
-  // OPTIONAL - Analysis Configuration
-  collection_depth?: 'testing' | 'basic' | 'balanced' | 'comprehensive' | 'enterprise'
-  skip_ai_analysis?: boolean   // Skip Claude AI analysis (faster, cheaper)
-  skip_context_intelligence?: boolean  // Skip market/competitor discovery
-  priority?: 'normal' | 'high'
-  max_seed_keywords?: number   // 1-100
-}
-```
-
-### 3.3 Response
-
-```typescript
-interface AnalysisResponse {
-  job_id: string      // UUID[:8] for tracking, e.g., "a1b2c3d4"
-  domain: string      // Normalized domain
-  email: string       // Where report will be sent
-  status: 'pending'   // Always starts as pending
-  message: string     // "Analysis started. You'll receive results at..."
-}
-```
-
-### 3.4 Complete Analysis Flow
+### 3.1 Decision Flow: Which Path?
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ STEP 1: User Clicks "Run Analysis"                              │
+│ User wants to analyze a domain                                   │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ STEP 2: Frontend Sends POST /api/analyze                        │
+│ STEP 1: Check Domain Maturity                                    │
 │                                                                  │
-│ Request:                                                         │
-│ {                                                                │
-│   "domain": "example.com",                                       │
-│   "email": "user@example.com",                                   │
-│   "primary_market": "us",                                        │
-│   "primary_goal": "traffic",                                     │
-│   "collection_depth": "balanced"                                 │
-│ }                                                                │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ STEP 3: Backend Returns Immediately (~1 second)                  │
+│ GET /api/greenfield/maturity/{domain}                           │
+│ (Public endpoint - no auth required)                             │
 │                                                                  │
 │ Response:                                                        │
 │ {                                                                │
-│   "job_id": "a1b2c3d4",                                         │
-│   "domain": "example.com",                                       │
-│   "status": "pending",                                           │
-│   "message": "Analysis started..."                               │
+│   "maturity": "greenfield" | "emerging" | "established",        │
+│   "domain_rating": 5,                                            │
+│   "organic_keywords": 50,                                        │
+│   "organic_traffic": 100,                                        │
+│   "requires_greenfield": true | false                            │
 │ }                                                                │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                              ▼
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+┌─────────────────────────┐     ┌─────────────────────────┐
+│ requires_greenfield:    │     │ requires_greenfield:    │
+│        TRUE             │     │        FALSE            │
+│                         │     │                         │
+│ → GREENFIELD PATH       │     │ → STANDARD PATH         │
+│   (new/weak domains)    │     │   (established domains) │
+└─────────────────────────┘     └─────────────────────────┘
+```
+
+### 3.2 Maturity Thresholds
+
+| Metric | Greenfield | Emerging | Established |
+|--------|------------|----------|-------------|
+| Domain Rating | 0-10 | 11-30 | 31+ |
+| Organic Keywords | 0-100 | 101-1000 | 1001+ |
+| Organic Traffic | 0-500 | 501-5000 | 5001+ |
+
+**Decision Rule:** `requires_greenfield = true` if maturity is "greenfield" or "emerging"
+
+---
+
+### 3.3 PATH A: Standard Analysis (Established Domains)
+
+For domains with DR > 30 or keywords > 1000.
+
+**Endpoint:** `POST /api/analyze`
+
+```typescript
+interface StandardAnalysisRequest {
+  // REQUIRED
+  domain: string              // e.g., "example.com"
+  email: string               // User's email for report delivery
+
+  // OPTIONAL - Business Context
+  company_name?: string
+  primary_market?: string     // "se", "us", "uk", "de", etc.
+  primary_goal?: 'traffic' | 'leads' | 'authority' | 'balanced'
+  primary_language?: string   // "en", "sv", "de", etc.
+  secondary_markets?: string[]
+  known_competitors?: string[]
+
+  // OPTIONAL - Analysis Configuration
+  collection_depth?: 'testing' | 'basic' | 'balanced' | 'comprehensive' | 'enterprise'
+  skip_ai_analysis?: boolean
+  skip_context_intelligence?: boolean
+  max_seed_keywords?: number  // 1-100
+}
+```
+
+**Response:**
+```typescript
+interface StandardAnalysisResponse {
+  job_id: string      // UUID[:8] for tracking
+  domain: string
+  email: string
+  status: 'pending'
+  message: string
+}
+```
+
+**Flow:**
+```
+POST /api/analyze
+       │
+       ▼
+Poll GET /api/jobs/{job_id} every 10 seconds
+       │
+       ├── status: "pending" or "running" → keep polling
+       │
+       └── status: "completed" → Redirect to dashboard
+           OR
+           status: "failed" → Show error
+```
+
+---
+
+### 3.4 PATH B: Greenfield Analysis (New/Weak Domains)
+
+For domains with DR < 30 and keywords < 1000. **This is a multi-step flow with user interaction.**
+
+#### Step 1: Start Greenfield Analysis
+
+**Endpoint:** `POST /api/greenfield/analyze`
+
+```typescript
+interface GreenfieldAnalysisRequest {
+  // REQUIRED
+  domain: string
+  business_name: string
+  business_description: string
+  primary_offering: string
+  target_market: string       // "United States", "Sweden", etc.
+
+  // OPTIONAL
+  industry_vertical?: string
+  seed_keywords?: string[]    // Keywords you want to target
+  known_competitors?: string[]
+  target_audience?: string
+}
+```
+
+**Response:**
+```typescript
+interface GreenfieldStartResponse {
+  analysis_run_id: string     // UUID
+  session_id: string          // Competitor session UUID
+  status: 'awaiting_curation'
+  message: string
+  next_step: string           // "/api/greenfield/sessions/{session_id}"
+}
+```
+
+#### Step 2: Get Competitor Candidates (Auto-discovered)
+
+**Endpoint:** `GET /api/greenfield/sessions/{session_id}`
+
+```typescript
+interface CompetitorSession {
+  session_id: string
+  analysis_run_id: string
+  status: 'awaiting_curation' | 'curated' | 'completed'
+  candidates: CompetitorCandidate[]
+  candidates_count: number
+  required_removals: number   // How many must be removed
+  min_final_count: number     // Minimum competitors needed
+  max_final_count: number     // Maximum competitors allowed
+}
+
+interface CompetitorCandidate {
+  domain: string
+  discovery_source: 'perplexity' | 'serp' | 'traffic_share' | 'user_provided'
+  domain_rating: number
+  organic_traffic: number
+  organic_keywords: number
+  relevance_score: number     // 0-1
+  suggested_purpose: string   // 'benchmark_peer', 'keyword_source', etc.
+  discovery_reason: string
+}
+```
+
+#### Step 3: User Curates Competitors
+
+**Endpoint:** `POST /api/greenfield/sessions/{session_id}/curate`
+
+```typescript
+interface CurationInput {
+  removals: Array<{
+    domain: string
+    reason: 'not_relevant' | 'too_large' | 'too_small' | 'different_market' | 'other'
+    note?: string
+  }>
+  additions: Array<{
+    domain: string
+    purpose?: string
+  }>
+  purpose_overrides: Array<{
+    domain: string
+    new_purpose: 'benchmark_peer' | 'keyword_source' | 'link_source' | 'content_model' | 'aspirational'
+  }>
+}
+```
+
+**Response:**
+```typescript
+interface CurationResponse {
+  session_id: string
+  status: 'curated' | 'completed'
+  final_competitors: FinalCompetitor[]
+  competitor_count: number
+  removed_count: number
+  added_count: number
+  finalized_at: string
+}
+```
+
+#### Step 4: View Greenfield Dashboard
+
+After curation, the analysis continues in background. Dashboard becomes available.
+
+**Endpoint:** `GET /api/greenfield/dashboard/{analysis_run_id}`
+
+```typescript
+interface GreenfieldDashboard {
+  domain: string
+  analysis_run_id: string
+  maturity: 'greenfield' | 'emerging'
+
+  // Competitors
+  competitors: FinalCompetitor[]
+  competitor_count: number
+
+  // Market opportunity (TAM/SAM/SOM)
+  market_opportunity: {
+    total_addressable_market: number
+    serviceable_addressable_market: number
+    serviceable_obtainable_market: number
+    market_opportunity_score: number
+    competition_intensity: number
+  }
+
+  // Beachhead keywords (easiest to win)
+  beachhead_keywords: BeachheadKeyword[]
+  beachhead_count: number
+  total_beachhead_volume: number
+  avg_winnability: number
+
+  // Traffic projections
+  traffic_projections: {
+    conservative: TrafficScenario
+    expected: TrafficScenario
+    aggressive: TrafficScenario
+  }
+
+  // Growth roadmap
+  growth_roadmap: GrowthPhase[]
+}
+```
+
+---
+
+### 3.5 Complete Greenfield Flow Diagram
+
+```
 ┌─────────────────────────────────────────────────────────────────┐
-│ STEP 4: Frontend Polls GET /api/jobs/{job_id}                   │
-│                                                                  │
-│ Poll every 10 seconds until status != "running"                  │
-│                                                                  │
-│ Possible statuses:                                               │
-│ - "pending"   → Show "Starting analysis..."                      │
-│ - "running"   → Show progress indicator                          │
-│ - "completed" → Show success, link to dashboard                  │
-│ - "failed"    → Show error message                               │
+│ 1. POST /api/greenfield/analyze                                  │
+│    → Returns analysis_run_id + session_id                        │
+│    → Status: "awaiting_curation"                                 │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ STEP 5: On "completed" - Redirect to Dashboard                   │
-│                                                                  │
-│ GET /api/domains → Find the domain that was just analyzed        │
-│ Navigate to /dashboard/{domain_id}                               │
-│                                                                  │
-│ The dashboard data is already precomputed and cached!            │
+│ 2. GET /api/greenfield/sessions/{session_id}                     │
+│    → Returns 15+ competitor candidates (auto-discovered)         │
+│    → User reviews candidates in UI                               │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 3. POST /api/greenfield/sessions/{session_id}/curate             │
+│    → User removes irrelevant competitors                         │
+│    → User adds known competitors                                 │
+│    → User overrides purposes if needed                           │
+│    → Returns final competitor set (5-10 competitors)             │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 4. Analysis continues in background...                           │
+│    → Keyword extraction from competitors                         │
+│    → Winnability scoring                                         │
+│    → Beachhead identification                                    │
+│    → Market sizing (TAM/SAM/SOM)                                 │
+│    → Traffic projections                                         │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 5. GET /api/greenfield/dashboard/{analysis_run_id}               │
+│    → Full greenfield dashboard with beachheads, projections      │
 └─────────────────────────────────────────────────────────────────┘
 ```
-
-### 3.5 Polling Implementation
-
-```typescript
-// React Query polling example
-function useAnalysisStatus(jobId: string | null) {
-  return useQuery({
-    queryKey: ['analysis', 'status', jobId],
-    queryFn: () => apiClient(`/api/jobs/${jobId}`),
-    enabled: !!jobId,
-    refetchInterval: (data) => {
-      // Stop polling when complete or failed
-      if (data?.status === 'completed' || data?.status === 'failed') {
-        return false
-      }
-      return 10000 // Poll every 10 seconds
-    },
-  })
-}
-```
-
-### 3.6 Analysis Status Response
-
-```typescript
-interface JobStatus {
-  job_id: string
-  domain: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
-  started_at: string | null   // ISO timestamp
-  completed_at: string | null // ISO timestamp
-  error: string | null        // Error message if failed
-}
-```
-
-### 3.7 What Happens During Analysis (Backend)
-
-| Phase | Duration | What Happens |
-|-------|----------|--------------|
-| Context Intelligence | 40-60s | Market detection, competitor discovery |
-| Data Collection | 120-300s | DataForSEO API calls (keywords, backlinks, etc.) |
-| Quality Validation | 10-20s | Data quality checks |
-| AI Analysis | 120-180s | Claude AI 4-loop analysis |
-| Report Generation | 30-60s | PDF creation |
-| Email Delivery | 30s | Send report via Resend |
-| Cache Precomputation | 5s | Prepare dashboard cache |
-
-**Total: ~8-12 minutes** for balanced depth.
-
-### 3.8 After Analysis Completes
-
-1. User receives email with PDF report
-2. Domain appears in their domain list
-3. Dashboard shows precomputed data (instant load)
-4. Strategy Builder becomes available for that domain
 
 ---
 
 ## 4. API Endpoints Reference
 
-### 4.1 Domains
+### 4.1 Health & Status
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/domains` | Required | List user's domains |
-| GET | `/api/domains/{domain_id}` | Required | Get single domain |
+| GET | `/` | No | Basic health check |
+| GET | `/api/health` | No | Detailed health with DB status |
+| GET | `/api/database` | No | Database status (debug) |
 
-**Response: Domain List**
-```typescript
-interface Domain {
-  id: string           // UUID
-  domain: string       // "example.com"
-  display_name: string
-  industry?: string
-  business_type?: string
-  target_market?: string
-  is_active: boolean
-  analysis_count: number
-  first_analyzed_at?: string
-  last_analyzed_at?: string
-  created_at: string
-}
-```
+### 4.2 Domain Maturity (Pre-Analysis)
 
-### 4.2 Dashboard (Primary Data Source)
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/api/greenfield/maturity/{domain}` | **No** | Check if domain needs greenfield flow |
 
-> **IMPORTANT:** Use the bundle endpoint to fetch all dashboard data in ONE request.
+### 4.3 Standard Analysis
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/api/analyze` | Optional* | Trigger standard analysis |
+| GET | `/api/jobs/{job_id}` | No | Get job status |
+
+*Analysis can be triggered without auth (email required), but domain ownership requires auth.
+
+### 4.4 Greenfield Analysis
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/api/greenfield/analyze` | **Yes** | Start greenfield analysis |
+| POST | `/api/greenfield/sessions` | **Yes** | Create competitor session |
+| GET | `/api/greenfield/sessions/{session_id}` | **Yes** | Get session with candidates |
+| POST | `/api/greenfield/sessions/{session_id}/curate` | **Yes** | Submit curation decisions |
+| PATCH | `/api/greenfield/sessions/{session_id}/competitors` | **Yes** | Update competitors post-curation |
+
+### 4.5 Greenfield Dashboard
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/api/greenfield/dashboard/{analysis_run_id}` | **Yes** | Full greenfield dashboard |
+| GET | `/api/greenfield/dashboard/{analysis_run_id}/beachheads` | **Yes** | Beachhead keywords |
+| GET | `/api/greenfield/dashboard/{analysis_run_id}/market-map` | **Yes** | Market opportunity sizing |
+| GET | `/api/greenfield/dashboard/{analysis_run_id}/projections` | **Yes** | Traffic projections |
+| GET | `/api/greenfield/dashboard/{analysis_run_id}/roadmap` | **Yes** | Growth roadmap |
+| PATCH | `/api/greenfield/keywords/{keyword_id}/phase` | **Yes** | Update keyword phase |
+
+### 4.6 Standard Dashboard (Established Domains)
 
 | Method | Endpoint | Auth | Cache | Description |
 |--------|----------|------|-------|-------------|
-| GET | `/api/dashboard/{domain_id}/bundle` | Required | 5 min | **ALL dashboard data** |
-| GET | `/api/dashboard/{domain_id}/overview` | Required | 4 hours | Health scores, metrics |
-| GET | `/api/dashboard/{domain_id}/sparklines` | Required | 6 hours | Position trends |
-| GET | `/api/dashboard/{domain_id}/sov` | Required | 8 hours | Share of Voice |
-| GET | `/api/dashboard/{domain_id}/battleground` | Required | 8 hours | Attack/Defend keywords |
-| GET | `/api/dashboard/{domain_id}/clusters` | Required | 12 hours | Topical authority |
-| GET | `/api/dashboard/{domain_id}/content-audit` | Required | 12 hours | KUCK recommendations |
-| GET | `/api/dashboard/{domain_id}/opportunities` | Required | 8 hours | Ranked opportunities |
-| GET | `/api/dashboard/{domain_id}/intelligence-summary` | Required | 24 hours | AI summary |
+| GET | `/api/dashboard/{domain_id}/bundle` | **Yes** | 5 min | **ALL dashboard data in one request** |
+| GET | `/api/dashboard/{domain_id}/overview` | **Yes** | 4 hours | Health scores, metrics |
+| GET | `/api/dashboard/{domain_id}/sov` | **Yes** | 8 hours | Share of Voice |
+| GET | `/api/dashboard/{domain_id}/sparklines` | **Yes** | 6 hours | Position trends |
+| GET | `/api/dashboard/{domain_id}/battleground` | **Yes** | 8 hours | Attack/Defend keywords |
+| GET | `/api/dashboard/{domain_id}/clusters` | **Yes** | 12 hours | Topical authority |
+| GET | `/api/dashboard/{domain_id}/content-audit` | **Yes** | 12 hours | KUCK recommendations |
+| GET | `/api/dashboard/{domain_id}/opportunities` | **Yes** | 8 hours | Ranked opportunities |
+| GET | `/api/dashboard/{domain_id}/intelligence-summary` | **Yes** | 24 hours | AI summary |
 
-**Bundle Endpoint (RECOMMENDED):**
+**Bundle Endpoint (Recommended):**
 ```
 GET /api/dashboard/{domain_id}/bundle?include=overview,sparklines,sov,battleground,clusters,content_audit,opportunities
 ```
 
-This returns all components in ONE request instead of 7 separate calls.
-
-**Bundle Response:**
-```typescript
-interface DashboardBundle {
-  overview: DashboardOverview
-  sparklines: SparklineData
-  sov: ShareOfVoiceData
-  battleground: BattlegroundData
-  clusters: ClusterData
-  content_audit: ContentAuditData
-  opportunities: OpportunityData
-  cached_at: string
-  analysis_id: string
-}
-```
-
-### 4.3 Dashboard Data Types
-
-**Overview:**
-```typescript
-interface DashboardOverview {
-  health_scores: {
-    overall: number        // 0-100
-    technical: number
-    content: number
-    authority: number
-  }
-  metrics: {
-    organic_traffic: number
-    organic_keywords: number
-    domain_rating: number
-    referring_domains: number
-    // Each has: value, change, change_percent
-  }
-  position_distribution: {
-    pos_1: number
-    pos_2_3: number
-    pos_4_10: number
-    pos_11_20: number
-    pos_21_50: number
-    pos_51_100: number
-  }
-  quick_stats: {
-    keywords_improved: number
-    keywords_declined: number
-    new_keywords: number
-    lost_keywords: number
-  }
-}
-```
-
-**Share of Voice:**
-```typescript
-interface ShareOfVoiceData {
-  target_share: number      // Your share %
-  total_market_traffic: number
-  competitors: Array<{
-    domain: string
-    traffic: number
-    share_percent: number
-    keyword_count: number
-  }>
-}
-```
-
-**Battleground:**
-```typescript
-interface BattlegroundData {
-  attack: {
-    easy: Keyword[]    // Low difficulty, competitors rank
-    hard: Keyword[]    // High difficulty, big opportunity
-  }
-  defend: {
-    priority: Keyword[]  // Your keywords at risk
-    watch: Keyword[]     // Monitor these
-  }
-}
-```
-
-**Sparklines:**
-```typescript
-interface SparklineData {
-  keywords: Array<{
-    keyword: string
-    keyword_id: string
-    positions: Array<{
-      date: string      // ISO date
-      position: number  // 1-100
-    }>
-    current_position: number
-    trend: 'up' | 'down' | 'stable'
-  }>
-}
-```
-
-### 4.4 Analysis
+### 4.7 Domains
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/api/analyze` | Optional* | Trigger analysis |
-| GET | `/api/jobs/{job_id}` | None | Get job status |
-| GET | `/api/domains/{domain_id}/analyses` | Required | List past analyses |
+| GET | `/api/domains` | **Yes** | List user's domains |
+| GET | `/api/domains/{domain_id}` | **Yes** | Get single domain |
+| GET | `/api/domains/{domain_id}/analyses` | **Yes** | List past analyses |
 
-*Analysis can be triggered without auth (email required), but domain ownership requires auth.
-
-### 4.5 Strategy Builder
+### 4.8 Strategy Builder
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/domains/{domain_id}/strategies` | Required | List strategies |
-| POST | `/api/strategies` | Required | Create strategy |
-| GET | `/api/strategies/{id}` | Required | Get strategy |
-| PATCH | `/api/strategies/{id}` | Required | Update strategy |
-| DELETE | `/api/strategies/{id}` | Required | Delete strategy |
-| GET | `/api/strategies/{id}/threads` | Required | List threads |
-| POST | `/api/strategies/{id}/threads` | Required | Create thread |
-| PATCH | `/api/threads/{id}` | Required | Update thread |
-| DELETE | `/api/threads/{id}` | Required | Delete thread |
-| GET | `/api/threads/{id}/keywords` | Required | Get thread keywords |
-| POST | `/api/threads/{id}/keywords` | Required | Assign keywords |
-| DELETE | `/api/threads/{id}/keywords` | Required | Remove keywords |
-| GET | `/api/strategies/{id}/available-keywords` | Required | Unassigned keywords |
-| POST | `/api/strategies/{id}/export` | Required | Export strategy |
+| GET | `/api/domains/{domain_id}/strategies` | **Yes** | List strategies |
+| POST | `/api/strategies` | **Yes** | Create strategy |
+| GET | `/api/strategies/{id}` | **Yes** | Get strategy |
+| PATCH | `/api/strategies/{id}` | **Yes** | Update strategy |
+| DELETE | `/api/strategies/{id}` | **Yes** | Delete strategy |
+| POST | `/api/strategies/{id}/duplicate` | **Yes** | Duplicate strategy |
+| POST | `/api/strategies/{id}/archive` | **Yes** | Archive strategy |
+| POST | `/api/strategies/{id}/restore` | **Yes** | Restore strategy |
+| GET | `/api/strategies/{id}/threads` | **Yes** | List threads |
+| POST | `/api/strategies/{id}/threads` | **Yes** | Create thread |
+| PATCH | `/api/threads/{id}` | **Yes** | Update thread |
+| POST | `/api/threads/{id}/move` | **Yes** | Reorder thread |
+| DELETE | `/api/threads/{id}` | **Yes** | Delete thread |
+| GET | `/api/threads/{id}/keywords` | **Yes** | Get thread keywords |
+| POST | `/api/threads/{id}/keywords` | **Yes** | Assign keywords |
+| DELETE | `/api/threads/{id}/keywords` | **Yes** | Remove keywords |
+| GET | `/api/strategies/{id}/available-keywords` | **Yes** | Unassigned keywords |
+| GET | `/api/strategies/{id}/suggested-clusters` | **Yes** | AI-suggested clusters |
+| POST | `/api/strategies/{id}/assign-cluster` | **Yes** | Assign cluster to thread |
+| POST | `/api/strategies/{id}/keywords/batch-move` | **Yes** | Batch move keywords |
+| GET | `/api/threads/{id}/topics` | **Yes** | List topics |
+| POST | `/api/threads/{id}/topics` | **Yes** | Create topic |
+| PATCH | `/api/topics/{id}` | **Yes** | Update topic |
+| POST | `/api/topics/{id}/move` | **Yes** | Reorder topic |
+| POST | `/api/topics/{id}/move-to-thread` | **Yes** | Move to different thread |
+| DELETE | `/api/topics/{id}` | **Yes** | Delete topic |
+| GET | `/api/keywords/{id}/format-recommendation` | **Yes** | Get format recommendation |
+| POST | `/api/strategies/{id}/validate-export` | **Yes** | Validate before export |
+| POST | `/api/strategies/{id}/export` | **Yes** | Export strategy |
+| GET | `/api/strategies/{id}/exports` | **Yes** | Export history |
+| GET | `/api/exports/{id}/download` | **Yes** | Download export file |
+| GET | `/api/strategies/{id}/activity` | **Yes** | Activity log |
 
-### 4.6 User Management
+### 4.9 Users
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/users/me` | Required | Current user profile |
-| PATCH | `/api/users/me` | Required | Update profile |
-| GET | `/api/users` | Admin | List all users |
-| PATCH | `/api/users/{id}/role` | Admin | Change user role |
+| GET | `/api/users/me` | **Yes** | Current user profile |
+| PATCH | `/api/users/me` | **Yes** | Update profile |
+| GET | `/api/users` | **Admin** | List all users |
+| GET | `/api/users/{id}` | **Admin** | Get user by ID |
+| PATCH | `/api/users/{id}/role` | **Admin** | Change role |
+| DELETE | `/api/users/{id}` | **Admin** | Delete user |
+| POST | `/api/users/{id}/enable` | **Admin** | Enable user |
 
-### 4.7 Cache Management (Admin)
+### 4.10 Cache Management
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/cache/health` | None | Cache health check |
-| GET | `/api/cache/stats` | None | Cache statistics |
-| POST | `/api/cache/invalidate/domain/{id}` | Admin | Clear domain cache |
+| GET | `/api/cache/health` | No | Cache health check |
+| GET | `/api/cache/stats` | No | Cache statistics |
+| POST | `/api/cache/invalidate/domain/{id}` | **Admin** | Clear domain cache |
+| POST | `/api/cache/invalidate/analysis/{id}` | **Admin** | Clear analysis cache |
+| POST | `/api/cache/invalidate/all` | **Admin** | Clear ALL cache (emergency) |
+| POST | `/api/cache/precompute/{analysis_id}` | **Admin** | Manually trigger precomputation |
+| POST | `/api/cache/warm/domain/{domain_id}` | **Admin** | Warm cache for domain |
 
 ---
 
@@ -543,33 +591,33 @@ interface AnalysisRun {
   id: string
   domain_id: string
   status: 'pending' | 'collecting' | 'validating' | 'analyzing' | 'generating' | 'completed' | 'failed'
+  analysis_mode: 'standard' | 'greenfield' | 'hybrid'
   current_phase?: string
   progress_percent: number
   data_quality?: 'excellent' | 'good' | 'fair' | 'poor' | 'invalid'
-  data_quality_score?: number
   started_at?: string
   completed_at?: string
-  duration_seconds?: number
   error_message?: string
 }
 
-// Keyword - SEO keyword data
+// Keyword
 interface Keyword {
   id: string
   keyword: string
   search_volume: number
   keyword_difficulty: number
-  cpc?: number
   current_position?: number
   previous_position?: number
-  ranking_url?: string
   estimated_traffic?: number
   search_intent: 'informational' | 'navigational' | 'transactional' | 'commercial'
   opportunity_score: number
-  cluster_name?: string
+  // Greenfield-specific
+  winnability_score?: number
+  beachhead_priority?: number
+  growth_phase?: 1 | 2 | 3
 }
 
-// Competitor - Domain-level competitor
+// Competitor
 interface Competitor {
   id: string
   competitor_domain: string
@@ -580,12 +628,67 @@ interface Competitor {
   keyword_overlap_count: number
   threat_level: 'low' | 'medium' | 'high' | 'critical'
 }
+
+// FinalCompetitor (Greenfield)
+interface FinalCompetitor {
+  domain: string
+  display_name?: string
+  purpose: 'benchmark_peer' | 'keyword_source' | 'link_source' | 'content_model' | 'aspirational'
+  priority: number
+  domain_rating: number
+  organic_traffic: number
+  organic_keywords: number
+  keyword_overlap: number
+  is_user_provided: boolean
+  is_user_curated: boolean
+}
 ```
 
-### 5.2 Strategy Builder Entities
+### 5.2 Greenfield-Specific Models
 
 ```typescript
-// Strategy - Content strategy container
+// Beachhead Keyword
+interface BeachheadKeyword {
+  keyword: string
+  search_volume: number
+  winnability_score: number      // 0-100, higher = easier to win
+  personalized_difficulty: number
+  keyword_difficulty: number
+  beachhead_priority: number     // 1 = top priority
+  growth_phase: 1 | 2 | 3        // 1=Foundation, 2=Traction, 3=Authority
+  has_ai_overview: boolean
+  estimated_traffic: number
+  recommended_content_type: string
+}
+
+// Traffic Projection Scenario
+interface TrafficScenario {
+  scenario: 'conservative' | 'expected' | 'aggressive'
+  confidence: number
+  month_3: number
+  month_6: number
+  month_12: number
+  month_18: number
+  month_24: number
+}
+
+// Growth Phase
+interface GrowthPhase {
+  phase: string
+  phase_number: 1 | 2 | 3
+  months: string
+  focus: string
+  strategy: string
+  keyword_count: number
+  total_volume: number
+  expected_traffic: number
+}
+```
+
+### 5.3 Strategy Builder Entities
+
+```typescript
+// Strategy
 interface Strategy {
   id: string
   domain_id: string
@@ -595,11 +698,9 @@ interface Strategy {
   status: 'draft' | 'approved' | 'archived'
   version: number  // For optimistic locking
   is_archived: boolean
-  created_at: string
-  updated_at: string
 }
 
-// Thread - Topic cluster within strategy
+// Thread (Topic cluster)
 interface StrategyThread {
   id: string
   strategy_id: string
@@ -608,14 +709,12 @@ interface StrategyThread {
   status: 'draft' | 'confirmed' | 'rejected'
   priority: number  // 1-5
   version: number
-  // Aggregated metrics from keywords
+  // Aggregated metrics
   total_search_volume?: number
-  total_traffic?: number
-  avg_difficulty?: number
   keyword_count?: number
 }
 
-// Topic - Content piece within thread
+// Topic (Content piece)
 interface StrategyTopic {
   id: string
   thread_id: string
@@ -626,7 +725,6 @@ interface StrategyTopic {
   content_type: 'pillar' | 'cluster' | 'supporting'
   status: 'draft' | 'confirmed' | 'in_production' | 'published'
   target_url?: string
-  version: number
 }
 ```
 
@@ -644,7 +742,7 @@ export const queryClient = new QueryClient({
     queries: {
       staleTime: 5 * 60 * 1000,    // 5 minutes default
       gcTime: 30 * 60 * 1000,       // 30 minutes garbage collection
-      refetchOnWindowFocus: false,  // Don't refetch on tab focus
+      refetchOnWindowFocus: false,
       retry: 1,
     },
   },
@@ -662,41 +760,52 @@ export const CACHE_TIMES = {
   CONTENT_AUDIT: 12 * 60 * 60 * 1000,     // 12 hours
   AI_SUMMARY: 24 * 60 * 60 * 1000,        // 24 hours
 
+  // Greenfield dashboard
+  GREENFIELD_DASHBOARD: 5 * 60 * 1000,    // 5 min
+  BEACHHEADS: 10 * 60 * 1000,             // 10 min
+  PROJECTIONS: 30 * 60 * 1000,            // 30 min
+
   // Strategy - user edits, volatile
   STRATEGY: 10 * 60 * 1000,               // 10 min
   THREAD_KEYWORDS: 5 * 60 * 1000,         // 5 min
   AVAILABLE_KEYWORDS: 5 * 60 * 1000,      // 5 min
 
   // Real-time
-  ANALYSIS_STATUS: 5 * 1000,              // 5 seconds
+  JOB_STATUS: 0,                          // No cache, always fresh
+  COMPETITOR_SESSION: 30 * 1000,          // 30 seconds
 
   // Static
   DOMAIN_LIST: 30 * 60 * 1000,            // 30 min
+  DOMAIN_MATURITY: 60 * 60 * 1000,        // 1 hour (rarely changes)
 }
 ```
 
 ### 6.2 Query Key Structure
 
 ```typescript
-// Consistent query key patterns
 const queryKeys = {
+  // Domain maturity (pre-analysis)
+  maturity: (domain: string) => ['maturity', domain],
+
   // Domains
   domains: ['domains'],
   domain: (id: string) => ['domain', id],
+  domainAnalyses: (domainId: string) => ['domain', domainId, 'analyses'],
 
-  // Dashboard
+  // Standard Dashboard
   dashboardBundle: (domainId: string) => ['dashboard', domainId, 'bundle'],
   dashboardOverview: (domainId: string) => ['dashboard', domainId, 'overview'],
-  dashboardSparklines: (domainId: string) => ['dashboard', domainId, 'sparklines'],
-  dashboardSov: (domainId: string) => ['dashboard', domainId, 'sov'],
-  dashboardBattleground: (domainId: string) => ['dashboard', domainId, 'battleground'],
-  dashboardClusters: (domainId: string) => ['dashboard', domainId, 'clusters'],
-  dashboardContentAudit: (domainId: string) => ['dashboard', domainId, 'content-audit'],
-  dashboardOpportunities: (domainId: string) => ['dashboard', domainId, 'opportunities'],
+  // ... etc
 
-  // Analysis
-  analysisStatus: (jobId: string) => ['analysis', 'status', jobId],
-  analysisHistory: (domainId: string) => ['analysis', 'history', domainId],
+  // Greenfield
+  greenfieldSession: (sessionId: string) => ['greenfield', 'session', sessionId],
+  greenfieldDashboard: (analysisRunId: string) => ['greenfield', 'dashboard', analysisRunId],
+  greenfieldBeachheads: (analysisRunId: string) => ['greenfield', 'beachheads', analysisRunId],
+  greenfieldProjections: (analysisRunId: string) => ['greenfield', 'projections', analysisRunId],
+  greenfieldRoadmap: (analysisRunId: string) => ['greenfield', 'roadmap', analysisRunId],
+
+  // Jobs
+  jobStatus: (jobId: string) => ['job', jobId],
 
   // Strategy
   strategies: (domainId: string) => ['strategies', domainId],
@@ -707,53 +816,6 @@ const queryKeys = {
 
   // User
   currentUser: ['user', 'me'],
-}
-```
-
-### 6.3 Cache Invalidation
-
-```typescript
-// When analysis completes
-function onAnalysisComplete(domainId: string) {
-  queryClient.invalidateQueries(['domains'])
-  queryClient.invalidateQueries(['dashboard', domainId])
-  queryClient.invalidateQueries(['analysis', 'history', domainId])
-}
-
-// When strategy is updated
-function onStrategyUpdate(strategyId: string, domainId: string) {
-  queryClient.invalidateQueries(['strategy', strategyId])
-  queryClient.invalidateQueries(['strategies', domainId])
-}
-
-// When user logs out
-function onLogout() {
-  queryClient.clear()
-}
-```
-
-### 6.4 ETag Support (Optional Enhancement)
-
-```typescript
-// For conditional requests - saves bandwidth
-async function fetchWithEtag(endpoint: string, cachedEtag?: string) {
-  const headers: HeadersInit = {}
-
-  if (cachedEtag) {
-    headers['If-None-Match'] = cachedEtag
-  }
-
-  const response = await apiClient(endpoint, { headers })
-
-  if (response.status === 304) {
-    // Data unchanged - use cached version
-    return null
-  }
-
-  const etag = response.headers.get('etag')
-  const data = await response.json()
-
-  return { data, etag }
 }
 ```
 
@@ -772,14 +834,21 @@ const routes = {
   // Authenticated
   '/': 'Redirect to /domains',
   '/domains': 'Domain list',
-  '/domains/new': 'Add new domain / Run analysis',
+  '/analyze': 'New analysis (shows maturity check first)',
+
+  // Standard Dashboard
   '/dashboard/:domainId': 'Dashboard overview',
   '/dashboard/:domainId/keywords': 'Keywords table',
   '/dashboard/:domainId/competitors': 'Competitor analysis',
-  '/dashboard/:domainId/backlinks': 'Backlink analysis',
   '/dashboard/:domainId/content': 'Content audit',
-  '/dashboard/:domainId/opportunities': 'Opportunities list',
-  '/strategy/:domainId': 'Strategy builder',
+
+  // Greenfield Flow
+  '/greenfield/analyze': 'Start greenfield analysis',
+  '/greenfield/curate/:sessionId': 'Competitor curation',
+  '/greenfield/dashboard/:analysisRunId': 'Greenfield dashboard',
+
+  // Strategy Builder
+  '/strategy/:domainId': 'Strategy list',
   '/strategy/:domainId/:strategyId': 'Strategy detail',
 
   // Admin
@@ -787,153 +856,65 @@ const routes = {
 }
 ```
 
-### 7.2 Domain List Page
+### 7.2 New Analysis Flow (Start Page)
 
-**State: Loading**
-```
-Show skeleton loaders for domain cards
-```
-
-**State: Empty (No domains)**
-```
-"No domains yet"
-"Run your first SEO analysis to get started"
-[Run Analysis] button
-```
-
-**State: Has Domains**
-```
-List of domain cards showing:
-- Domain name
-- Last analyzed date
-- Health score (if available)
-- Quick metrics (traffic, keywords, DR)
-[View Dashboard] button per domain
-[Run New Analysis] button (global)
-```
-
-### 7.3 Run Analysis Page
-
-**Step 1: Enter Domain**
-```
-Input: Domain URL
-- Normalize input (strip https://, www., trailing slash)
-- Validate format
-
-Input: Email (pre-filled if logged in)
-```
-
-**Step 2: Configure (Optional)**
-```
-Select: Primary Market (dropdown: US, UK, SE, DE, etc.)
-Select: Primary Goal (Traffic, Leads, Authority, Balanced)
-Select: Collection Depth (Basic, Balanced, Comprehensive)
-Input: Known Competitors (optional, comma-separated)
-```
-
-**Step 3: Confirm & Start**
-```
-[Run Analysis] button
-- POST /api/analyze
-- Store job_id
-- Navigate to analysis progress view
-```
-
-**Step 4: Progress View**
-```
-While status === 'pending' || status === 'running':
-  Show progress indicator
-  Show estimated time remaining
-  Poll GET /api/jobs/{job_id} every 10 seconds
-
-When status === 'completed':
-  Show success message
-  [View Dashboard] button
-
-When status === 'failed':
-  Show error message
-  [Try Again] button
-```
-
-### 7.4 Dashboard Page
-
-**Initial Load:**
-```typescript
-// Fetch all dashboard data in one request
-const { data: bundle } = useQuery({
-  queryKey: ['dashboard', domainId, 'bundle'],
-  queryFn: () => apiClient(
-    `/api/dashboard/${domainId}/bundle?include=overview,sparklines,sov,battleground,clusters,content_audit,opportunities`
-  ),
-  staleTime: CACHE_TIMES.DASHBOARD_BUNDLE,
-})
-```
-
-**Layout:**
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ Header: Domain Name + Last Analyzed + [Run New Analysis]        │
-├─────────────────────────────────────────────────────────────────┤
-│ Health Scores: Overall | Technical | Content | Authority        │
-├───────────────────────────────┬─────────────────────────────────┤
-│ Metrics Grid:                 │ Position Distribution Chart     │
-│ - Organic Traffic (+ change)  │ (Pie/Bar chart of pos 1-100)    │
-│ - Keywords (+ change)         │                                  │
-│ - Domain Rating               │                                  │
-│ - Referring Domains           │                                  │
-├───────────────────────────────┴─────────────────────────────────┤
-│ Quick Stats: Improved | Declined | New | Lost                   │
-├─────────────────────────────────────────────────────────────────┤
-│ Share of Voice (Bar chart: you vs competitors)                  │
-├───────────────────────────────┬─────────────────────────────────┤
-│ Attack Keywords               │ Defend Keywords                  │
-│ (Easy wins from competitors)  │ (Your keywords at risk)          │
-├───────────────────────────────┴─────────────────────────────────┤
-│ Top Keywords with Sparklines (30-day position trends)           │
-├─────────────────────────────────────────────────────────────────┤
-│ Topical Clusters (Authority by topic)                           │
-├─────────────────────────────────────────────────────────────────┤
-│ Top Opportunities (Ranked by impact/effort)                     │
+│ Enter Domain: [_____________________]                           │
+│                                                                  │
+│ [Check Domain]                                                   │
 └─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Checking domain maturity...                                      │
+│ GET /api/greenfield/maturity/{domain}                           │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+┌─────────────────────────┐     ┌─────────────────────────┐
+│ GREENFIELD DETECTED     │     │ ESTABLISHED DOMAIN      │
+│                         │     │                         │
+│ DR: 8, Keywords: 50     │     │ DR: 45, Keywords: 5000  │
+│                         │     │                         │
+│ "This is a new domain.  │     │ "Ready for full         │
+│  We'll help you find    │     │  analysis."             │
+│  the best opportunities │     │                         │
+│  to compete."           │     │                         │
+│                         │     │                         │
+│ [Start Greenfield] →    │     │ [Run Analysis] →        │
+│ /greenfield/analyze     │     │ Standard form           │
+└─────────────────────────┘     └─────────────────────────┘
 ```
 
-### 7.5 Strategy Builder
+### 7.3 Greenfield Curation Page
 
-**Create Strategy:**
 ```
-1. Select domain
-2. Select analysis run (defaults to latest)
-3. Enter strategy name
-4. POST /api/strategies
-```
-
-**Thread Management:**
-```
-- Drag & drop to reorder threads
-- Click to expand/collapse
-- Assign keywords from available pool
-- Set priority (1-5)
-- Add custom instructions
-```
-
-**Keyword Assignment:**
-```
-Left panel: Available keywords (not yet assigned)
-  - Filter by search volume, difficulty, intent
-  - Search by keyword text
-  - Select multiple
-
-Right panel: Thread keywords
-  - Drag & drop to reorder
-  - Remove assignments
-  - View metrics summary
-```
-
-**Export:**
-```
-POST /api/strategies/{id}/export
-Format: CSV, Excel, JSON, HTML
-Downloads file with threads, topics, keywords
+┌─────────────────────────────────────────────────────────────────┐
+│ Competitor Curation                                              │
+│                                                                  │
+│ We found 15 potential competitors. Remove at least 5.            │
+│ Final set should be 5-10 competitors.                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│ ☑️ competitor1.com          DR: 35  Traffic: 50K                 │
+│    "Direct competitor in same market"                            │
+│    Purpose: [Benchmark Peer ▼]    [Remove]                      │
+│                                                                  │
+│ ☑️ competitor2.com          DR: 28  Traffic: 30K                 │
+│    "Found via SERP overlap"                                      │
+│    Purpose: [Keyword Source ▼]    [Remove]                      │
+│                                                                  │
+│ ☐ facebook.com             DR: 100  Traffic: 5B                 │
+│    "Too large, not a real competitor"                            │
+│    [REMOVED - not relevant]                                      │
+│                                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│ Add Competitor: [_______________] [Add]                          │
+├─────────────────────────────────────────────────────────────────┤
+│ Selected: 8 competitors    [Finalize & Continue]                │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -954,33 +935,13 @@ VITE_API_URL=https://authoricy-engine-production.up.railway.app
 VITE_APP_ENV=production
 ```
 
-### 8.2 Supabase Client Setup
-
-```typescript
-// src/lib/supabase.ts
-import { createClient } from '@supabase/supabase-js'
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing Supabase environment variables')
-}
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
-```
-
-### 8.3 API Client Setup
+### 8.2 API Client Setup
 
 ```typescript
 // src/lib/api.ts
 import { supabase } from './supabase'
 
 const API_URL = import.meta.env.VITE_API_URL
-
-if (!API_URL) {
-  throw new Error('Missing API URL environment variable')
-}
 
 export async function apiClient<T = unknown>(
   endpoint: string,
@@ -1013,7 +974,6 @@ export async function apiClient<T = unknown>(
     throw new Error(error.detail || `API Error: ${response.status}`)
   }
 
-  // Handle 204 No Content
   if (response.status === 204) {
     return undefined as T
   }
@@ -1024,25 +984,27 @@ export async function apiClient<T = unknown>(
 
 ---
 
-## Summary: Key Points for Frontend
+## Summary: Key Decision Points for Frontend
 
-1. **ONE Analysis Endpoint**: `POST /api/analyze` - no other way to trigger analysis
-2. **Use Bundle Endpoint**: `GET /api/dashboard/{id}/bundle` - one request, all data
-3. **JWT in Every Request**: Get from Supabase, send to our backend
-4. **Poll for Status**: `GET /api/jobs/{job_id}` every 10 seconds
-5. **Match Cache TTLs**: React Query staleTime should match backend TTLs
-6. **Domain Ownership**: Users only see their own domains
-7. **Strategy Version Locking**: Always send `version` field when updating
+1. **First: Check Maturity** - Always call `GET /api/greenfield/maturity/{domain}` before starting analysis
+2. **Route Based on Maturity:**
+   - `requires_greenfield: true` → Greenfield flow with competitor curation
+   - `requires_greenfield: false` → Standard flow with single API call
+3. **Standard Dashboard vs Greenfield Dashboard:**
+   - Standard: `/api/dashboard/{domain_id}/bundle`
+   - Greenfield: `/api/greenfield/dashboard/{analysis_run_id}`
+4. **JWT Required** for all endpoints except:
+   - Health checks
+   - `/api/greenfield/maturity/{domain}`
+   - `/api/jobs/{job_id}`
 
 ---
 
 ## Appendix: Error Responses
 
 ```typescript
-// Standard error format
 interface APIError {
   detail: string
-  // Optional additional fields
   code?: string
   field?: string
 }
@@ -1051,8 +1013,8 @@ interface APIError {
 // 400 - Bad Request (validation error)
 // 401 - Unauthorized (missing/invalid token)
 // 403 - Forbidden (authenticated but not authorized)
-// 404 - Not Found (resource doesn't exist)
-// 409 - Conflict (version mismatch for optimistic locking)
-// 422 - Unprocessable Entity (semantic validation error)
+// 404 - Not Found
+// 409 - Conflict (version mismatch)
+// 422 - Unprocessable Entity
 // 500 - Internal Server Error
 ```
