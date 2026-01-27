@@ -496,6 +496,8 @@ class GreenfieldService:
 
         return {
             **session,
+            # Frontend expects "candidates" not "candidate_competitors"
+            "candidates": candidates,
             "candidates_count": len(candidates),
             "required_removals": required_removals,
             "min_final_count": 8,
