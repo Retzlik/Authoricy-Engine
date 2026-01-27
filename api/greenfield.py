@@ -753,6 +753,9 @@ async def start_greenfield_analysis(
 
         # Trigger competitor discovery with clients
         if dataforseo_login and dataforseo_password:
+            logger.info(
+                "DataForSEO credentials configured - SERP discovery and metric enrichment ENABLED"
+            )
             async with DataForSEOClient(
                 login=dataforseo_login,
                 password=dataforseo_password
@@ -773,7 +776,11 @@ async def start_greenfield_analysis(
                 )
         else:
             # No DataForSEO credentials - use service with just external clients
-            logger.warning("DataForSEO credentials not configured - SERP discovery disabled")
+            logger.error(
+                "DataForSEO credentials NOT configured! "
+                "SERP discovery DISABLED. Metric enrichment (DR, Traffic, Keywords) DISABLED. "
+                "Set DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD environment variables to enable."
+            )
             service_with_clients = GreenfieldService(
                 external_api_clients=external_clients,
             )

@@ -31,47 +31,35 @@ from src.scoring.greenfield import (
 logger = logging.getLogger(__name__)
 
 
-# Business context extraction patterns - comprehensive competitor detection
-COMPETITOR_PATTERNS = [
-    # Direct comparison patterns
-    r"compared to (\w+(?:\.\w+)?)",
-    r"alternative to (\w+(?:\.\w+)?)",
-    r"vs\.?\s+(\w+(?:\.\w+)?)",
-    r"versus (\w+(?:\.\w+)?)",
-    r"unlike (\w+(?:\.\w+)?)",
-    r"better than (\w+(?:\.\w+)?)",
-    r"faster than (\w+(?:\.\w+)?)",
-    r"cheaper than (\w+(?:\.\w+)?)",
-    r"more powerful than (\w+(?:\.\w+)?)",
-    # Migration/switching patterns
-    r"switch(?:ing)? from (\w+(?:\.\w+)?)",
-    r"migrat(?:e|ing) from (\w+(?:\.\w+)?)",
-    r"moving from (\w+(?:\.\w+)?)",
-    r"replac(?:e|ing) (\w+(?:\.\w+)?)",
-    r"instead of (\w+(?:\.\w+)?)",
-    # Similar/competitor patterns
-    r"(?:similar|like) (\w+(?:\.\w+)?)",
-    r"competitors? (?:like|such as|including) (\w+(?:\.\w+)?)",
-    r"(?:tools?|products?|solutions?) like (\w+(?:\.\w+)?)",
-    # Integration patterns (often mention related tools)
-    r"integrates? with (\w+(?:\.\w+)?)",
-    r"works? with (\w+(?:\.\w+)?)",
-    r"connects? to (\w+(?:\.\w+)?)",
-]
+# IMPORTANT: Firecrawl is used ONLY for business context extraction, NOT competitor discovery.
+# Competitors should come from: User input, Perplexity AI, and SERP analysis.
+# Scraping the target's own website will only find tools they USE, not competitors.
 
-# Known competitor brand names to look for (common SaaS/tech brands)
-KNOWN_COMPETITOR_BRANDS = {
-    "hubspot", "salesforce", "zendesk", "intercom", "drift", "mailchimp",
-    "ahrefs", "semrush", "moz", "screaming frog", "majestic",
-    "slack", "asana", "monday", "trello", "notion", "clickup", "jira",
-    "shopify", "woocommerce", "bigcommerce", "magento", "squarespace", "wix",
-    "stripe", "paypal", "square", "braintree",
-    "zapier", "make", "automate.io", "integromat", "n8n",
-    "datadog", "newrelic", "splunk", "grafana", "prometheus",
+# These are NON-COMPETITOR tools/services that should be EXCLUDED if found
+# (payment processors, infrastructure, analytics, etc.)
+NON_COMPETITOR_TOOLS = {
+    # Payment/Financial
+    "stripe", "paypal", "square", "braintree", "plaid", "wise",
+    # Infrastructure/Hosting
     "aws", "azure", "google cloud", "digitalocean", "heroku", "vercel",
+    "cloudflare", "fastly", "netlify", "railway",
+    # Analytics/Monitoring
     "segment", "amplitude", "mixpanel", "heap", "fullstory", "hotjar",
-    "figma", "sketch", "adobe xd", "invision", "canva",
-    "github", "gitlab", "bitbucket", "sourcegraph",
+    "datadog", "newrelic", "splunk", "grafana", "prometheus", "sentry",
+    "google analytics", "plausible",
+    # Dev Tools
+    "github", "gitlab", "bitbucket", "sourcegraph", "linear", "jira",
+    # Communication/Scheduling
+    "slack", "discord", "intercom", "zendesk", "calendly", "cal.com",
+    "cal", "zoom", "loom", "crisp",
+    # Automation/Integration
+    "zapier", "make", "automate.io", "integromat", "n8n", "pipedream",
+    # Auth/Identity
+    "auth0", "okta", "clerk", "supabase",
+    # Email
+    "sendgrid", "mailgun", "postmark", "mailchimp", "convertkit",
+    # Storage/CDN
+    "cloudinary", "imgix", "uploadthing",
 }
 
 PRICE_PATTERNS = [
@@ -292,36 +280,9 @@ class GreenfieldService:
             elif "monthly" in pricing_lower or "annual" in pricing_lower:
                 context["detected_pricing_model"] = "subscription"
 
-        # Extract mentioned competitors from all content
-        mentioned_competitors = set()
-
-        # Method 1: Pattern-based extraction (e.g., "compared to X", "vs X")
-        for pattern in COMPETITOR_PATTERNS:
-            matches = re.findall(pattern, combined_content, re.IGNORECASE)
-            for match in matches:
-                comp = match.strip().lower()
-                if self._is_valid_competitor_name(comp):
-                    mentioned_competitors.add(comp)
-
-        # Method 2: Known brand detection (direct mentions of known competitors)
-        for brand in KNOWN_COMPETITOR_BRANDS:
-            # Look for brand mentions with word boundaries
-            if re.search(rf"\b{re.escape(brand)}\b", combined_content):
-                mentioned_competitors.add(brand)
-
-        # Method 3: Extract explicit domain mentions (e.g., "ahrefs.com")
-        domain_pattern = r"\b([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:com|io|co|ai|app|org|net))\b"
-        domain_matches = re.findall(domain_pattern, combined_content)
-        for domain in domain_matches:
-            # Filter out generic domains
-            if domain not in {"example.com", "domain.com", "yoursite.com", "website.com"}:
-                mentioned_competitors.add(domain)
-
-        if mentioned_competitors:
-            # Sort by length (longer = more specific = higher quality)
-            sorted_competitors = sorted(mentioned_competitors, key=len, reverse=True)
-            context["self_mentioned_competitors"] = sorted_competitors[:15]
-            logger.info(f"Extracted {len(sorted_competitors)} competitor mentions from website")
+        # NOTE: We do NOT extract "competitors" from the target's website.
+        # Scraping your own site finds TOOLS you use (Stripe, Cal.com, Cloudflare), NOT competitors.
+        # Competitors should come from: Perplexity AI, SERP analysis, and user input.
 
         # Detect business model indicators
         if "saas" in combined_content or "software as a service" in combined_content:
@@ -359,9 +320,10 @@ class GreenfieldService:
         user_context: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Merge scraped context with user-provided context.
+        Merge scraped BUSINESS context with user-provided context.
 
         User-provided values always take priority. Scraped values fill in gaps.
+        NOTE: We do NOT merge "competitors" from website scraping - only business context.
         """
         merged = scraped_context.copy()
 
@@ -370,70 +332,7 @@ class GreenfieldService:
             if value:  # Only override if user provided a non-empty value
                 merged[key] = value
 
-        # Add scraped competitors to known_competitors if not duplicated
-        if "self_mentioned_competitors" in scraped_context:
-            user_competitors = set(
-                c.lower() for c in user_context.get("known_competitors", [])
-            )
-            scraped_competitors = scraped_context["self_mentioned_competitors"]
-
-            new_competitors = [
-                c for c in scraped_competitors
-                if c.lower() not in user_competitors
-            ]
-
-            if new_competitors:
-                merged["website_discovered_competitors"] = new_competitors
-                logger.info(
-                    f"Found {len(new_competitors)} competitors mentioned on website: "
-                    f"{new_competitors}"
-                )
-
         return merged
-
-    def _is_valid_competitor_name(self, name: str) -> bool:
-        """
-        Validate if extracted text is likely a valid competitor name.
-
-        Filters out common false positives like generic words.
-        """
-        if not name or len(name) < 3:
-            return False
-
-        # Filter out generic/stop words that often get matched
-        stop_words = {
-            "the", "and", "for", "with", "your", "our", "this", "that",
-            "from", "into", "than", "other", "more", "less", "most",
-            "best", "top", "new", "old", "big", "small", "fast", "slow",
-            "free", "paid", "premium", "basic", "pro", "plus", "lite",
-            "software", "platform", "tool", "service", "solution", "app",
-            "data", "cloud", "web", "api", "system", "product", "company",
-            "team", "user", "customer", "client", "business", "enterprise",
-        }
-
-        name_lower = name.lower()
-        if name_lower in stop_words:
-            return False
-
-        # If it looks like a domain, validate the TLD
-        if "." in name:
-            parts = name.split(".")
-            tld = parts[-1].lower()
-            if tld in VALID_TLDS:
-                return True
-            # Unknown TLD but has domain-like structure
-            return len(parts) == 2 and len(parts[0]) >= 2
-
-        # Brand name (no dot) - must be substantial
-        # Known brands are always valid
-        if name_lower in KNOWN_COMPETITOR_BRANDS:
-            return True
-
-        # Unknown brand - be stricter (min 4 chars, no numbers only)
-        if len(name) >= 4 and not name.isdigit():
-            return True
-
-        return False
 
     def start_greenfield_analysis(
         self,
@@ -535,6 +434,9 @@ class GreenfieldService:
         seen_domains = set()
 
         # Phase 1: Website Context Acquisition (Firecrawl)
+        # NOTE: Firecrawl is ONLY used to extract BUSINESS CONTEXT (what the company does),
+        # NOT to discover competitors. Scraping your own website finds tools you USE
+        # (Stripe, Cal.com, Cloudflare), not your competitors.
         enhanced_context = business_context or {}
         if target_domain and self.firecrawl_client:
             logger.info(f"Phase 1: Acquiring website context from {target_domain}")
@@ -542,26 +444,7 @@ class GreenfieldService:
                 domain=target_domain,
                 user_context=business_context,
             )
-
-            # Add website-discovered competitors
-            website_competitors = enhanced_context.get("website_discovered_competitors", [])
-            for comp_domain in website_competitors:
-                comp_domain = comp_domain.lower().strip()
-                if comp_domain and comp_domain not in seen_domains:
-                    candidates.append({
-                        "domain": comp_domain,
-                        "discovery_source": "website_scrape",
-                        "discovery_reason": f"Mentioned on {target_domain}'s website",
-                        "domain_rating": 0,
-                        "organic_traffic": 0,
-                        "organic_keywords": 0,
-                        "relevance_score": 0.85,
-                        "suggested_purpose": "benchmark_peer",
-                    })
-                    seen_domains.add(comp_domain)
-
-            if website_competitors:
-                logger.info(f"Website scrape discovered {len(website_competitors)} competitors")
+            logger.info(f"Website context acquired: {enhanced_context.get('scraped_pages', 0)} pages scraped")
 
         # Phase 2: Add user-provided competitors
         for domain in known_competitors:
@@ -628,20 +511,41 @@ class GreenfieldService:
             elif not seed_keywords:
                 logger.warning("SERP DISCOVERY SKIPPED: No seed keywords provided")
 
-        # Deduplicate
+        # Deduplicate AND filter out non-competitors (tools, services, infrastructure)
         seen = set()
         unique_candidates = []
+        filtered_out = []
         for c in candidates:
             domain = c.get("domain", "").lower()
-            if domain and domain not in seen:
-                seen.add(domain)
-                unique_candidates.append(c)
+            if not domain or domain in seen:
+                continue
 
-        # Phase 5: Validate and enrich with metrics
+            # Validate this is an actual competitor, not a tool/service
+            if not self._is_valid_competitor(domain, target_domain):
+                filtered_out.append(domain)
+                continue
+
+            seen.add(domain)
+            unique_candidates.append(c)
+
+        if filtered_out:
+            logger.info(
+                f"Filtered out {len(filtered_out)} non-competitors (tools/services): "
+                f"{filtered_out[:5]}{'...' if len(filtered_out) > 5 else ''}"
+            )
+
+        # Phase 5: Validate and enrich with metrics from DataForSEO
         if self.client:
+            logger.info(f"Enriching {len(unique_candidates)} candidates with metrics...")
             unique_candidates = await self._enrich_candidates(unique_candidates, market)
+        else:
+            logger.warning(
+                "METRIC ENRICHMENT SKIPPED: No DataForSEO client. "
+                "DR, Traffic, and Keywords will be empty. "
+                "Set DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD to enable."
+            )
 
-        # Prepare website context for storage (only relevant fields)
+        # Prepare website context for storage (business context only - NO competitor data)
         website_context_to_store = None
         if enhanced_context.get("scraped_from_website"):
             website_context_to_store = {
@@ -653,7 +557,6 @@ class GreenfieldService:
                 "detected_business_model": enhanced_context.get("detected_business_model"),
                 "detected_target_size": enhanced_context.get("detected_target_size"),
                 "detected_customer_type": enhanced_context.get("detected_customer_type"),
-                "self_mentioned_competitors": enhanced_context.get("self_mentioned_competitors", []),
                 "has_features_page": enhanced_context.get("has_features_page", False),
             }
 
@@ -665,10 +568,13 @@ class GreenfieldService:
         )
 
         # Log discovery summary
+        sources = {}
+        for c in unique_candidates:
+            src = c.get("discovery_source", "unknown")
+            sources[src] = sources.get(src, 0) + 1
         logger.info(
-            f"Competitor discovery complete: {len(unique_candidates)} total candidates "
-            f"(website: {len(enhanced_context.get('website_discovered_competitors', []))}, "
-            f"user: {len(known_competitors)}, AI+SERP: remaining)"
+            f"Competitor discovery complete: {len(unique_candidates)} total candidates. "
+            f"Sources: {sources}"
         )
 
         return {
@@ -792,32 +698,102 @@ class GreenfieldService:
 
         return competitors
 
+    def _is_valid_competitor(self, domain: str, target_domain: Optional[str] = None) -> bool:
+        """
+        Validate that a domain is a legitimate competitor, not a tool/service.
+
+        Filters out:
+        - Known tools/services (payment, hosting, analytics, etc.)
+        - Invalid TLDs
+        - The target domain itself
+        """
+        if not domain:
+            return False
+
+        domain_lower = domain.lower().strip()
+
+        # Skip if it's the target domain
+        if target_domain and domain_lower == target_domain.lower():
+            logger.debug(f"Filtering out {domain}: is target domain")
+            return False
+
+        # Extract domain name without TLD for tool matching
+        domain_parts = domain_lower.split(".")
+        domain_name = domain_parts[0] if domain_parts else domain_lower
+
+        # Check against known non-competitor tools
+        if domain_name in NON_COMPETITOR_TOOLS:
+            logger.debug(f"Filtering out {domain}: is a known tool/service ({domain_name})")
+            return False
+
+        # Also check full domain (for cases like "cal.com")
+        if domain_lower.rstrip(".com").rstrip(".io").rstrip(".app") in NON_COMPETITOR_TOOLS:
+            logger.debug(f"Filtering out {domain}: is a known tool/service")
+            return False
+
+        # Validate TLD
+        tld = domain_parts[-1] if len(domain_parts) > 1 else None
+        if tld and tld not in VALID_TLDS:
+            logger.debug(f"Filtering out {domain}: invalid TLD ({tld})")
+            return False
+
+        return True
+
     async def _enrich_candidates(
         self,
         candidates: List[Dict[str, Any]],
         market: str,
     ) -> List[Dict[str, Any]]:
-        """Enrich candidates with domain metrics."""
+        """
+        Enrich candidates with domain metrics from DataForSEO.
+
+        Fetches:
+        - Domain Rating (DR) from Backlinks Summary API
+        - Organic Traffic from Domain Rank Overview API
+        - Organic Keywords from Domain Rank Overview API
+        - Referring Domains from Backlinks Summary API
+        """
+        enriched = []
         for candidate in candidates:
+            domain = candidate.get("domain", "")
             try:
-                overview = await self.client.get_domain_overview(
-                    domain=candidate["domain"],
-                    location=market,
+                # Fetch domain overview (organic metrics)
+                overview = await self.client.get_domain_overview(domain=domain)
+
+                # Fetch backlink summary (DR, referring domains)
+                backlink_summary = await self.client.get_backlink_summary(domain=domain)
+
+                # Update candidate with metrics (handle None responses)
+                candidate["domain_rating"] = (
+                    backlink_summary.get("domain_rank", 0) if backlink_summary else 0
+                )
+                candidate["organic_traffic"] = (
+                    overview.get("organic_traffic", 0) if overview else 0
+                )
+                candidate["organic_keywords"] = (
+                    overview.get("organic_keywords", 0) if overview else 0
+                )
+                candidate["referring_domains"] = (
+                    backlink_summary.get("referring_domains", 0) if backlink_summary else 0
                 )
 
-                # Domain Rating (DR) comes from backlinks/summary API, NOT domain_overview
-                # The domain_rank_overview API returns pos_1 (keywords in position 1), not DR
-                backlink_summary = await self.client.get_backlink_summary(domain=candidate["domain"])
-
-                candidate["domain_rating"] = backlink_summary.get("domain_rank", 0) if backlink_summary else 0
-                candidate["organic_traffic"] = overview.get("organic_traffic", 0)
-                candidate["organic_keywords"] = overview.get("organic_keywords", 0)
-                candidate["referring_domains"] = backlink_summary.get("referring_domains", 0) if backlink_summary else 0
+                logger.debug(
+                    f"Enriched {domain}: DR={candidate['domain_rating']}, "
+                    f"traffic={candidate['organic_traffic']}, "
+                    f"keywords={candidate['organic_keywords']}"
+                )
 
             except Exception as e:
-                logger.warning(f"Failed to enrich {candidate['domain']}: {e}")
+                logger.warning(f"Failed to enrich {domain}: {e}")
+                # Keep the candidate but with default metrics
+                candidate["domain_rating"] = 0
+                candidate["organic_traffic"] = 0
+                candidate["organic_keywords"] = 0
+                candidate["referring_domains"] = 0
 
-        return candidates
+            enriched.append(candidate)
+
+        return enriched
 
     def submit_curation(
         self,

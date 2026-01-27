@@ -379,6 +379,110 @@ class DataForSEOClient:
             logger.error(f"Unexpected error in keywords data query: {e}")
             return None
 
+    async def get_domain_overview(
+        self,
+        domain: str,
+        location_code: int = 2840,
+        language_name: str = "English",
+        location: str = None,  # Legacy parameter name for compatibility
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get domain overview with organic traffic and keyword metrics.
+
+        Uses DataForSEO Labs Domain Rank Overview API.
+
+        Args:
+            domain: Target domain
+            location_code: DataForSEO location code (default: 2840 = US)
+            language_name: Language name (e.g., "English")
+            location: Legacy parameter (ignored, use location_code)
+
+        Returns:
+            Dict with organic_traffic, organic_keywords, etc. or None on error
+        """
+        try:
+            result = await self.post(
+                "dataforseo_labs/google/domain_rank_overview/live",
+                [{
+                    "target": domain,
+                    "location_code": location_code,
+                    "language_name": language_name,
+                }]
+            )
+
+            tasks = result.get("tasks", [])
+            if tasks and tasks[0].get("result"):
+                task_result = tasks[0]["result"]
+                if task_result and len(task_result) > 0:
+                    item = task_result[0]
+                    # Extract organic metrics from the response
+                    metrics = item.get("metrics", {}).get("organic", {})
+                    return {
+                        "organic_traffic": metrics.get("etv", 0),  # Estimated Traffic Value
+                        "organic_keywords": metrics.get("count", 0),  # Keyword count
+                        "pos_1": metrics.get("pos_1", 0),  # Keywords in position 1
+                        "pos_2_3": metrics.get("pos_2_3", 0),  # Keywords in positions 2-3
+                        "pos_4_10": metrics.get("pos_4_10", 0),  # Keywords in positions 4-10
+                    }
+
+            logger.warning(f"No domain overview data for {domain}")
+            return None
+
+        except DataForSEOError as e:
+            logger.warning(f"Domain overview query failed for '{domain}': {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in domain overview query for '{domain}': {e}")
+            return None
+
+    async def get_backlink_summary(
+        self,
+        domain: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get backlink summary with domain rating and referring domains.
+
+        Uses DataForSEO Backlinks Summary API.
+
+        Args:
+            domain: Target domain
+
+        Returns:
+            Dict with domain_rank (DR), referring_domains, backlinks, etc. or None on error
+        """
+        try:
+            result = await self.post(
+                "backlinks/summary/live",
+                [{
+                    "target": domain,
+                    "internal_list_limit": 0,  # We don't need internal links
+                    "backlinks_status_type": "all",
+                }]
+            )
+
+            tasks = result.get("tasks", [])
+            if tasks and tasks[0].get("result"):
+                task_result = tasks[0]["result"]
+                if task_result and len(task_result) > 0:
+                    item = task_result[0]
+                    return {
+                        "domain_rank": item.get("rank", 0),  # Domain Rating
+                        "referring_domains": item.get("referring_domains", 0),
+                        "backlinks": item.get("backlinks", 0),
+                        "referring_main_domains": item.get("referring_main_domains", 0),
+                        "referring_ips": item.get("referring_ips", 0),
+                    }
+
+            logger.warning(f"No backlink summary data for {domain}")
+            return None
+
+        except DataForSEOError as e:
+            logger.warning(f"Backlink summary query failed for '{domain}': {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in backlink summary query for '{domain}': {e}")
+            return None
+
     async def get_domain_competitors(
         self,
         domain: str,
