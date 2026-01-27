@@ -478,8 +478,17 @@ class DataForSEOClient:
                 task_result = tasks[0]["result"]
                 if task_result and len(task_result) > 0:
                     item = task_result[0]
+                    raw_rank = item.get("rank", 0)
+
+                    # Normalize DataForSEO rank to 0-100 DR scale
+                    from src.scoring.helpers import normalize_domain_rating
+                    normalized_dr = normalize_domain_rating(raw_rank)
+
+                    logger.debug(f"Backlink summary for {domain}: raw_rank={raw_rank}, normalized_dr={normalized_dr}")
+
                     return {
-                        "domain_rank": item.get("rank", 0),  # Domain Rating
+                        "domain_rank": normalized_dr,  # Normalized to 0-100
+                        "raw_dataforseo_rank": raw_rank,  # Keep raw for debugging
                         "referring_domains": item.get("referring_domains", 0),
                         "backlinks": item.get("backlinks", 0),
                         "referring_main_domains": item.get("referring_main_domains", 0),

@@ -52,6 +52,9 @@ from .helpers import (
     get_ctr_for_position,
     normalize_volume,
 
+    # Domain Rating normalization
+    normalize_domain_rating,
+
     # Intent
     INTENT_WEIGHTS,
     SearchIntent,
@@ -163,6 +166,7 @@ __all__ = [
     "CTR_CURVE",
     "get_ctr_for_position",
     "normalize_volume",
+    "normalize_domain_rating",
     "INTENT_WEIGHTS",
     "SearchIntent",
     "get_intent_weight",
