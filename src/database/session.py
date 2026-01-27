@@ -217,6 +217,60 @@ def _ensure_enum_values(conn, enum_name: str, required_values: list) -> None:
         logger.warning(f"Could not update enum {enum_name}: {e}")
 
 
+def _ensure_greenfield_columns(engine) -> None:
+    """
+    Ensure greenfield-related columns exist in analysis_runs table.
+
+    This is a direct fix for the missing analysis_mode column error.
+    Uses simple ALTER TABLE statements that are safe to run multiple times.
+    """
+    with engine.connect() as conn:
+        try:
+            # First, ensure the analysismode enum type exists
+            conn.execute(text("""
+                DO $$ BEGIN
+                    CREATE TYPE analysismode AS ENUM ('standard', 'greenfield', 'hybrid');
+                EXCEPTION
+                    WHEN duplicate_object THEN NULL;
+                END $$
+            """))
+            conn.commit()
+            logger.info("Ensured analysismode enum exists")
+        except Exception as e:
+            logger.warning(f"Could not create analysismode enum: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        # Add each column individually with IF NOT EXISTS
+        columns_to_add = [
+            ("analysis_mode", "analysismode DEFAULT 'standard'"),
+            ("domain_maturity_at_analysis", "VARCHAR(20)"),
+            ("domain_rating_at_analysis", "INTEGER"),
+            ("organic_keywords_at_analysis", "INTEGER"),
+            ("organic_traffic_at_analysis", "INTEGER"),
+            ("greenfield_context", "JSONB"),
+        ]
+
+        for col_name, col_type in columns_to_add:
+            try:
+                conn.execute(text(f"""
+                    ALTER TABLE analysis_runs
+                    ADD COLUMN IF NOT EXISTS {col_name} {col_type}
+                """))
+                conn.commit()
+                logger.debug(f"Ensured column {col_name} exists")
+            except Exception as e:
+                logger.warning(f"Could not add column {col_name}: {e}")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+
+        logger.info("Greenfield columns verified/added")
+
+
 def _run_pending_migrations(engine, conn) -> None:
     """
     Run any pending SQL migrations from the migrations/ directory.
@@ -335,6 +389,14 @@ def init_db(drop_all: bool = False) -> None:
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created successfully")
+
+    # Ensure greenfield columns exist (direct fix for missing analysis_mode)
+    if is_postgres:
+        logger.info("Ensuring greenfield columns exist...")
+        try:
+            _ensure_greenfield_columns(engine)
+        except Exception as e:
+            logger.error(f"Failed to ensure greenfield columns: {e}")
 
     # Run pending migrations (for schema changes like adding columns)
     if is_postgres:
