@@ -743,7 +743,11 @@ async def start_greenfield_analysis(
         try:
             # Initialize external API clients (Perplexity, Firecrawl)
             external_clients = ExternalAPIClients()
-            logger.info(f"External API clients initialized: perplexity={external_clients.perplexity is not None}")
+            logger.info(
+                f"External API clients initialized: "
+                f"perplexity={external_clients.perplexity is not None}, "
+                f"firecrawl={external_clients.firecrawl is not None}"
+            )
         except Exception as e:
             logger.warning(f"Failed to initialize external API clients: {e}")
 
@@ -765,6 +769,7 @@ async def start_greenfield_analysis(
                     known_competitors=request.known_competitors,
                     market=request.target_market.lower().replace(" ", "_")[:2] if request.target_market else "us",
                     business_context=greenfield_context,
+                    target_domain=request.domain,  # Enable Firecrawl website scraping
                 )
         else:
             # No DataForSEO credentials - use service with just external clients
@@ -779,6 +784,7 @@ async def start_greenfield_analysis(
                 known_competitors=request.known_competitors,
                 market=request.target_market.lower().replace(" ", "_")[:2] if request.target_market else "us",
                 business_context=greenfield_context,
+                target_domain=request.domain,  # Enable Firecrawl website scraping
             )
 
         # Cleanup external clients
