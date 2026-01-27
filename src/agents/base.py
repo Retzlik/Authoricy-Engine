@@ -423,9 +423,11 @@ class BaseAgent(ABC):
         result["competitor_count"] = summary.get("competitor_count", 0)
         result["backlink_count"] = summary.get("total_backlinks", 0)
 
-        # Add domain metrics
+        # Domain Rating (DR) comes from backlink_summary, NOT domain_overview
+        # The domain_rank_overview API returns keyword counts, not DR
         domain_overview = data.get("phase1_foundation", {}).get("domain_overview", {})
-        result["domain_rank"] = domain_overview.get("domain_rank", 0)
+        backlink_summary = data.get("phase1_foundation", {}).get("backlink_summary", {})
+        result["domain_rank"] = backlink_summary.get("domain_rank", 0)
         result["organic_traffic"] = domain_overview.get("organic_traffic", 0)
 
         # Add JSON data for each phase (truncated for token management)

@@ -338,7 +338,9 @@ def prepare_validation_data(result: CollectionResult) -> dict:
         "competitors": extract_competitors_from_result(result),
         "backlinks": extract_backlinks_from_result(result),
         "domain_info": {
-            "domain_rating": domain_overview.get("domain_rank") or backlink_summary.get("domain_rank"),
+            # Domain Rating (DR) comes exclusively from backlinks/summary API
+            # The domain_rank_overview API does NOT return DR
+            "domain_rating": backlink_summary.get("domain_rank"),
             "organic_traffic": domain_overview.get("organic_traffic"),
             "organic_keywords": domain_overview.get("organic_keywords"),
             "referring_domains": backlink_summary.get("referring_domains"),

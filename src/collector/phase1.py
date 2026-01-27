@@ -196,9 +196,10 @@ async def fetch_domain_overview(client, domain: str, market: str, language: str)
             "organic_keywords": organic.get("count", 0),
             "organic_traffic": organic.get("etv", 0),
             "paid_keywords": paid.get("count", 0),
-            "rank": organic.get("pos_1", 0),
-            "visibility": organic.get("is_lost", 0),
-            # Add more useful metrics
+            # Note: pos_1 is the count of keywords ranking in position 1, NOT domain rating
+            # Domain Rating (DR) comes from the backlinks/summary API, not domain_rank_overview
+            "keywords_position_1": organic.get("pos_1", 0),
+            "keywords_lost": organic.get("is_lost", 0),
             "featured_snippets": organic.get("is_featured_snippet", 0),
             "local_pack": organic.get("is_local_pack", 0),
         }

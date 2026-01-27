@@ -62,10 +62,11 @@ async def test_basic_collection():
             print(f"\n📊 Domain Overview:")
             print(f"   Organic Keywords: {result.domain_overview.get('organic_keywords', 'N/A')}")
             print(f"   Organic Traffic: {result.domain_overview.get('organic_traffic', 'N/A')}")
-            print(f"   Domain Rank: {result.domain_overview.get('rank', 'N/A')}")
-        
+            print(f"   Keywords in Position 1: {result.domain_overview.get('keywords_position_1', 'N/A')}")
+
         if result.backlink_summary:
             print(f"\n🔗 Backlink Summary:")
+            print(f"   Domain Rating (DR): {result.backlink_summary.get('domain_rank', 'N/A')}")
             print(f"   Total Backlinks: {result.backlink_summary.get('total_backlinks', 'N/A')}")
             print(f"   Referring Domains: {result.backlink_summary.get('referring_domains', 'N/A')}")
         
