@@ -8,6 +8,7 @@ Designed for both Railway (PostgreSQL) and local development (SQLite).
 import os
 import logging
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Generator
 
 from sqlalchemy import create_engine, event, text
@@ -216,6 +217,77 @@ def _ensure_enum_values(conn, enum_name: str, required_values: list) -> None:
         logger.warning(f"Could not update enum {enum_name}: {e}")
 
 
+def _run_pending_migrations(engine, conn) -> None:
+    """
+    Run any pending SQL migrations from the migrations/ directory.
+
+    Migrations are tracked in the schema_migrations table.
+    Only migrations that haven't been applied yet are run.
+    """
+    # Find migrations directory (relative to this file)
+    migrations_dir = Path(__file__).parent.parent.parent / "migrations"
+
+    if not migrations_dir.exists():
+        logger.warning(f"Migrations directory not found: {migrations_dir}")
+        return
+
+    # Ensure schema_migrations table exists
+    try:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version VARCHAR(50) PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                description TEXT
+            )
+        """))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to create schema_migrations table: {e}")
+        return
+
+    # Get list of applied migrations
+    try:
+        result = conn.execute(text("SELECT version FROM schema_migrations"))
+        applied_migrations = {row[0] for row in result}
+    except Exception as e:
+        logger.error(f"Failed to get applied migrations: {e}")
+        applied_migrations = set()
+
+    # Find all migration files and sort them
+    migration_files = sorted(migrations_dir.glob("*.sql"))
+
+    for migration_file in migration_files:
+        version = migration_file.stem  # e.g., "001_add_greenfield_support"
+
+        if version in applied_migrations:
+            logger.debug(f"Migration {version} already applied, skipping")
+            continue
+
+        logger.info(f"Applying migration: {version}")
+
+        try:
+            # Read the migration SQL
+            sql_content = migration_file.read_text()
+
+            # Use raw DBAPI cursor to execute multi-statement SQL
+            raw_conn = conn.connection.dbapi_connection
+            cursor = raw_conn.cursor()
+            cursor.execute(sql_content)
+            raw_conn.commit()
+            cursor.close()
+
+            logger.info(f"Migration {version} applied successfully")
+
+        except Exception as e:
+            try:
+                raw_conn.rollback()
+            except Exception:
+                pass
+            logger.error(f"Failed to apply migration {version}: {e}")
+            # Continue with other migrations - some may still work
+            # The failed migration will be retried on next startup
+
+
 def init_db(drop_all: bool = False) -> None:
     """
     Initialize database - create extensions and all tables.
@@ -263,6 +335,16 @@ def init_db(drop_all: bool = False) -> None:
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created successfully")
+
+    # Run pending migrations (for schema changes like adding columns)
+    if is_postgres:
+        logger.info("Running pending migrations...")
+        try:
+            with engine.connect() as conn:
+                _run_pending_migrations(engine, conn)
+            logger.info("Migrations completed")
+        except Exception as e:
+            logger.error(f"Migration error: {e}")
 
 
 def get_table_count() -> int:
