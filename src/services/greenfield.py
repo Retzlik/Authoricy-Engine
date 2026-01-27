@@ -740,14 +740,19 @@ class GreenfieldService:
         # Extract context fields with better defaults
         company_name = business_context.get("business_name", "the company")
         category = business_context.get("industry_vertical") or business_context.get("primary_offering", "software")
-        offering = business_context.get("business_description", category)
+        offering = business_context.get("business_description") or business_context.get("primary_offering", category)
         customer_type = business_context.get("target_audience") or "B2B companies"
         seed_keywords = business_context.get("seed_keywords", [])
 
+        # Log context for debugging
         logger.info(
-            f"Perplexity discovery for {company_name}: "
-            f"category={category}, keywords={len(seed_keywords)}"
+            f"Perplexity discovery context: company='{company_name}', "
+            f"category='{category}', offering='{offering[:50] if offering else None}...', "
+            f"customer='{customer_type}', keywords={seed_keywords[:5] if seed_keywords else []}"
         )
+
+        if not seed_keywords:
+            logger.warning("No seed_keywords provided for Perplexity discovery - results may be poor")
 
         # Run discovery with full context
         discovered = await discovery.discover_competitors(
@@ -760,8 +765,9 @@ class GreenfieldService:
 
         logger.info(f"Perplexity discovered {len(discovered)} unique competitors")
 
-        # Convert to dict format
+        # Convert to dict format - track how many have domains
         competitors = []
+        without_domain = 0
         for disc in discovered:
             if disc.domain:
                 competitors.append({
@@ -774,6 +780,15 @@ class GreenfieldService:
                     "relevance_score": disc.confidence,
                     "suggested_purpose": "keyword_source",
                 })
+            else:
+                without_domain += 1
+                logger.debug(f"Competitor '{disc.name}' has no domain - skipped")
+
+        if without_domain > 0:
+            logger.warning(
+                f"Perplexity: {without_domain}/{len(discovered)} competitors had no domain and were skipped. "
+                f"Only {len(competitors)} competitors with domains will be used."
+            )
 
         return competitors
 

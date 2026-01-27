@@ -235,16 +235,34 @@ class PerplexityClient:
 
         Uses multiple patterns to find company mentions:
         - Company Name (domain.com)
-        - Company Name - domain.com
+        - **Company Name** (domain.com) - bold markdown
         - Numbered lists with company names
-        - Bold/emphasized company names
         """
         competitors = []
         seen_names = set()
 
-        # Pattern 1: Company (domain.com) or Company [domain.com]
-        pattern1 = r"([A-Z][a-zA-Z0-9\s&\-\.]+?)\s*[\(\[]([a-zA-Z0-9\-]+\.[a-zA-Z]{2,})[^\)]*[\)\]]"
-        for match in re.finditer(pattern1, text):
+        logger.debug(f"Extracting competitors from text ({len(text)} chars): {text[:300]}...")
+
+        # Pattern 1: Handle bold markdown followed by domain - **Company** (domain.com)
+        pattern_bold_domain = r"\*\*([^*]+)\*\*\s*[\(\[]([a-zA-Z0-9\-]+\.[a-zA-Z]{2,})[^\)]*[\)\]]"
+        for match in re.finditer(pattern_bold_domain, text):
+            name = match.group(1).strip()
+            domain = match.group(2).lower()
+            if name.lower() not in seen_names and len(name) > 2:
+                seen_names.add(name.lower())
+                competitors.append(
+                    DiscoveredCompetitor(
+                        name=name,
+                        domain=domain,
+                        raw_mention=match.group(0),
+                        confidence=0.95,
+                    )
+                )
+                logger.debug(f"Pattern bold_domain matched: {name} -> {domain}")
+
+        # Pattern 2: Company Name (domain.com) or Company Name [domain.com] - no bold
+        pattern_plain_domain = r"([A-Z][a-zA-Z0-9\s&\-\.]+?)\s*[\(\[]([a-zA-Z0-9\-]+\.[a-zA-Z]{2,})[^\)]*[\)\]]"
+        for match in re.finditer(pattern_plain_domain, text):
             name = match.group(1).strip()
             domain = match.group(2).lower()
             if name.lower() not in seen_names and len(name) > 2:
@@ -257,44 +275,56 @@ class PerplexityClient:
                         confidence=0.9,
                     )
                 )
+                logger.debug(f"Pattern plain_domain matched: {name} -> {domain}")
 
-        # Pattern 2: **Company Name** (bold markdown)
-        pattern2 = r"\*\*([A-Z][a-zA-Z0-9\s&\-\.]+?)\*\*"
-        for match in re.finditer(pattern2, text):
+        # Pattern 3: Numbered list with domain - "1. Company (domain.com)" or "- Company (domain.com)"
+        pattern_list_domain = r"(?:^|\n)\s*[\d\-\*\.]+\s*\*?\*?([^(\n\*]+?)\*?\*?\s*[\(\[]([a-zA-Z0-9\-]+\.[a-zA-Z]{2,})[^\)]*[\)\]]"
+        for match in re.finditer(pattern_list_domain, text, re.MULTILINE):
             name = match.group(1).strip()
-            if name.lower() not in seen_names and len(name) > 2:
-                # Try to find domain nearby
-                domain = self._find_nearby_domain(text, match.start(), match.end())
-                seen_names.add(name.lower())
-                competitors.append(
-                    DiscoveredCompetitor(
-                        name=name,
-                        domain=domain,
-                        raw_mention=match.group(0),
-                        confidence=0.7 if domain else 0.5,
-                    )
-                )
-
-        # Pattern 3: Numbered list items "1. Company Name" or "- Company Name"
-        pattern3 = r"(?:^|\n)[\d\-\*\.]+\s*([A-Z][a-zA-Z0-9\s&\-\.]+?)(?:\s*[\-\:]\s*|\s*$)"
-        for match in re.finditer(pattern3, text):
-            name = match.group(1).strip()
-            # Clean up common suffixes
-            name = re.sub(r"\s*(is|are|has|offers|provides).*$", "", name, flags=re.IGNORECASE)
+            domain = match.group(2).lower()
             if name.lower() not in seen_names and len(name) > 2 and len(name) < 50:
-                domain = self._find_nearby_domain(text, match.start(), match.end())
                 seen_names.add(name.lower())
                 competitors.append(
                     DiscoveredCompetitor(
                         name=name,
                         domain=domain,
                         raw_mention=match.group(0).strip(),
-                        confidence=0.6 if domain else 0.4,
+                        confidence=0.85,
                     )
                 )
+                logger.debug(f"Pattern list_domain matched: {name} -> {domain}")
+
+        # Pattern 4: Extract any remaining domains mentioned in text
+        # Format: domain.com mentioned anywhere
+        domain_pattern = r"\b([a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.(?:com|io|co|ai|app|org|net|dev))\b"
+        for match in re.finditer(domain_pattern, text.lower()):
+            domain = match.group(1)
+            # Skip common non-competitor domains
+            skip_domains = {
+                "example.com", "domain.com", "email.com", "website.com",
+                "google.com", "facebook.com", "twitter.com", "linkedin.com",
+                "youtube.com", "instagram.com", "github.com", "medium.com",
+            }
+            if domain not in skip_domains and domain not in seen_names:
+                # Try to find company name near the domain
+                name = domain.split('.')[0].capitalize()
+                seen_names.add(domain)
+                competitors.append(
+                    DiscoveredCompetitor(
+                        name=name,
+                        domain=domain,
+                        raw_mention=domain,
+                        confidence=0.7,
+                    )
+                )
+                logger.debug(f"Pattern domain_only matched: {domain}")
 
         # Sort by confidence
         competitors.sort(key=lambda c: c.confidence, reverse=True)
+
+        logger.info(f"Extracted {len(competitors)} competitors from Perplexity response")
+        if not competitors and len(text) > 50:
+            logger.warning(f"NO COMPETITORS EXTRACTED! Raw response: {text[:1000]}")
 
         return competitors
 
