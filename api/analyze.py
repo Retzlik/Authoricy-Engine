@@ -70,17 +70,19 @@ app = FastAPI(
 )
 
 # Configure CORS - Allow frontend origins
-# In production, replace with specific origins
+# Production frontend URL (explicit for reliability)
+PRODUCTION_FRONTEND = "https://authoricy-app.vercel.app"
+
 cors_origins = [
+    # Local development
     "http://localhost:3000",
     "http://localhost:5173",      # Vite default
     "http://localhost:8080",
     "https://localhost:3000",
     "https://localhost:5173",
-    # Lovable preview URLs
-    "https://*.lovable.app",
-    "https://*.lovableproject.com",
-    # Add your production frontend URL here
+    # Production frontend (explicit)
+    PRODUCTION_FRONTEND,
+    # Custom frontend URL from environment (if set)
     os.getenv("FRONTEND_URL", ""),
 ]
 # Filter out empty strings
@@ -89,7 +91,8 @@ cors_origins = [o for o in cors_origins if o]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_origin_regex=r"https://.*\.lovable\.app|https://.*\.lovableproject\.com|https://.*\.vercel\.app|https://.*\.netlify\.app",
+    # Regex for preview/staging deployments (Lovable, Vercel previews, Netlify)
+    allow_origin_regex=r"^https://[a-zA-Z0-9-]+\.lovable\.app$|^https://[a-zA-Z0-9-]+\.lovableproject\.com$|^https://[a-zA-Z0-9-]+\.vercel\.app$|^https://[a-zA-Z0-9-]+\.netlify\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
