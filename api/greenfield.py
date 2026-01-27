@@ -20,7 +20,6 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from src.database import get_session
 from src.database.models import (
     AnalysisRun,
     AnalysisMode,
