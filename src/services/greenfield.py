@@ -582,6 +582,7 @@ class GreenfieldService:
         # Phase 3: Discover from Perplexity AI (intelligent, context-aware discovery)
         if self.perplexity_client and enhanced_context:
             try:
+                logger.info("Starting Perplexity AI competitor discovery...")
                 perplexity_competitors = await self._discover_from_perplexity(
                     business_context=enhanced_context,
                 )
@@ -592,11 +593,20 @@ class GreenfieldService:
                         seen_domains.add(domain)
                 logger.info(f"Perplexity discovered {len(perplexity_competitors)} candidates")
             except Exception as e:
-                logger.warning(f"Perplexity discovery failed: {e}")
+                logger.error(f"Perplexity discovery FAILED: {e}", exc_info=True)
+        else:
+            if not self.perplexity_client:
+                logger.error(
+                    "PERPLEXITY DISCOVERY DISABLED: No Perplexity client configured! "
+                    "Set PERPLEXITY_API_KEY environment variable to enable AI-powered competitor discovery."
+                )
+            elif not enhanced_context:
+                logger.warning("PERPLEXITY DISCOVERY SKIPPED: No business context provided")
 
-        # Phase 4: Discover from SERPs if client available
+        # Phase 4: Discover from SERPs if DataForSEO client available
         if self.client and seed_keywords:
             try:
+                logger.info("Starting SERP-based competitor discovery...")
                 serp_competitors = await self._discover_from_serps(
                     seed_keywords[:5],
                     market,
@@ -608,7 +618,15 @@ class GreenfieldService:
                         seen_domains.add(domain)
                 logger.info(f"SERP analysis discovered {len(serp_competitors)} candidates")
             except Exception as e:
-                logger.warning(f"SERP discovery failed: {e}")
+                logger.error(f"SERP discovery FAILED: {e}", exc_info=True)
+        else:
+            if not self.client:
+                logger.error(
+                    "SERP DISCOVERY DISABLED: No DataForSEO client configured! "
+                    "Set DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD environment variables."
+                )
+            elif not seed_keywords:
+                logger.warning("SERP DISCOVERY SKIPPED: No seed keywords provided")
 
         # Deduplicate
         seen = set()
