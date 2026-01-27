@@ -41,12 +41,18 @@ from src.auth.models import User
 
 logger = logging.getLogger(__name__)
 
-# Router with authentication required for ALL endpoints
-# The maturity check is public (no auth needed) so we'll override for that endpoint
+# Authenticated router - requires login for all endpoints
 router = APIRouter(
     prefix="/api/greenfield",
     tags=["greenfield"],
-    dependencies=[Depends(get_current_user)],  # All endpoints require authentication
+    dependencies=[Depends(get_current_user)],
+)
+
+# Public router - no authentication required
+# Used for endpoints that should be accessible without login (e.g., maturity check)
+public_router = APIRouter(
+    prefix="/api/greenfield",
+    tags=["greenfield"],
 )
 
 
@@ -278,14 +284,14 @@ class GreenfieldDashboardResponse(BaseModel):
 # DOMAIN MATURITY ENDPOINTS
 # =============================================================================
 
-@router.get("/maturity/{domain}", response_model=DomainMaturityResponse, dependencies=[])
+@public_router.get("/maturity/{domain}", response_model=DomainMaturityResponse)
 async def check_domain_maturity(domain: str) -> DomainMaturityResponse:
     """
     Check domain maturity to determine analysis mode.
 
     Returns whether the domain should use greenfield analysis.
 
-    Note: This is a public endpoint (no auth required) for preliminary checks.
+    Note: This is a PUBLIC endpoint (no auth required) for preliminary checks.
     """
     result = await greenfield_service.check_domain_maturity(domain)
 
