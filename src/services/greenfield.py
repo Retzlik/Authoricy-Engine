@@ -75,11 +75,17 @@ class GreenfieldService:
         if self.client:
             try:
                 overview = await self.client.get_domain_overview(domain=domain)
+
+                # Domain Rating (DR) comes from backlinks/summary API, NOT domain_overview
+                # The domain_rank_overview API returns pos_1 (keywords in position 1), not DR
+                backlink_summary = await self.client.get_backlink_summary(domain=domain)
+                domain_rating = backlink_summary.get("domain_rank", 0) if backlink_summary else 0
+
                 metrics = DomainMetrics(
-                    domain_rating=overview.get("rank", 0),
+                    domain_rating=domain_rating,
                     organic_keywords=overview.get("organic_keywords", 0),
                     organic_traffic=overview.get("organic_traffic", 0),
-                    referring_domains=overview.get("referring_domains", 0),
+                    referring_domains=backlink_summary.get("referring_domains", 0) if backlink_summary else 0,
                 )
             except Exception as e:
                 logger.warning(f"Failed to fetch domain metrics for {domain}: {e}")
@@ -119,6 +125,7 @@ class GreenfieldService:
         self,
         domain: str,
         greenfield_context: Dict[str, Any],
+        user_id: Optional[UUID] = None,
     ) -> Tuple[UUID, UUID]:
         """
         Start a greenfield analysis.
@@ -128,6 +135,7 @@ class GreenfieldService:
         Args:
             domain: Domain to analyze
             greenfield_context: User-provided business context
+            user_id: Optional user ID to associate with the domain
 
         Returns:
             Tuple of (analysis_run_id, session_id)
@@ -137,6 +145,7 @@ class GreenfieldService:
             domain=domain,
             greenfield_context=greenfield_context,
             config={"mode": "greenfield"},
+            user_id=user_id,
         )
 
         # Get domain ID
@@ -369,9 +378,14 @@ class GreenfieldService:
                     location=market,
                 )
 
-                candidate["domain_rating"] = overview.get("rank", 0)
+                # Domain Rating (DR) comes from backlinks/summary API, NOT domain_overview
+                # The domain_rank_overview API returns pos_1 (keywords in position 1), not DR
+                backlink_summary = await self.client.get_backlink_summary(domain=candidate["domain"])
+
+                candidate["domain_rating"] = backlink_summary.get("domain_rank", 0) if backlink_summary else 0
                 candidate["organic_traffic"] = overview.get("organic_traffic", 0)
                 candidate["organic_keywords"] = overview.get("organic_keywords", 0)
+                candidate["referring_domains"] = backlink_summary.get("referring_domains", 0) if backlink_summary else 0
 
             except Exception as e:
                 logger.warning(f"Failed to enrich {candidate['domain']}: {e}")

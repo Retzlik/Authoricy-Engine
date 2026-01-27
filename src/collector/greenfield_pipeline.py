@@ -197,8 +197,11 @@ async def collect_greenfield_data(
     overview = foundation.get("domain_overview", {})
     backlinks = foundation.get("backlink_summary", {})
 
+    # Domain Rating (DR) comes from backlinks/summary API, NOT from domain_rank_overview
+    # The domain_rank_overview "rank" field was incorrectly named - it was actually pos_1
+    # (count of keywords in position 1), not Domain Rating
     result.domain_metrics = DomainMetrics(
-        domain_rating=overview.get("rank", 0),
+        domain_rating=backlinks.get("domain_rank", 0),
         organic_keywords=overview.get("organic_keywords", 0),
         organic_traffic=overview.get("organic_traffic", 0),
         referring_domains=backlinks.get("referring_domains", 0),
@@ -659,16 +662,20 @@ async def _validate_competitors(
 
     for candidate in candidates:
         try:
-            # Get domain overview
+            # Get domain overview for organic metrics
             overview = await client.get_domain_overview(
                 domain=candidate.domain,
                 location=market,
             )
 
-            candidate.domain_rating = overview.get("rank", 0)
+            # Get Domain Rating from backlinks summary, not domain overview
+            # The domain_rank_overview API doesn't return DR - it must come from backlinks/summary
+            backlink_summary = await client.get_backlink_summary(domain=candidate.domain)
+
+            candidate.domain_rating = backlink_summary.get("domain_rank", 0) if backlink_summary else 0
             candidate.organic_traffic = overview.get("organic_traffic", 0)
             candidate.organic_keywords = overview.get("organic_keywords", 0)
-            candidate.referring_domains = overview.get("referring_domains", 0)
+            candidate.referring_domains = backlink_summary.get("referring_domains", 0) if backlink_summary else 0
             candidate.is_validated = True
 
             # Check for DR too far from target

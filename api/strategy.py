@@ -34,41 +34,148 @@ from src.auth.models import User
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["strategy"])
+# Router with authentication required for ALL endpoints
+# Endpoints that need the user object for ownership checks still use Depends(get_current_user)
+# in their signature, but the router-level dependency ensures no endpoint is unprotected
+router = APIRouter(
+    prefix="/api",
+    tags=["strategy"],
+    dependencies=[Depends(get_current_user)],  # All endpoints require authentication
+)
 
 
 # =============================================================================
-# AUTH HELPERS
+# AUTH DEPENDENCIES - Ownership-checking dependencies for clean DI
 # =============================================================================
 
+class StrategyAccessChecker:
+    """
+    Dependency that fetches a strategy and validates ownership.
+
+    Usage:
+        @router.get("/strategies/{strategy_id}")
+        def get_strategy(strategy: Strategy = Depends(get_owned_strategy)):
+            # strategy is guaranteed to be owned by current user or user is admin
+            return strategy
+
+    This eliminates repetitive:
+        strategy = db.query(Strategy).filter(...).first()
+        if not strategy: raise HTTPException(404)
+        check_access(strategy, user)
+    """
+    def __init__(self, allow_archived: bool = True):
+        self.allow_archived = allow_archived
+
+    async def __call__(
+        self,
+        strategy_id: UUID,
+        current_user: User = Depends(get_current_user),
+    ) -> Strategy:
+        with get_db_context() as db:
+            strategy = db.query(Strategy).options(
+                joinedload(Strategy.domain)
+            ).filter(Strategy.id == strategy_id).first()
+
+            if not strategy:
+                raise HTTPException(status_code=404, detail="Strategy not found")
+
+            if not self.allow_archived and strategy.is_archived:
+                raise HTTPException(status_code=400, detail="Strategy is archived")
+
+            # Admin can access any strategy
+            if current_user.is_admin:
+                db.expunge(strategy)
+                return strategy
+
+            # User must own the domain
+            if strategy.domain and strategy.domain.user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Access denied to this strategy")
+
+            db.expunge(strategy)
+            return strategy
+
+
+class ThreadAccessChecker:
+    """Dependency that fetches a thread and validates ownership via strategy."""
+    async def __call__(
+        self,
+        thread_id: UUID,
+        current_user: User = Depends(get_current_user),
+    ) -> StrategyThread:
+        with get_db_context() as db:
+            thread = db.query(StrategyThread).options(
+                joinedload(StrategyThread.strategy).joinedload(Strategy.domain)
+            ).filter(StrategyThread.id == thread_id).first()
+
+            if not thread:
+                raise HTTPException(status_code=404, detail="Thread not found")
+
+            # Check access via strategy
+            if current_user.is_admin:
+                db.expunge(thread)
+                return thread
+
+            strategy = thread.strategy
+            if strategy and strategy.domain and strategy.domain.user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Access denied to this thread")
+
+            db.expunge(thread)
+            return thread
+
+
+class TopicAccessChecker:
+    """Dependency that fetches a topic and validates ownership via thread -> strategy."""
+    async def __call__(
+        self,
+        topic_id: UUID,
+        current_user: User = Depends(get_current_user),
+    ) -> StrategyTopic:
+        with get_db_context() as db:
+            topic = db.query(StrategyTopic).options(
+                joinedload(StrategyTopic.thread)
+                .joinedload(StrategyThread.strategy)
+                .joinedload(Strategy.domain)
+            ).filter(StrategyTopic.id == topic_id).first()
+
+            if not topic:
+                raise HTTPException(status_code=404, detail="Topic not found")
+
+            # Check access via thread -> strategy
+            if current_user.is_admin:
+                db.expunge(topic)
+                return topic
+
+            thread = topic.thread
+            if thread and thread.strategy and thread.strategy.domain:
+                if thread.strategy.domain.user_id != current_user.id:
+                    raise HTTPException(status_code=403, detail="Access denied to this topic")
+
+            db.expunge(topic)
+            return topic
+
+
+# Pre-configured dependency instances
+get_owned_strategy = StrategyAccessChecker(allow_archived=True)
+get_active_strategy = StrategyAccessChecker(allow_archived=False)
+get_owned_thread = ThreadAccessChecker()
+get_owned_topic = TopicAccessChecker()
+
+
+# Legacy helper functions (kept for backward compatibility in some complex flows)
 def check_strategy_access(strategy: Strategy, user: User) -> None:
-    """
-    Check if user has access to a strategy.
-
-    Admins can access any strategy.
-    Users can only access strategies for domains they own.
-    """
+    """Check if user has access to a strategy (legacy helper)."""
     if user.is_admin:
         return
-
-    # Get the domain for this strategy
     if strategy.domain and strategy.domain.user_id != user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied to this strategy"
-        )
+        raise HTTPException(status_code=403, detail="Access denied to this strategy")
 
 
 def check_domain_access_strategy(domain: Domain, user: User) -> None:
     """Check if user has access to a domain for strategy operations."""
     if user.is_admin:
         return
-
     if domain.user_id != user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied to this domain"
-        )
+        raise HTTPException(status_code=403, detail="Access denied to this domain")
 
 
 # =============================================================================
@@ -545,7 +652,10 @@ async def list_strategies(
 
 
 @router.get("/strategies/{strategy_id}", response_model=StrategyDetailResponse)
-async def get_strategy(strategy_id: UUID):
+async def get_strategy(
+    strategy_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """
     Get a single strategy with threads and metrics.
 
@@ -555,9 +665,14 @@ async def get_strategy(strategy_id: UUID):
     Performance: Uses 3 queries total regardless of thread count (no N+1).
     """
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        # Check ownership
+        check_strategy_access(strategy, current_user)
 
         # Get threads ordered by position
         threads = db.query(StrategyThread).filter(
@@ -688,7 +803,11 @@ async def create_strategy(
 
 
 @router.patch("/strategies/{strategy_id}", response_model=StrategyResponse)
-async def update_strategy(strategy_id: UUID, request: StrategyUpdate):
+async def update_strategy(
+    strategy_id: UUID,
+    request: StrategyUpdate,
+    current_user: User = Depends(get_current_user),
+):
     """
     Update a strategy (with optimistic locking).
 
@@ -696,9 +815,13 @@ async def update_strategy(strategy_id: UUID, request: StrategyUpdate):
     is returned.
     """
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         # Optimistic locking check
         if strategy.version != request.version:
@@ -785,15 +908,23 @@ async def update_strategy(strategy_id: UUID, request: StrategyUpdate):
 
 
 @router.post("/strategies/{strategy_id}/duplicate", response_model=StrategyResponse, status_code=201)
-async def duplicate_strategy(strategy_id: UUID, request: StrategyDuplicate):
+async def duplicate_strategy(
+    strategy_id: UUID,
+    request: StrategyDuplicate,
+    current_user: User = Depends(get_current_user),
+):
     """
     Duplicate a strategy with all threads, topics, and keyword assignments.
     """
     with get_db_context() as db:
         # Get source strategy
-        source = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        source = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not source:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(source, current_user)
 
         # Create new strategy
         new_strategy = Strategy(
@@ -911,12 +1042,19 @@ async def duplicate_strategy(strategy_id: UUID, request: StrategyDuplicate):
 
 
 @router.post("/strategies/{strategy_id}/archive", response_model=StrategyResponse)
-async def archive_strategy(strategy_id: UUID):
+async def archive_strategy(
+    strategy_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """Archive a strategy (soft delete)."""
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         if strategy.is_archived:
             raise HTTPException(status_code=400, detail="Strategy is already archived")
@@ -960,12 +1098,19 @@ async def archive_strategy(strategy_id: UUID):
 
 
 @router.post("/strategies/{strategy_id}/restore", response_model=StrategyResponse)
-async def restore_strategy(strategy_id: UUID):
+async def restore_strategy(
+    strategy_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """Restore an archived strategy."""
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         if not strategy.is_archived:
             raise HTTPException(status_code=400, detail="Strategy is not archived")
@@ -1009,16 +1154,23 @@ async def restore_strategy(strategy_id: UUID):
 
 
 @router.delete("/strategies/{strategy_id}", status_code=204)
-async def delete_strategy(strategy_id: UUID):
+async def delete_strategy(
+    strategy_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """
     Hard delete a strategy (only if archived).
 
     All threads, topics, and keyword assignments are deleted via CASCADE.
     """
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         if not strategy.is_archived:
             raise HTTPException(
@@ -1036,7 +1188,10 @@ async def delete_strategy(strategy_id: UUID):
 # =============================================================================
 
 @router.get("/strategies/{strategy_id}/threads", response_model=ThreadListResponse)
-async def list_threads(strategy_id: UUID):
+async def list_threads(
+    strategy_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """
     List threads for a strategy (ordered by position).
 
@@ -1045,10 +1200,14 @@ async def list_threads(strategy_id: UUID):
     Performance: Uses 3 queries total regardless of thread count (no N+1).
     """
     with get_db_context() as db:
-        # Validate strategy exists
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        # Validate strategy exists and check access
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         threads = db.query(StrategyThread).filter(
             StrategyThread.strategy_id == strategy_id
@@ -1061,7 +1220,11 @@ async def list_threads(strategy_id: UUID):
 
 
 @router.post("/strategies/{strategy_id}/threads", response_model=ThreadResponse, status_code=201)
-async def create_thread(strategy_id: UUID, request: ThreadCreate):
+async def create_thread(
+    strategy_id: UUID,
+    request: ThreadCreate,
+    current_user: User = Depends(get_current_user),
+):
     """
     Create a new thread.
 
@@ -1069,10 +1232,14 @@ async def create_thread(strategy_id: UUID, request: ThreadCreate):
     at the beginning.
     """
     with get_db_context() as db:
-        # Validate strategy exists
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        # Validate strategy exists and check access
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         # Determine position
         if request.after_thread_id:
@@ -1139,7 +1306,11 @@ async def create_thread(strategy_id: UUID, request: ThreadCreate):
 
 
 @router.patch("/threads/{thread_id}", response_model=ThreadResponse)
-async def update_thread(thread_id: UUID, request: ThreadUpdate):
+async def update_thread(
+    thread_id: UUID,
+    request: ThreadUpdate,
+    current_user: User = Depends(get_current_user),
+):
     """
     Update a thread (with optimistic locking).
 
@@ -1147,9 +1318,14 @@ async def update_thread(thread_id: UUID, request: ThreadUpdate):
     is returned.
     """
     with get_db_context() as db:
-        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        thread = db.query(StrategyThread).options(
+            joinedload(StrategyThread.strategy).joinedload(Strategy.domain)
+        ).filter(StrategyThread.id == thread_id).first()
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
+
+        # Check access via strategy
+        check_strategy_access(thread.strategy, current_user)
 
         # Optimistic locking check
         if thread.version != request.version:
@@ -1204,7 +1380,11 @@ async def update_thread(thread_id: UUID, request: ThreadUpdate):
 
 
 @router.post("/threads/{thread_id}/move", response_model=ThreadResponse)
-async def move_thread(thread_id: UUID, request: ThreadMove):
+async def move_thread(
+    thread_id: UUID,
+    request: ThreadMove,
+    current_user: User = Depends(get_current_user),
+):
     """
     Move a thread to a new position.
 
@@ -1212,9 +1392,13 @@ async def move_thread(thread_id: UUID, request: ThreadMove):
     to the beginning.
     """
     with get_db_context() as db:
-        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        thread = db.query(StrategyThread).options(
+            joinedload(StrategyThread.strategy).joinedload(Strategy.domain)
+        ).filter(StrategyThread.id == thread_id).first()
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
+
+        check_strategy_access(thread.strategy, current_user)
 
         strategy_id = thread.strategy_id
         old_position = thread.position
@@ -1274,16 +1458,23 @@ async def move_thread(thread_id: UUID, request: ThreadMove):
 
 
 @router.delete("/threads/{thread_id}", status_code=204)
-async def delete_thread(thread_id: UUID):
+async def delete_thread(
+    thread_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """
     Delete a thread.
 
     All topics and keyword assignments for this thread are deleted via CASCADE.
     """
     with get_db_context() as db:
-        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        thread = db.query(StrategyThread).options(
+            joinedload(StrategyThread.strategy).joinedload(Strategy.domain)
+        ).filter(StrategyThread.id == thread_id).first()
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
+
+        check_strategy_access(thread.strategy, current_user)
 
         strategy_id = thread.strategy_id
         thread_name = thread.name
@@ -1313,14 +1504,21 @@ async def delete_thread(thread_id: UUID):
 @router.get("/domains/{domain_id}/analyses")
 async def list_analyses(
     domain_id: UUID,
+    current_user: User = Depends(get_current_user),
     status: Optional[str] = Query("completed", description="Filter by status"),
 ):
     """
-    List available analyses for a domain.
+    List available analyses for a domain. Requires domain ownership.
 
     Use this to select which analysis to use when creating a strategy.
     """
     with get_db_context() as db:
+        # Check domain ownership
+        domain = db.query(Domain).filter(Domain.id == domain_id).first()
+        if not domain:
+            raise HTTPException(status_code=404, detail="Domain not found")
+        check_domain_access_strategy(domain, current_user)
+
         from src.database.models import AnalysisStatus as AnalysisStatusEnum
 
         query = db.query(AnalysisRun).filter(AnalysisRun.domain_id == domain_id)
@@ -1481,14 +1679,21 @@ def topic_to_response(topic: StrategyTopic) -> TopicResponse:
 # =============================================================================
 
 @router.get("/threads/{thread_id}/keywords", response_model=ThreadKeywordsResponse)
-async def get_thread_keywords(thread_id: UUID):
+async def get_thread_keywords(
+    thread_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """
     Get keywords assigned to a thread (ordered by position).
     """
     with get_db_context() as db:
-        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        thread = db.query(StrategyThread).options(
+            joinedload(StrategyThread.strategy).joinedload(Strategy.domain)
+        ).filter(StrategyThread.id == thread_id).first()
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
+
+        check_strategy_access(thread.strategy, current_user)
 
         # Join thread_keywords with keywords
         results = db.query(
@@ -1520,7 +1725,11 @@ async def get_thread_keywords(thread_id: UUID):
 
 
 @router.post("/threads/{thread_id}/keywords", response_model=ThreadResponse)
-async def assign_keywords_to_thread(thread_id: UUID, request: KeywordAssign):
+async def assign_keywords_to_thread(
+    thread_id: UUID,
+    request: KeywordAssign,
+    current_user: User = Depends(get_current_user),
+):
     """
     Assign keywords to a thread (bulk).
 
@@ -1529,9 +1738,13 @@ async def assign_keywords_to_thread(thread_id: UUID, request: KeywordAssign):
     returns 400 error.
     """
     with get_db_context() as db:
-        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        thread = db.query(StrategyThread).options(
+            joinedload(StrategyThread.strategy).joinedload(Strategy.domain)
+        ).filter(StrategyThread.id == thread_id).first()
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
+
+        check_strategy_access(thread.strategy, current_user)
 
         # Optimistic locking check
         if thread.version != request.version:
@@ -1631,14 +1844,22 @@ async def assign_keywords_to_thread(thread_id: UUID, request: KeywordAssign):
 
 
 @router.delete("/threads/{thread_id}/keywords", response_model=ThreadResponse)
-async def remove_keywords_from_thread(thread_id: UUID, request: KeywordRemove):
+async def remove_keywords_from_thread(
+    thread_id: UUID,
+    request: KeywordRemove,
+    current_user: User = Depends(get_current_user),
+):
     """
     Remove keywords from a thread (bulk).
     """
     with get_db_context() as db:
-        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        thread = db.query(StrategyThread).options(
+            joinedload(StrategyThread.strategy).joinedload(Strategy.domain)
+        ).filter(StrategyThread.id == thread_id).first()
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
+
+        check_strategy_access(thread.strategy, current_user)
 
         # Delete the keyword assignments
         deleted = db.query(ThreadKeyword).filter(
@@ -1698,7 +1919,11 @@ class AssignClusterResponse(BaseModel):
 
 
 @router.post("/strategies/{strategy_id}/keywords/batch-move", response_model=BatchMoveResponse)
-async def batch_move_keywords(strategy_id: UUID, request: BatchMoveKeywords):
+async def batch_move_keywords(
+    strategy_id: UUID,
+    request: BatchMoveKeywords,
+    current_user: User = Depends(get_current_user),
+):
     """
     Move multiple keywords from one thread to another in a single operation.
 
@@ -1706,9 +1931,13 @@ async def batch_move_keywords(strategy_id: UUID, request: BatchMoveKeywords):
     Keywords already in the target thread are skipped.
     """
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         # Validate both threads exist and belong to this strategy
         source_thread = db.query(StrategyThread).filter(
@@ -1795,7 +2024,11 @@ async def batch_move_keywords(strategy_id: UUID, request: BatchMoveKeywords):
 
 
 @router.post("/strategies/{strategy_id}/assign-cluster", response_model=AssignClusterResponse)
-async def assign_cluster(strategy_id: UUID, request: AssignClusterRequest):
+async def assign_cluster(
+    strategy_id: UUID,
+    request: AssignClusterRequest,
+    current_user: User = Depends(get_current_user),
+):
     """
     Assign a suggested cluster (list of keywords) to a thread.
 
@@ -1805,9 +2038,13 @@ async def assign_cluster(strategy_id: UUID, request: AssignClusterRequest):
     Keywords already assigned to other threads are skipped.
     """
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         # Determine target thread
         thread = None
@@ -1923,14 +2160,21 @@ async def assign_cluster(strategy_id: UUID, request: AssignClusterRequest):
 # =============================================================================
 
 @router.get("/threads/{thread_id}/topics", response_model=TopicListResponse)
-async def list_topics(thread_id: UUID):
+async def list_topics(
+    thread_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """
     List topics for a thread (ordered by position).
     """
     with get_db_context() as db:
-        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        thread = db.query(StrategyThread).options(
+            joinedload(StrategyThread.strategy).joinedload(Strategy.domain)
+        ).filter(StrategyThread.id == thread_id).first()
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
+
+        check_strategy_access(thread.strategy, current_user)
 
         topics = db.query(StrategyTopic).filter(
             StrategyTopic.thread_id == thread_id
@@ -1940,7 +2184,11 @@ async def list_topics(thread_id: UUID):
 
 
 @router.post("/threads/{thread_id}/topics", response_model=TopicResponse, status_code=201)
-async def create_topic(thread_id: UUID, request: TopicCreate):
+async def create_topic(
+    thread_id: UUID,
+    request: TopicCreate,
+    current_user: User = Depends(get_current_user),
+):
     """
     Create a new topic in a thread.
 
@@ -1948,9 +2196,13 @@ async def create_topic(thread_id: UUID, request: TopicCreate):
     at the beginning.
     """
     with get_db_context() as db:
-        thread = db.query(StrategyThread).filter(StrategyThread.id == thread_id).first()
+        thread = db.query(StrategyThread).options(
+            joinedload(StrategyThread.strategy).joinedload(Strategy.domain)
+        ).filter(StrategyThread.id == thread_id).first()
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
+
+        check_strategy_access(thread.strategy, current_user)
 
         # Validate content_type
         try:
@@ -2028,14 +2280,24 @@ async def create_topic(thread_id: UUID, request: TopicCreate):
 
 
 @router.patch("/topics/{topic_id}", response_model=TopicResponse)
-async def update_topic(topic_id: UUID, request: TopicUpdate):
+async def update_topic(
+    topic_id: UUID,
+    request: TopicUpdate,
+    current_user: User = Depends(get_current_user),
+):
     """
     Update a topic (with optimistic locking).
     """
     with get_db_context() as db:
-        topic = db.query(StrategyTopic).filter(StrategyTopic.id == topic_id).first()
+        topic = db.query(StrategyTopic).options(
+            joinedload(StrategyTopic.thread)
+            .joinedload(StrategyThread.strategy)
+            .joinedload(Strategy.domain)
+        ).filter(StrategyTopic.id == topic_id).first()
         if not topic:
             raise HTTPException(status_code=404, detail="Topic not found")
+
+        check_strategy_access(topic.thread.strategy, current_user)
 
         # Optimistic locking check
         if topic.version != request.version:
@@ -2103,14 +2365,24 @@ async def update_topic(topic_id: UUID, request: TopicUpdate):
 
 
 @router.post("/topics/{topic_id}/move", response_model=TopicResponse)
-async def move_topic(topic_id: UUID, request: TopicMove):
+async def move_topic(
+    topic_id: UUID,
+    request: TopicMove,
+    current_user: User = Depends(get_current_user),
+):
     """
     Move a topic to a new position within the same thread.
     """
     with get_db_context() as db:
-        topic = db.query(StrategyTopic).filter(StrategyTopic.id == topic_id).first()
+        topic = db.query(StrategyTopic).options(
+            joinedload(StrategyTopic.thread)
+            .joinedload(StrategyThread.strategy)
+            .joinedload(Strategy.domain)
+        ).filter(StrategyTopic.id == topic_id).first()
         if not topic:
             raise HTTPException(status_code=404, detail="Topic not found")
+
+        check_strategy_access(topic.thread.strategy, current_user)
 
         thread_id = topic.thread_id
         old_position = topic.position
@@ -2171,14 +2443,24 @@ async def move_topic(topic_id: UUID, request: TopicMove):
 
 
 @router.post("/topics/{topic_id}/move-to-thread", response_model=TopicResponse)
-async def move_topic_to_thread(topic_id: UUID, request: TopicMoveToThread):
+async def move_topic_to_thread(
+    topic_id: UUID,
+    request: TopicMoveToThread,
+    current_user: User = Depends(get_current_user),
+):
     """
     Move a topic to a different thread.
     """
     with get_db_context() as db:
-        topic = db.query(StrategyTopic).filter(StrategyTopic.id == topic_id).first()
+        topic = db.query(StrategyTopic).options(
+            joinedload(StrategyTopic.thread)
+            .joinedload(StrategyThread.strategy)
+            .joinedload(Strategy.domain)
+        ).filter(StrategyTopic.id == topic_id).first()
         if not topic:
             raise HTTPException(status_code=404, detail="Topic not found")
+
+        check_strategy_access(topic.thread.strategy, current_user)
 
         old_thread_id = topic.thread_id
 
@@ -2250,14 +2532,23 @@ async def move_topic_to_thread(topic_id: UUID, request: TopicMoveToThread):
 
 
 @router.delete("/topics/{topic_id}", status_code=204)
-async def delete_topic(topic_id: UUID):
+async def delete_topic(
+    topic_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """
     Delete a topic.
     """
     with get_db_context() as db:
-        topic = db.query(StrategyTopic).filter(StrategyTopic.id == topic_id).first()
+        topic = db.query(StrategyTopic).options(
+            joinedload(StrategyTopic.thread)
+            .joinedload(StrategyThread.strategy)
+            .joinedload(Strategy.domain)
+        ).filter(StrategyTopic.id == topic_id).first()
         if not topic:
             raise HTTPException(status_code=404, detail="Topic not found")
+
+        check_strategy_access(topic.thread.strategy, current_user)
 
         thread = db.query(StrategyThread).get(topic.thread_id)
         topic_name = topic.name
@@ -2350,6 +2641,7 @@ class FormatRecommendationResponse(BaseModel):
 @router.get("/strategies/{strategy_id}/available-keywords", response_model=AvailableKeywordsResponse)
 async def get_available_keywords(
     strategy_id: UUID,
+    current_user: User = Depends(get_current_user),
     cursor: Optional[str] = Query(None, description="Cursor for pagination"),
     limit: int = Query(50, ge=1, le=200, description="Number of results"),
     sort_by: str = Query("opportunity_score", description="Sort field"),
@@ -2373,9 +2665,13 @@ async def get_available_keywords(
     import json
 
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         # Base query - keywords from this analysis
         base_query = db.query(Keyword).filter(
@@ -2557,7 +2853,10 @@ async def get_available_keywords(
 
 
 @router.get("/strategies/{strategy_id}/suggested-clusters", response_model=SuggestedClustersResponse)
-async def get_suggested_clusters(strategy_id: UUID):
+async def get_suggested_clusters(
+    strategy_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """
     Get suggested clusters based on parent_topic grouping.
 
@@ -2565,9 +2864,13 @@ async def get_suggested_clusters(strategy_id: UUID):
     and returns cluster suggestions with aggregated metrics.
     """
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         # Get assigned keyword IDs
         assigned_ids = db.query(ThreadKeyword.keyword_id).join(
@@ -2631,7 +2934,10 @@ async def get_suggested_clusters(strategy_id: UUID):
 
 
 @router.get("/keywords/{keyword_id}/format-recommendation", response_model=FormatRecommendationResponse)
-async def get_format_recommendation(keyword_id: UUID):
+async def get_format_recommendation(
+    keyword_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """
     Get SERP-based format recommendation for a keyword.
 
@@ -2641,6 +2947,14 @@ async def get_format_recommendation(keyword_id: UUID):
         keyword = db.query(Keyword).filter(Keyword.id == keyword_id).first()
         if not keyword:
             raise HTTPException(status_code=404, detail="Keyword not found")
+
+        # Check access via analysis run -> domain
+        if keyword.analysis_run_id:
+            run = db.query(AnalysisRun).filter(AnalysisRun.id == keyword.analysis_run_id).first()
+            if run:
+                domain = db.query(Domain).filter(Domain.id == run.domain_id).first()
+                if domain:
+                    check_domain_access_strategy(domain, current_user)
 
         # Try to get SERP data from serp_competitors or api_calls
         from src.database.models import SERPCompetitor, APICall
@@ -2992,7 +3306,10 @@ def build_monok_export(db: Session, strategy: Strategy, include_empty_threads: b
 
 
 @router.post("/strategies/{strategy_id}/validate-export", response_model=ExportValidationResponse)
-async def validate_export(strategy_id: UUID):
+async def validate_export(
+    strategy_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """
     Validate a strategy for export.
 
@@ -3000,15 +3317,23 @@ async def validate_export(strategy_id: UUID):
     Export is only allowed if there are no hard errors.
     """
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         return validate_strategy_for_export(db, strategy)
 
 
 @router.post("/strategies/{strategy_id}/export", response_model=ExportResponse)
-async def export_strategy(strategy_id: UUID, request: ExportRequest):
+async def export_strategy(
+    strategy_id: UUID,
+    request: ExportRequest,
+    current_user: User = Depends(get_current_user),
+):
     """
     Export a strategy to the specified format.
 
@@ -3018,9 +3343,13 @@ async def export_strategy(strategy_id: UUID, request: ExportRequest):
     - csv: Spreadsheet format
     """
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         # Validate first
         validation = validate_strategy_for_export(db, strategy)
@@ -3092,15 +3421,20 @@ async def export_strategy(strategy_id: UUID, request: ExportRequest):
 @router.get("/strategies/{strategy_id}/exports", response_model=ExportHistoryResponse)
 async def get_export_history(
     strategy_id: UUID,
+    current_user: User = Depends(get_current_user),
     limit: int = Query(10, ge=1, le=100),
 ):
     """
     Get export history for a strategy.
     """
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         exports = db.query(StrategyExport).filter(
             StrategyExport.strategy_id == strategy_id
@@ -3123,7 +3457,10 @@ async def get_export_history(
 
 
 @router.get("/exports/{export_id}/download")
-async def download_export(export_id: UUID):
+async def download_export(
+    export_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
     """
     Download a previous export.
 
@@ -3135,6 +3472,13 @@ async def download_export(export_id: UUID):
         export = db.query(StrategyExport).filter(StrategyExport.id == export_id).first()
         if not export:
             raise HTTPException(status_code=404, detail="Export not found")
+
+        # Check access via strategy
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == export.strategy_id).first()
+        if strategy:
+            check_strategy_access(strategy, current_user)
 
         if export.format == "csv":
             # Convert to CSV
@@ -3274,6 +3618,7 @@ class ActivityLogResponse(BaseModel):
 @router.get("/strategies/{strategy_id}/activity", response_model=ActivityLogResponse)
 async def get_activity_log(
     strategy_id: UUID,
+    current_user: User = Depends(get_current_user),
     limit: int = Query(50, ge=1, le=200),
     cursor: Optional[str] = Query(None, description="Cursor for pagination"),
 ):
@@ -3287,9 +3632,13 @@ async def get_activity_log(
     import json
 
     with get_db_context() as db:
-        strategy = db.query(Strategy).filter(Strategy.id == strategy_id).first()
+        strategy = db.query(Strategy).options(
+            joinedload(Strategy.domain)
+        ).filter(Strategy.id == strategy_id).first()
         if not strategy:
             raise HTTPException(status_code=404, detail="Strategy not found")
+
+        check_strategy_access(strategy, current_user)
 
         query = db.query(StrategyActivityLog).filter(
             StrategyActivityLog.strategy_id == strategy_id

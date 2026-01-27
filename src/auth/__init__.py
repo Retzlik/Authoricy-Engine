@@ -53,6 +53,7 @@ from .dependencies import (
     get_current_user,
     get_current_user_optional,
     require_admin,
+    require_role,
     get_owned_domain,
     require_domain_access,
 )
@@ -84,6 +85,7 @@ __all__ = [
     "get_current_user",
     "get_current_user_optional",
     "require_admin",
+    "require_role",
     "get_owned_domain",
     "require_domain_access",
 ]

@@ -48,7 +48,11 @@ from src.cache.headers import (
 from src.cache.config import CacheTTL
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/dashboard", tags=["Dashboard Intelligence"])
+router = APIRouter(
+    prefix="/api/dashboard",
+    tags=["Dashboard Intelligence"],
+    dependencies=[Depends(get_current_user)],  # All endpoints require authentication
+)
 
 
 # =============================================================================

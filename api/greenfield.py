@@ -36,10 +36,55 @@ from src.scoring.greenfield import (
     DomainMetrics,
 )
 from src.services.greenfield import GreenfieldService
+from src.database.models import Domain
+from src.auth.dependencies import get_current_user
+from src.auth.models import User
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/greenfield", tags=["greenfield"])
+# Router with authentication required for ALL endpoints
+# The maturity check is public (no auth needed) so we'll override for that endpoint
+router = APIRouter(
+    prefix="/api/greenfield",
+    tags=["greenfield"],
+    dependencies=[Depends(get_current_user)],  # All endpoints require authentication
+)
+
+
+# =============================================================================
+# AUTH HELPERS
+# =============================================================================
+
+def check_domain_access_greenfield(domain: Domain, user: User) -> None:
+    """Check if user has access to a domain for greenfield operations."""
+    if user.is_admin:
+        return
+    if domain.user_id != user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied to this domain"
+        )
+
+
+def check_analysis_access(analysis: AnalysisRun, user: User, db) -> None:
+    """Check if user has access to an analysis."""
+    if user.is_admin:
+        return
+    domain = db.query(Domain).filter(Domain.id == analysis.domain_id).first()
+    if domain and domain.user_id != user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied to this analysis"
+        )
+
+
+def check_session_access(session: CompetitorIntelligenceSession, user: User, db) -> None:
+    """Check if user has access to a competitor intelligence session."""
+    if user.is_admin:
+        return
+    analysis = db.query(AnalysisRun).filter(AnalysisRun.id == session.analysis_run_id).first()
+    if analysis:
+        check_analysis_access(analysis, user, db)
 
 # Service instance (will be initialized with client in production)
 greenfield_service = GreenfieldService()
@@ -234,12 +279,14 @@ class GreenfieldDashboardResponse(BaseModel):
 # DOMAIN MATURITY ENDPOINTS
 # =============================================================================
 
-@router.get("/maturity/{domain}", response_model=DomainMaturityResponse)
+@router.get("/maturity/{domain}", response_model=DomainMaturityResponse, dependencies=[])
 async def check_domain_maturity(domain: str) -> DomainMaturityResponse:
     """
     Check domain maturity to determine analysis mode.
 
     Returns whether the domain should use greenfield analysis.
+
+    Note: This is a public endpoint (no auth required) for preliminary checks.
     """
     result = await greenfield_service.check_domain_maturity(domain)
 
@@ -261,6 +308,7 @@ async def check_domain_maturity(domain: str) -> DomainMaturityResponse:
 @router.post("/sessions")
 async def create_competitor_session(
     analysis_run_id: UUID,
+    current_user: User = Depends(get_current_user),
     seed_keywords: List[str] = [],
     known_competitors: List[str] = [],
 ) -> Dict[str, Any]:
@@ -272,13 +320,13 @@ async def create_competitor_session(
     """
     from src.database import repository
     from src.database.session import get_db_context
-    from src.database.models import AnalysisRun
 
-    # Get analysis run to find domain_id
+    # Get analysis run to find domain_id and check access
     with get_db_context() as db:
         run = db.query(AnalysisRun).get(analysis_run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Analysis run not found")
+        check_analysis_access(run, current_user, db)
         domain_id = run.domain_id
 
     # Create session
@@ -309,21 +357,36 @@ async def create_competitor_session(
 
 
 @router.get("/sessions/{session_id}")
-async def get_competitor_session(session_id: UUID) -> Dict[str, Any]:
+async def get_competitor_session(
+    session_id: UUID,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
     """
     Get current state of a competitor intelligence session.
     """
-    session = greenfield_service.get_session(session_id)
-    if not session:
+    from src.database.session import get_db_context
+
+    # Check access
+    with get_db_context() as db:
+        session = db.query(CompetitorIntelligenceSession).filter(
+            CompetitorIntelligenceSession.id == session_id
+        ).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        check_session_access(session, current_user, db)
+
+    session_data = greenfield_service.get_session(session_id)
+    if not session_data:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return session
+    return session_data
 
 
 @router.post("/sessions/{session_id}/curate")
 async def submit_curation(
     session_id: UUID,
     curation: CurationInput,
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Submit user's curation decisions.
@@ -335,6 +398,16 @@ async def submit_curation(
 
     Returns the finalized competitor set.
     """
+    from src.database.session import get_db_context
+
+    # Check access
+    with get_db_context() as db:
+        session = db.query(CompetitorIntelligenceSession).filter(
+            CompetitorIntelligenceSession.id == session_id
+        ).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        check_session_access(session, current_user, db)
     try:
         result = greenfield_service.submit_curation(
             session_id=session_id,
@@ -356,6 +429,7 @@ async def submit_curation(
 async def update_competitors(
     session_id: UUID,
     updates: CompetitorUpdateInput,
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Update competitors after finalization.
@@ -367,6 +441,17 @@ async def update_competitors(
 
     Note: Significant changes may trigger reanalysis.
     """
+    from src.database.session import get_db_context
+
+    # Check access
+    with get_db_context() as db:
+        session = db.query(CompetitorIntelligenceSession).filter(
+            CompetitorIntelligenceSession.id == session_id
+        ).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        check_session_access(session, current_user, db)
+
     result = greenfield_service.update_competitors(
         session_id=session_id,
         removals=[r.model_dump() for r in updates.removals] if updates.removals else None,
@@ -385,7 +470,10 @@ async def update_competitors(
 # =============================================================================
 
 @router.get("/dashboard/{analysis_run_id}")
-async def get_greenfield_dashboard(analysis_run_id: UUID) -> Dict[str, Any]:
+async def get_greenfield_dashboard(
+    analysis_run_id: UUID,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
     """
     Get complete greenfield dashboard data.
 
@@ -396,6 +484,15 @@ async def get_greenfield_dashboard(analysis_run_id: UUID) -> Dict[str, Any]:
     - Traffic projections
     - Growth roadmap
     """
+    from src.database.session import get_db_context
+
+    # Check access
+    with get_db_context() as db:
+        run = db.query(AnalysisRun).get(analysis_run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        check_analysis_access(run, current_user, db)
+
     result = greenfield_service.get_dashboard(analysis_run_id)
     if not result:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -406,6 +503,7 @@ async def get_greenfield_dashboard(analysis_run_id: UUID) -> Dict[str, Any]:
 @router.get("/dashboard/{analysis_run_id}/beachheads")
 async def get_beachhead_keywords(
     analysis_run_id: UUID,
+    current_user: User = Depends(get_current_user),
     phase: Optional[int] = None,
     min_winnability: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
@@ -416,6 +514,15 @@ async def get_beachhead_keywords(
     - Growth phase (1=Foundation, 2=Traction, 3=Authority)
     - Minimum winnability score
     """
+    from src.database.session import get_db_context
+
+    # Check access
+    with get_db_context() as db:
+        run = db.query(AnalysisRun).get(analysis_run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        check_analysis_access(run, current_user, db)
+
     keywords = greenfield_service.get_beachheads(
         analysis_run_id=analysis_run_id,
         phase=phase,
@@ -425,12 +532,24 @@ async def get_beachhead_keywords(
 
 
 @router.get("/dashboard/{analysis_run_id}/market-map")
-async def get_market_map(analysis_run_id: UUID) -> Dict[str, Any]:
+async def get_market_map(
+    analysis_run_id: UUID,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
     """
     Get market map data for visualization.
 
     Returns competitor positioning data for the market map component.
     """
+    from src.database.session import get_db_context
+
+    # Check access
+    with get_db_context() as db:
+        run = db.query(AnalysisRun).get(analysis_run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        check_analysis_access(run, current_user, db)
+
     dashboard = greenfield_service.get_dashboard(analysis_run_id)
     if not dashboard:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -455,12 +574,24 @@ async def get_market_map(analysis_run_id: UUID) -> Dict[str, Any]:
 
 
 @router.get("/dashboard/{analysis_run_id}/projections")
-async def get_traffic_projections(analysis_run_id: UUID) -> Dict[str, Any]:
+async def get_traffic_projections(
+    analysis_run_id: UUID,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
     """
     Get traffic projections for greenfield domain.
 
     Returns three scenarios: conservative, expected, aggressive
     """
+    from src.database.session import get_db_context
+
+    # Check access
+    with get_db_context() as db:
+        run = db.query(AnalysisRun).get(analysis_run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        check_analysis_access(run, current_user, db)
+
     dashboard = greenfield_service.get_dashboard(analysis_run_id)
     if not dashboard:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -470,7 +601,10 @@ async def get_traffic_projections(analysis_run_id: UUID) -> Dict[str, Any]:
 
 
 @router.get("/dashboard/{analysis_run_id}/roadmap")
-async def get_growth_roadmap(analysis_run_id: UUID) -> List[Dict[str, Any]]:
+async def get_growth_roadmap(
+    analysis_run_id: UUID,
+    current_user: User = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
     """
     Get growth roadmap for greenfield domain.
 
@@ -479,6 +613,15 @@ async def get_growth_roadmap(analysis_run_id: UUID) -> List[Dict[str, Any]]:
     - Phase 2: Traction (months 4-6)
     - Phase 3: Authority (months 7-12)
     """
+    from src.database.session import get_db_context
+
+    # Check access
+    with get_db_context() as db:
+        run = db.query(AnalysisRun).get(analysis_run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        check_analysis_access(run, current_user, db)
+
     dashboard = greenfield_service.get_dashboard(analysis_run_id)
     if not dashboard:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -495,6 +638,7 @@ async def get_growth_roadmap(analysis_run_id: UUID) -> List[Dict[str, Any]]:
 async def assign_keyword_phase(
     keyword_id: UUID,
     phase: int,  # 1, 2, or 3
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Assign a keyword to a growth phase.
@@ -504,6 +648,18 @@ async def assign_keyword_phase(
     - 2: Traction (medium difficulty, expansion)
     - 3: Authority (competitive, later targeting)
     """
+    from src.database.session import get_db_context
+
+    # Check access via keyword -> analysis -> domain
+    with get_db_context() as db:
+        keyword = db.query(Keyword).filter(Keyword.id == keyword_id).first()
+        if not keyword:
+            raise HTTPException(status_code=404, detail="Keyword not found")
+        if keyword.analysis_run_id:
+            run = db.query(AnalysisRun).filter(AnalysisRun.id == keyword.analysis_run_id).first()
+            if run:
+                check_analysis_access(run, current_user, db)
+
     try:
         success = greenfield_service.update_keyword_phase(keyword_id, phase)
         if not success:
@@ -534,6 +690,7 @@ class GreenfieldAnalysisRequest(BaseModel):
 @router.post("/analyze")
 async def start_greenfield_analysis(
     request: GreenfieldAnalysisRequest,
+    current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Start a greenfield analysis.
@@ -545,6 +702,8 @@ async def start_greenfield_analysis(
     - analysis_run_id: UUID of the created analysis
     - session_id: UUID of the competitor intelligence session
     - status: Current status (discovering)
+
+    The domain will be associated with the current user.
     """
     greenfield_context = {
         "business_name": request.business_name,
@@ -561,6 +720,7 @@ async def start_greenfield_analysis(
         analysis_run_id, session_id = greenfield_service.start_greenfield_analysis(
             domain=request.domain,
             greenfield_context=greenfield_context,
+            user_id=current_user.id,
         )
 
         # Trigger competitor discovery

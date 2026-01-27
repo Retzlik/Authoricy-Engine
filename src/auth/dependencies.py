@@ -118,6 +118,31 @@ async def require_admin(
     return current_user
 
 
+def require_role(*roles: UserRole):
+    """
+    Factory for role-based access dependencies.
+
+    Usage:
+        # At router level - all endpoints require this role
+        router = APIRouter(dependencies=[Depends(require_role(UserRole.ADMIN))])
+
+        # Per-endpoint override
+        @router.get("/endpoint", dependencies=[Depends(require_role(UserRole.USER, UserRole.ADMIN))])
+
+    Args:
+        *roles: One or more UserRole values that are allowed
+    """
+    async def role_checker(current_user: User = Depends(get_current_user)) -> User:
+        if current_user.role not in roles:
+            allowed = ", ".join(r.value for r in roles)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access requires one of: {allowed}",
+            )
+        return current_user
+    return role_checker
+
+
 class DomainAccessChecker:
     """
     Dependency class for checking domain ownership.
