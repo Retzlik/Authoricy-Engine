@@ -334,19 +334,28 @@ class GreenfieldService:
         else:
             discovery = PerplexityDiscovery(self.perplexity_client)
 
-        # Extract context fields
+        # Extract context fields with better defaults
         company_name = business_context.get("business_name", "the company")
-        category = business_context.get("primary_offering", "software")
+        category = business_context.get("industry_vertical") or business_context.get("primary_offering", "software")
         offering = business_context.get("business_description", category)
-        customer_type = business_context.get("target_audience", "businesses")
+        customer_type = business_context.get("target_audience") or "B2B companies"
+        seed_keywords = business_context.get("seed_keywords", [])
 
-        # Run discovery
+        logger.info(
+            f"Perplexity discovery for {company_name}: "
+            f"category={category}, keywords={len(seed_keywords)}"
+        )
+
+        # Run discovery with full context
         discovered = await discovery.discover_competitors(
             company_name=company_name,
             category=category,
             offering=offering,
             customer_type=customer_type,
+            seed_keywords=seed_keywords,
         )
+
+        logger.info(f"Perplexity discovered {len(discovered)} unique competitors")
 
         # Convert to dict format
         competitors = []
