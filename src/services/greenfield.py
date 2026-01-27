@@ -31,21 +31,60 @@ from src.scoring.greenfield import (
 logger = logging.getLogger(__name__)
 
 
-# Business context extraction patterns
+# Business context extraction patterns - comprehensive competitor detection
 COMPETITOR_PATTERNS = [
+    # Direct comparison patterns
     r"compared to (\w+(?:\.\w+)?)",
     r"alternative to (\w+(?:\.\w+)?)",
-    r"vs\.? (\w+(?:\.\w+)?)",
+    r"vs\.?\s+(\w+(?:\.\w+)?)",
+    r"versus (\w+(?:\.\w+)?)",
     r"unlike (\w+(?:\.\w+)?)",
     r"better than (\w+(?:\.\w+)?)",
-    r"switch from (\w+(?:\.\w+)?)",
+    r"faster than (\w+(?:\.\w+)?)",
+    r"cheaper than (\w+(?:\.\w+)?)",
+    r"more powerful than (\w+(?:\.\w+)?)",
+    # Migration/switching patterns
+    r"switch(?:ing)? from (\w+(?:\.\w+)?)",
+    r"migrat(?:e|ing) from (\w+(?:\.\w+)?)",
+    r"moving from (\w+(?:\.\w+)?)",
+    r"replac(?:e|ing) (\w+(?:\.\w+)?)",
+    r"instead of (\w+(?:\.\w+)?)",
+    # Similar/competitor patterns
+    r"(?:similar|like) (\w+(?:\.\w+)?)",
+    r"competitors? (?:like|such as|including) (\w+(?:\.\w+)?)",
+    r"(?:tools?|products?|solutions?) like (\w+(?:\.\w+)?)",
+    # Integration patterns (often mention related tools)
+    r"integrates? with (\w+(?:\.\w+)?)",
+    r"works? with (\w+(?:\.\w+)?)",
+    r"connects? to (\w+(?:\.\w+)?)",
 ]
+
+# Known competitor brand names to look for (common SaaS/tech brands)
+KNOWN_COMPETITOR_BRANDS = {
+    "hubspot", "salesforce", "zendesk", "intercom", "drift", "mailchimp",
+    "ahrefs", "semrush", "moz", "screaming frog", "majestic",
+    "slack", "asana", "monday", "trello", "notion", "clickup", "jira",
+    "shopify", "woocommerce", "bigcommerce", "magento", "squarespace", "wix",
+    "stripe", "paypal", "square", "braintree",
+    "zapier", "make", "automate.io", "integromat", "n8n",
+    "datadog", "newrelic", "splunk", "grafana", "prometheus",
+    "aws", "azure", "google cloud", "digitalocean", "heroku", "vercel",
+    "segment", "amplitude", "mixpanel", "heap", "fullstory", "hotjar",
+    "figma", "sketch", "adobe xd", "invision", "canva",
+    "github", "gitlab", "bitbucket", "sourcegraph",
+}
 
 PRICE_PATTERNS = [
     r"\$(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:/|per)?\s*(?:mo|month|monthly)",
     r"(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:USD|EUR|GBP)\s*(?:/|per)?\s*(?:mo|month|monthly)",
     r"starting at \$?(\d+)",
 ]
+
+# Common TLDs for domain validation
+VALID_TLDS = {
+    "com", "io", "co", "ai", "app", "dev", "org", "net", "edu", "gov",
+    "us", "uk", "de", "fr", "ca", "au", "in", "jp", "cn", "br",
+}
 
 
 class GreenfieldService:
@@ -255,16 +294,34 @@ class GreenfieldService:
 
         # Extract mentioned competitors from all content
         mentioned_competitors = set()
+
+        # Method 1: Pattern-based extraction (e.g., "compared to X", "vs X")
         for pattern in COMPETITOR_PATTERNS:
             matches = re.findall(pattern, combined_content, re.IGNORECASE)
             for match in matches:
-                # Clean up the match
                 comp = match.strip().lower()
-                if comp and len(comp) > 2 and "." in comp or len(comp) > 4:
+                if self._is_valid_competitor_name(comp):
                     mentioned_competitors.add(comp)
 
+        # Method 2: Known brand detection (direct mentions of known competitors)
+        for brand in KNOWN_COMPETITOR_BRANDS:
+            # Look for brand mentions with word boundaries
+            if re.search(rf"\b{re.escape(brand)}\b", combined_content):
+                mentioned_competitors.add(brand)
+
+        # Method 3: Extract explicit domain mentions (e.g., "ahrefs.com")
+        domain_pattern = r"\b([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:com|io|co|ai|app|org|net))\b"
+        domain_matches = re.findall(domain_pattern, combined_content)
+        for domain in domain_matches:
+            # Filter out generic domains
+            if domain not in {"example.com", "domain.com", "yoursite.com", "website.com"}:
+                mentioned_competitors.add(domain)
+
         if mentioned_competitors:
-            context["self_mentioned_competitors"] = list(mentioned_competitors)[:10]
+            # Sort by length (longer = more specific = higher quality)
+            sorted_competitors = sorted(mentioned_competitors, key=len, reverse=True)
+            context["self_mentioned_competitors"] = sorted_competitors[:15]
+            logger.info(f"Extracted {len(sorted_competitors)} competitor mentions from website")
 
         # Detect business model indicators
         if "saas" in combined_content or "software as a service" in combined_content:
@@ -333,6 +390,50 @@ class GreenfieldService:
                 )
 
         return merged
+
+    def _is_valid_competitor_name(self, name: str) -> bool:
+        """
+        Validate if extracted text is likely a valid competitor name.
+
+        Filters out common false positives like generic words.
+        """
+        if not name or len(name) < 3:
+            return False
+
+        # Filter out generic/stop words that often get matched
+        stop_words = {
+            "the", "and", "for", "with", "your", "our", "this", "that",
+            "from", "into", "than", "other", "more", "less", "most",
+            "best", "top", "new", "old", "big", "small", "fast", "slow",
+            "free", "paid", "premium", "basic", "pro", "plus", "lite",
+            "software", "platform", "tool", "service", "solution", "app",
+            "data", "cloud", "web", "api", "system", "product", "company",
+            "team", "user", "customer", "client", "business", "enterprise",
+        }
+
+        name_lower = name.lower()
+        if name_lower in stop_words:
+            return False
+
+        # If it looks like a domain, validate the TLD
+        if "." in name:
+            parts = name.split(".")
+            tld = parts[-1].lower()
+            if tld in VALID_TLDS:
+                return True
+            # Unknown TLD but has domain-like structure
+            return len(parts) == 2 and len(parts[0]) >= 2
+
+        # Brand name (no dot) - must be substantial
+        # Known brands are always valid
+        if name_lower in KNOWN_COMPETITOR_BRANDS:
+            return True
+
+        # Unknown brand - be stricter (min 4 chars, no numbers only)
+        if len(name) >= 4 and not name.isdigit():
+            return True
+
+        return False
 
     def start_greenfield_analysis(
         self,
@@ -520,8 +621,28 @@ class GreenfieldService:
         if self.client:
             unique_candidates = await self._enrich_candidates(unique_candidates, market)
 
+        # Prepare website context for storage (only relevant fields)
+        website_context_to_store = None
+        if enhanced_context.get("scraped_from_website"):
+            website_context_to_store = {
+                "scraped_pages": enhanced_context.get("scraped_pages", 0),
+                "detected_title": enhanced_context.get("detected_title"),
+                "detected_description": enhanced_context.get("detected_description"),
+                "detected_about": enhanced_context.get("detected_about"),
+                "detected_pricing_model": enhanced_context.get("detected_pricing_model"),
+                "detected_business_model": enhanced_context.get("detected_business_model"),
+                "detected_target_size": enhanced_context.get("detected_target_size"),
+                "detected_customer_type": enhanced_context.get("detected_customer_type"),
+                "self_mentioned_competitors": enhanced_context.get("self_mentioned_competitors", []),
+                "has_features_page": enhanced_context.get("has_features_page", False),
+            }
+
         # Update session with candidates and website context
-        repository.update_session_candidates(session_id, unique_candidates)
+        repository.update_session_candidates(
+            session_id,
+            unique_candidates,
+            website_context=website_context_to_store,
+        )
 
         # Log discovery summary
         logger.info(

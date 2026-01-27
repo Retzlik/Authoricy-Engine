@@ -1732,8 +1732,16 @@ def get_competitor_session(session_id: UUID) -> Optional[Dict[str, Any]]:
 def update_session_candidates(
     session_id: UUID,
     candidates: List[Dict[str, Any]],
+    website_context: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Update session with discovered competitor candidates."""
+    """
+    Update session with discovered competitor candidates.
+
+    Args:
+        session_id: Session to update
+        candidates: List of competitor candidates
+        website_context: Optional scraped website context from Firecrawl
+    """
     from .models import CompetitorIntelligenceSession
 
     with get_db_context() as db:
@@ -1744,6 +1752,10 @@ def update_session_candidates(
         session.candidate_competitors = candidates
         session.candidates_generated_at = datetime.utcnow()
         session.status = "awaiting_curation"
+
+        # Store website context if provided (from Firecrawl scraping)
+        if website_context:
+            session.website_context = website_context
 
         return True
 
