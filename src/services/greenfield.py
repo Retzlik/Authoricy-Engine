@@ -511,6 +511,34 @@ class GreenfieldService:
             elif not seed_keywords:
                 logger.warning("SERP DISCOVERY SKIPPED: No seed keywords provided")
 
+        # Phase 5: Use DataForSEO Competitors API if we have user-provided competitors
+        if self.client and known_competitors:
+            try:
+                logger.info("Starting DataForSEO competitors API discovery...")
+                for known_comp in known_competitors[:3]:  # Check first 3 user competitors
+                    api_competitors = await self.client.get_domain_competitors(
+                        domain=known_comp,
+                        limit=10,
+                    )
+                    if api_competitors:
+                        for comp in api_competitors:
+                            domain = comp.get("domain", "").lower()
+                            if domain and domain not in seen_domains:
+                                candidates.append({
+                                    "domain": domain,
+                                    "discovery_source": "dataforseo_competitors",
+                                    "discovery_reason": f"Competes with {known_comp} for keywords",
+                                    "domain_rating": 0,
+                                    "organic_traffic": comp.get("organic_traffic", 0),
+                                    "organic_keywords": comp.get("organic_keywords", 0),
+                                    "relevance_score": 0.85,
+                                    "suggested_purpose": "keyword_source",
+                                })
+                                seen_domains.add(domain)
+                        logger.info(f"DataForSEO found {len(api_competitors)} competitors for {known_comp}")
+            except Exception as e:
+                logger.error(f"DataForSEO competitors API FAILED: {e}", exc_info=True)
+
         # Deduplicate AND filter out non-competitors (tools, services, infrastructure)
         seen = set()
         unique_candidates = []
@@ -596,34 +624,68 @@ class GreenfieldService:
         competitors = []
         domain_counts = {}
 
+        # Convert market string to location code
+        # DataForSEO location codes: https://docs.dataforseo.com/v3/appendix/locations
+        MARKET_TO_LOCATION_CODE = {
+            "us": 2840,
+            "united states": 2840,
+            "uk": 2826,
+            "united kingdom": 2826,
+            "ca": 2124,
+            "canada": 2124,
+            "au": 2036,
+            "australia": 2036,
+            "de": 2276,
+            "germany": 2276,
+            "fr": 2250,
+            "france": 2250,
+            "se": 2752,
+            "sweden": 2752,
+        }
+        location_code = MARKET_TO_LOCATION_CODE.get(market.lower(), 2840)  # Default to US
+
+        logger.info(f"SERP discovery: {len(seed_keywords)} keywords, location_code={location_code}")
+
         for keyword in seed_keywords:
             try:
+                logger.debug(f"Querying SERP for keyword: {keyword}")
                 serp_results = await self.client.get_serp_results(
                     keyword=keyword,
-                    location=market,
+                    location_code=location_code,  # FIXED: was passing wrong param name
                     depth=10,
                 )
 
-                for result in serp_results.get("items", []):
+                # Handle None response
+                if not serp_results:
+                    logger.warning(f"SERP returned no results for '{keyword}'")
+                    continue
+
+                items = serp_results.get("items", [])
+                logger.debug(f"SERP for '{keyword}': {len(items)} results")
+
+                for result in items:
                     domain = result.get("domain", "")
                     if domain:
                         domain_counts[domain] = domain_counts.get(domain, 0) + 1
 
             except Exception as e:
-                logger.warning(f"SERP analysis for '{keyword}' failed: {e}")
+                logger.error(f"SERP analysis for '{keyword}' failed: {e}", exc_info=True)
 
-        # Convert to candidates (domains appearing 2+ times)
+        logger.info(f"SERP found {len(domain_counts)} unique domains across all keywords")
+
+        # Convert to candidates - domains appearing in ANY keyword (removed 2+ requirement)
+        # Sort by count (most appearances first)
         for domain, count in sorted(domain_counts.items(), key=lambda x: -x[1]):
-            if count >= 2:
-                competitors.append({
-                    "domain": domain,
-                    "discovery_source": "serp",
-                    "discovery_reason": f"Ranks for {count} of your seed keywords",
-                    "relevance_score": min(0.95, 0.5 + count * 0.1),
-                    "suggested_purpose": "keyword_source",
-                })
+            competitors.append({
+                "domain": domain,
+                "discovery_source": "serp",
+                "discovery_reason": f"Ranks for {count} of your seed keywords",
+                "relevance_score": min(0.95, 0.5 + count * 0.15),
+                "suggested_purpose": "keyword_source",
+            })
 
-        return competitors[:15]
+        logger.info(f"SERP discovery returning {len(competitors[:20])} competitors")
+        return competitors[:20]  # Return top 20
 
     async def _discover_from_perplexity(
         self,
@@ -754,14 +816,21 @@ class GreenfieldService:
         - Referring Domains from Backlinks Summary API
         """
         enriched = []
+        success_count = 0
+        fail_count = 0
+
+        logger.info(f"Starting enrichment for {len(candidates)} candidates...")
+
         for candidate in candidates:
             domain = candidate.get("domain", "")
             try:
                 # Fetch domain overview (organic metrics)
                 overview = await self.client.get_domain_overview(domain=domain)
+                logger.debug(f"Domain overview for {domain}: {overview}")
 
                 # Fetch backlink summary (DR, referring domains)
                 backlink_summary = await self.client.get_backlink_summary(domain=domain)
+                logger.debug(f"Backlink summary for {domain}: {backlink_summary}")
 
                 # Update candidate with metrics (handle None responses)
                 candidate["domain_rating"] = (
@@ -777,14 +846,20 @@ class GreenfieldService:
                     backlink_summary.get("referring_domains", 0) if backlink_summary else 0
                 )
 
-                logger.debug(
-                    f"Enriched {domain}: DR={candidate['domain_rating']}, "
-                    f"traffic={candidate['organic_traffic']}, "
-                    f"keywords={candidate['organic_keywords']}"
-                )
+                # Log at INFO level for first few to help debug
+                if success_count < 3:
+                    logger.info(
+                        f"Enriched {domain}: DR={candidate['domain_rating']}, "
+                        f"traffic={candidate['organic_traffic']}, "
+                        f"keywords={candidate['organic_keywords']}, "
+                        f"referring_domains={candidate['referring_domains']}"
+                    )
+
+                success_count += 1
 
             except Exception as e:
-                logger.warning(f"Failed to enrich {domain}: {e}")
+                logger.error(f"Failed to enrich {domain}: {e}", exc_info=True)
+                fail_count += 1
                 # Keep the candidate but with default metrics
                 candidate["domain_rating"] = 0
                 candidate["organic_traffic"] = 0
