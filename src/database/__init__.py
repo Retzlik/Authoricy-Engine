@@ -92,6 +92,7 @@ from .session import (
     get_db_info,
     get_table_count,
     engine,
+    ensure_greenfield_columns_exist,
 )
 
 # Validation
@@ -199,6 +200,7 @@ __all__ = [
     "get_db_info",
     "get_table_count",
     "engine",
+    "ensure_greenfield_columns_exist",
     # Validation
     "validate_run_data",
     "DataQualityReport",

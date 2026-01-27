@@ -104,6 +104,7 @@ def create_db_engine():
 
 # Global engine (lazy initialization)
 _engine = None
+_greenfield_columns_verified = False
 
 def get_engine():
     """Get or create the database engine."""
@@ -111,6 +112,36 @@ def get_engine():
     if _engine is None:
         _engine = create_db_engine()
     return _engine
+
+
+def ensure_greenfield_columns_exist() -> bool:
+    """
+    Public function to ensure greenfield columns exist.
+
+    Call this before any operation that requires the analysis_mode column.
+    Returns True if columns were verified/added successfully.
+
+    This is idempotent and safe to call multiple times.
+    """
+    global _greenfield_columns_verified
+
+    if _greenfield_columns_verified:
+        return True
+
+    url = get_database_url()
+    if not url.startswith("postgresql://"):
+        _greenfield_columns_verified = True
+        return True
+
+    engine = get_engine()
+    try:
+        _ensure_greenfield_columns(engine)
+        _greenfield_columns_verified = True
+        logger.info("Greenfield columns verified via ensure_greenfield_columns_exist()")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to ensure greenfield columns: {e}")
+        return False
 
 # Alias for imports
 engine = property(lambda self: get_engine())
@@ -223,10 +254,32 @@ def _ensure_greenfield_columns(engine) -> None:
 
     This is a direct fix for the missing analysis_mode column error.
     Uses simple ALTER TABLE statements that are safe to run multiple times.
+
+    Raises an exception if critical columns cannot be added.
     """
+    logger.info("Starting greenfield column verification...")
+
+    # First, check if the analysis_runs table exists
     with engine.connect() as conn:
         try:
-            # First, ensure the analysismode enum type exists
+            result = conn.execute(text("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_name = 'analysis_runs'
+                )
+            """))
+            table_exists = result.scalar()
+            if not table_exists:
+                logger.warning("analysis_runs table does not exist yet - skipping column check")
+                return
+        except Exception as e:
+            logger.warning(f"Could not check if analysis_runs table exists: {e}")
+            return
+
+    # Create the enum type
+    with engine.connect() as conn:
+        try:
             conn.execute(text("""
                 DO $$ BEGIN
                     CREATE TYPE analysismode AS ENUM ('standard', 'greenfield', 'hybrid');
@@ -237,38 +290,79 @@ def _ensure_greenfield_columns(engine) -> None:
             conn.commit()
             logger.info("Ensured analysismode enum exists")
         except Exception as e:
-            logger.warning(f"Could not create analysismode enum: {e}")
+            logger.warning(f"Could not create analysismode enum (may already exist): {e}")
             try:
                 conn.rollback()
             except Exception:
                 pass
 
-        # Add each column individually with IF NOT EXISTS
-        columns_to_add = [
-            ("analysis_mode", "analysismode DEFAULT 'standard'"),
-            ("domain_maturity_at_analysis", "VARCHAR(20)"),
-            ("domain_rating_at_analysis", "INTEGER"),
-            ("organic_keywords_at_analysis", "INTEGER"),
-            ("organic_traffic_at_analysis", "INTEGER"),
-            ("greenfield_context", "JSONB"),
-        ]
+    # Add each column individually with IF NOT EXISTS
+    columns_to_add = [
+        ("analysis_mode", "analysismode DEFAULT 'standard'"),
+        ("domain_maturity_at_analysis", "VARCHAR(20)"),
+        ("domain_rating_at_analysis", "INTEGER"),
+        ("organic_keywords_at_analysis", "INTEGER"),
+        ("organic_traffic_at_analysis", "INTEGER"),
+        ("greenfield_context", "JSONB"),
+    ]
 
-        for col_name, col_type in columns_to_add:
+    columns_added = []
+    columns_failed = []
+
+    for col_name, col_type in columns_to_add:
+        with engine.connect() as conn:
             try:
+                # Check if column already exists
+                result = conn.execute(text(f"""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                        AND table_name = 'analysis_runs'
+                        AND column_name = '{col_name}'
+                    )
+                """))
+                col_exists = result.scalar()
+
+                if col_exists:
+                    logger.debug(f"Column {col_name} already exists")
+                    columns_added.append(col_name)
+                    continue
+
+                # Add the column
                 conn.execute(text(f"""
                     ALTER TABLE analysis_runs
                     ADD COLUMN IF NOT EXISTS {col_name} {col_type}
                 """))
                 conn.commit()
-                logger.debug(f"Ensured column {col_name} exists")
+                logger.info(f"Added column {col_name} to analysis_runs")
+                columns_added.append(col_name)
+
             except Exception as e:
-                logger.warning(f"Could not add column {col_name}: {e}")
+                logger.error(f"Failed to add column {col_name}: {e}")
+                columns_failed.append(col_name)
                 try:
                     conn.rollback()
                 except Exception:
                     pass
 
-        logger.info("Greenfield columns verified/added")
+    # Verify the critical analysis_mode column exists
+    with engine.connect() as conn:
+        try:
+            result = conn.execute(text("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                    AND table_name = 'analysis_runs'
+                    AND column_name = 'analysis_mode'
+                )
+            """))
+            analysis_mode_exists = result.scalar()
+            if not analysis_mode_exists:
+                raise RuntimeError("Critical column 'analysis_mode' could not be added to analysis_runs")
+            logger.info(f"Greenfield columns verified: {len(columns_added)} ok, {len(columns_failed)} failed")
+        except Exception as e:
+            logger.error(f"Failed to verify analysis_mode column: {e}")
+            raise
 
 
 def _run_pending_migrations(engine, conn) -> None:
