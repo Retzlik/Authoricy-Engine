@@ -52,9 +52,28 @@ def _trigger_cache_operations(run_id: UUID, domain_id: UUID, db: Session):
     """
     Trigger cache invalidation and precomputation after analysis completion.
 
-    This runs asynchronously in a background task to not block the completion.
+    Uses a background thread to avoid blocking and handle async/sync boundary.
+    Cache operations are non-critical - failures are logged but don't fail the operation.
     """
+    import threading
+
+    def _run_in_thread():
+        """Run cache operations in a separate thread with its own event loop."""
+        try:
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            try:
+                loop.run_until_complete(_async_cache_ops())
+            finally:
+                loop.close()
+
+        except Exception as e:
+            logger.warning(f"Cache operations thread failed for {run_id}: {e}")
+
     async def _async_cache_ops():
+        """Async cache operations."""
         try:
             # Import here to avoid circular imports
             from src.cache.invalidation import invalidate_on_analysis_complete
@@ -72,22 +91,17 @@ def _trigger_cache_operations(run_id: UUID, domain_id: UUID, db: Session):
                     f"{result['components_computed']} components in {result['duration_seconds']:.2f}s"
                 )
 
+        except ImportError as e:
+            # Cache module not available - that's OK, caching is optional
+            logger.debug(f"Cache module not available: {e}")
         except Exception as e:
             # Log but don't fail - cache operations are non-critical
             logger.warning(f"Cache operations failed for {run_id}: {e}")
 
-    # Run async operations in background
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If we're in an async context, create a task
-            asyncio.create_task(_async_cache_ops())
-        else:
-            # If we're in a sync context, run in new event loop
-            asyncio.run(_async_cache_ops())
-    except RuntimeError:
-        # No event loop - create one
-        asyncio.run(_async_cache_ops())
+    # Start background thread (non-blocking)
+    thread = threading.Thread(target=_run_in_thread, daemon=True)
+    thread.start()
+    logger.debug(f"Started cache operations thread for {run_id}")
 
 
 # =============================================================================
