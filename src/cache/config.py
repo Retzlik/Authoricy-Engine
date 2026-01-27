@@ -1,8 +1,11 @@
 """
 Cache Configuration
 
-Centralized configuration for all caching layers.
-TTLs are carefully tuned based on data change frequency.
+Centralized configuration for caching layer.
+TTLs define HTTP cache header durations.
+
+Note: Application cache uses PostgreSQL (precomputed_dashboard table).
+No Redis required.
 """
 
 import os
@@ -20,6 +23,10 @@ class CacheTTL:
     Key insight: Most dashboard data only changes when a new analysis runs.
     This happens weekly or monthly. We're re-computing data that hasn't
     changed on every page load - that's the waste we're eliminating.
+
+    These values are used for:
+    - HTTP Cache-Control headers (browser/CDN caching)
+    - Determining when to refresh precomputed data
     """
 
     # Dashboard data (stable after analysis completion)
@@ -78,29 +85,12 @@ class CacheConfig:
     """
     Main cache configuration.
 
-    All settings can be overridden via environment variables:
-    - REDIS_URL: Redis connection URL
+    Settings can be overridden via environment variables:
     - CACHE_ENABLED: Enable/disable caching globally
-    - CACHE_COMPRESSION_ENABLED: Enable LZ4 compression
-    - CACHE_COMPRESSION_THRESHOLD: Min size for compression
+    - HTTP_CACHE_ENABLED: Enable HTTP cache headers
     """
 
-    # Redis connection
-    redis_url: str = field(default_factory=lambda: os.getenv(
-        "REDIS_URL",
-        "redis://localhost:6379/0"
-    ))
-    redis_max_connections: int = field(default_factory=lambda: int(
-        os.getenv("REDIS_MAX_CONNECTIONS", "50")
-    ))
-    redis_socket_timeout: float = field(default_factory=lambda: float(
-        os.getenv("REDIS_SOCKET_TIMEOUT", "5.0")
-    ))
-    redis_connect_timeout: float = field(default_factory=lambda: float(
-        os.getenv("REDIS_CONNECT_TIMEOUT", "2.0")
-    ))
-
-    # Cache namespace (for multi-tenant isolation)
+    # Cache namespace (for key prefixes)
     namespace: str = field(default_factory=lambda: os.getenv(
         "CACHE_NAMESPACE",
         "authoricy"
@@ -112,32 +102,11 @@ class CacheConfig:
         "true"
     ).lower() == "true")
 
-    # Compression settings
-    compression_enabled: bool = field(default_factory=lambda: os.getenv(
-        "CACHE_COMPRESSION_ENABLED",
-        "true"
-    ).lower() == "true")
-    compression_threshold: int = field(default_factory=lambda: int(
-        os.getenv("CACHE_COMPRESSION_THRESHOLD", "1024")
-    ))  # Only compress if > 1KB
-
     # Precomputation settings
     precomputation_enabled: bool = field(default_factory=lambda: os.getenv(
         "CACHE_PRECOMPUTATION_ENABLED",
         "true"
     ).lower() == "true")
-    precomputation_batch_size: int = field(default_factory=lambda: int(
-        os.getenv("CACHE_PRECOMPUTATION_BATCH_SIZE", "100")
-    ))
-
-    # Cache warming settings
-    warming_enabled: bool = field(default_factory=lambda: os.getenv(
-        "CACHE_WARMING_ENABLED",
-        "true"
-    ).lower() == "true")
-    warming_interval_seconds: int = field(default_factory=lambda: int(
-        os.getenv("CACHE_WARMING_INTERVAL", "300")
-    ))  # 5 minutes
 
     # HTTP cache settings
     http_cache_enabled: bool = field(default_factory=lambda: os.getenv(
@@ -145,7 +114,7 @@ class CacheConfig:
         "true"
     ).lower() == "true")
 
-    # CDN purge settings
+    # CDN purge settings (optional - for Cloudflare integration)
     cdn_purge_enabled: bool = field(default_factory=lambda: os.getenv(
         "CDN_PURGE_ENABLED",
         "false"
@@ -156,29 +125,6 @@ class CacheConfig:
     cloudflare_api_token: Optional[str] = field(default_factory=lambda: os.getenv(
         "CLOUDFLARE_API_TOKEN"
     ))
-
-    # Monitoring thresholds
-    min_hit_rate: float = field(default_factory=lambda: float(
-        os.getenv("CACHE_MIN_HIT_RATE", "0.8")
-    ))  # Alert if < 80%
-    max_latency_ms: float = field(default_factory=lambda: float(
-        os.getenv("CACHE_MAX_LATENCY_MS", "50")
-    ))  # Alert if > 50ms
-    max_memory_mb: int = field(default_factory=lambda: int(
-        os.getenv("CACHE_MAX_MEMORY_MB", "1024")
-    ))  # Alert if > 1GB
-
-    # Circuit breaker settings
-    circuit_breaker_enabled: bool = field(default_factory=lambda: os.getenv(
-        "CACHE_CIRCUIT_BREAKER_ENABLED",
-        "true"
-    ).lower() == "true")
-    circuit_breaker_threshold: int = field(default_factory=lambda: int(
-        os.getenv("CACHE_CIRCUIT_BREAKER_THRESHOLD", "5")
-    ))  # Failures before opening
-    circuit_breaker_timeout: int = field(default_factory=lambda: int(
-        os.getenv("CACHE_CIRCUIT_BREAKER_TIMEOUT", "60")
-    ))  # Seconds before retry
 
 
 @lru_cache(maxsize=1)

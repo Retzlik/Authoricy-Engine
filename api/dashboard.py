@@ -11,7 +11,7 @@ Provides dashboard-optimized endpoints for the 100x Intelligence Dashboard:
 - Ranked opportunities
 
 PERFORMANCE OPTIMIZATIONS:
-- Precomputed data served from Redis cache (<50ms vs 2-5s)
+- Precomputed data served from PostgreSQL cache (<100ms vs 2-5s)
 - HTTP caching headers for CDN and browser caching
 - Bundled endpoint for single API call (reduces 6+ calls to 1)
 - ETag support for conditional requests (304 Not Modified)
@@ -20,7 +20,6 @@ PERFORMANCE OPTIMIZATIONS:
 These endpoints aggregate and format existing data for visualization.
 """
 
-import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
@@ -39,7 +38,7 @@ from src.database.models import (
     AgentOutput, SERPFeature, AIVisibility, TechnicalMetrics,
     AnalysisStatus, SearchIntent, CompetitorType
 )
-from src.cache.redis_cache import get_redis_cache, RedisCache
+from src.cache.postgres_cache import PostgresCache, get_postgres_cache
 from src.cache.headers import (
     add_cache_headers, generate_etag, check_not_modified,
     CacheHeadersBuilder
@@ -391,41 +390,6 @@ def estimate_traffic_from_position(position: int, search_volume: int) -> int:
 # CACHE HELPERS
 # =============================================================================
 
-async def get_cached_or_compute(
-    cache_key: str,
-    compute_fn,
-    ttl: timedelta,
-    response: Optional[Response] = None,
-    etag_components: Optional[List[Any]] = None,
-) -> Tuple[Any, bool]:
-    """
-    Get data from cache or compute if not cached.
-
-    Returns:
-        Tuple of (data, was_cached)
-    """
-    try:
-        cache = await get_redis_cache()
-        cached = await cache.get(cache_key)
-        if cached is not None:
-            return cached, True
-    except Exception as e:
-        logger.warning(f"Cache read failed: {e}")
-        cached = None
-
-    # Compute the data
-    data = await compute_fn() if asyncio.iscoroutinefunction(compute_fn) else compute_fn()
-
-    # Store in cache
-    try:
-        cache = await get_redis_cache()
-        await cache.set(cache_key, data, ttl)
-    except Exception as e:
-        logger.warning(f"Cache write failed: {e}")
-
-    return data, False
-
-
 def get_latest_analysis(domain_id: UUID, db: Session) -> Optional[AnalysisRun]:
     """Get the latest completed analysis for a domain."""
     return db.query(AnalysisRun).filter(
@@ -493,39 +457,36 @@ async def get_dashboard_bundle(
     if not_modified:
         return not_modified
 
-    # Try to get bundle from cache
-    try:
-        cache = await get_redis_cache()
-        bundle = await cache.get_dashboard_bundle(str(domain_id), analysis_id)
+    # Try to get bundle from PostgreSQL cache
+    cache = get_postgres_cache(db)
+    bundle_data = cache.get_bundle(str(domain_id), analysis_id)
 
-        if bundle is not None:
-            # Filter to requested components
-            requested = set(c.strip() for c in include.split(","))
-            filtered_bundle = {
-                k: v for k, v in bundle.items()
-                if k in requested or k in ["analysis_id", "precomputed_at"]
-            }
+    if bundle_data is not None:
+        # Filter to requested components
+        requested = set(c.strip() for c in include.split(","))
+        filtered_bundle = {
+            k: v for k, v in bundle_data.items()
+            if k in requested or k in ["analysis_id", "precomputed_at", "from_cache"]
+        }
 
-            # Add cache headers
-            add_cache_headers(
-                response,
-                max_age=300,  # 5 minutes
-                etag=etag,
-                last_modified=analysis.completed_at,
-                public=True,
-                surrogate_keys=[f"domain:{domain_id}", f"analysis:{analysis_id}", "dashboard-bundle"],
-            )
+        # Add cache headers
+        add_cache_headers(
+            response,
+            max_age=300,  # 5 minutes
+            etag=etag,
+            last_modified=analysis.completed_at,
+            public=True,
+            surrogate_keys=[f"domain:{domain_id}", f"analysis:{analysis_id}", "dashboard-bundle"],
+        )
 
-            return {
-                "domain": domain.domain,
-                "analysis_id": analysis_id,
-                "from_cache": True,
-                **filtered_bundle,
-            }
-    except Exception as e:
-        logger.warning(f"Bundle cache read failed: {e}")
+        return {
+            "domain": domain.domain,
+            "analysis_id": analysis_id,
+            "from_cache": True,
+            **filtered_bundle,
+        }
 
-    # Cache miss - compute components in parallel
+    # Cache miss - fetch individual components from cache
     requested = set(c.strip() for c in include.split(","))
     bundle = {
         "domain": domain.domain,
@@ -533,18 +494,12 @@ async def get_dashboard_bundle(
         "from_cache": False,
     }
 
-    # Parallel fetch using asyncio.gather would be ideal here
-    # For now, fetch components sequentially (they're fast when precomputed)
-    try:
-        cache = await get_redis_cache()
-
-        for component in requested:
-            component_key = component.replace("_", "-")
-            data = await cache.get_dashboard(str(domain_id), component_key, analysis_id)
-            if data:
-                bundle[component] = data
-    except Exception as e:
-        logger.warning(f"Component cache read failed: {e}")
+    # Fetch components from cache
+    for component in requested:
+        component_key = component.replace("_", "-")
+        data = cache.get_dashboard(str(domain_id), component_key, analysis_id)
+        if data:
+            bundle[component] = data
 
     # Add cache headers
     add_cache_headers(
@@ -598,17 +553,14 @@ async def get_dashboard_overview(
         return not_modified
 
     # Try cache first
-    try:
-        cache = await get_redis_cache()
-        cached = await cache.get_dashboard(str(domain_id), "overview", analysis_id)
-        if cached is not None:
-            add_cache_headers(
-                response, max_age=300, etag=etag, last_modified=analysis.completed_at,
-                public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-overview"]
-            )
-            return DashboardOverview(**cached)
-    except Exception as e:
-        logger.warning(f"Overview cache read failed: {e}")
+    cache = get_postgres_cache(db)
+    cached = cache.get_dashboard(str(domain_id), "overview", analysis_id)
+    if cached is not None:
+        add_cache_headers(
+            response, max_age=300, etag=etag, last_modified=analysis.completed_at,
+            public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-overview"]
+        )
+        return DashboardOverview(**cached)
 
     # Cache miss - compute from database
     # Get previous analysis for comparison
@@ -779,17 +731,14 @@ async def get_share_of_voice(
         return not_modified
 
     # Try cache first
-    try:
-        cache = await get_redis_cache()
-        cached = await cache.get_dashboard(str(domain_id), "sov", analysis_id)
-        if cached is not None:
-            add_cache_headers(
-                response, max_age=300, etag=etag, last_modified=analysis.completed_at,
-                public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-sov"]
-            )
-            return ShareOfVoiceResponse(**cached)
-    except Exception as e:
-        logger.warning(f"SoV cache read failed: {e}")
+    cache = get_postgres_cache(db)
+    cached = cache.get_dashboard(str(domain_id), "sov", analysis_id)
+    if cached is not None:
+        add_cache_headers(
+            response, max_age=300, etag=etag, last_modified=analysis.completed_at,
+            public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-sov"]
+        )
+        return ShareOfVoiceResponse(**cached)
 
     # Get target domain's traffic
     target_stats = db.query(
@@ -902,17 +851,14 @@ async def get_sparklines(
 
     # Try cache first (only for default params)
     if not keyword_ids and top_n == 20 and days == 30:
-        try:
-            cache = await get_redis_cache()
-            cached = await cache.get_dashboard(str(domain_id), "sparklines", analysis_id)
-            if cached is not None:
-                add_cache_headers(
-                    response, max_age=300, etag=etag, last_modified=analysis.completed_at,
-                    public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-sparklines"]
-                )
-                return SparklineResponse(**cached)
-        except Exception as e:
-            logger.warning(f"Sparklines cache read failed: {e}")
+        cache = get_postgres_cache(db)
+        cached = cache.get_dashboard(str(domain_id), "sparklines", analysis_id)
+        if cached is not None:
+            add_cache_headers(
+                response, max_age=300, etag=etag, last_modified=analysis.completed_at,
+                public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-sparklines"]
+            )
+            return SparklineResponse(**cached)
 
     # Determine which keywords to include
     if keyword_ids:
@@ -1032,17 +978,14 @@ async def get_battleground(
         return not_modified
 
     # Try cache first
-    try:
-        cache = await get_redis_cache()
-        cached = await cache.get_dashboard(str(domain_id), "battleground", analysis_id)
-        if cached is not None:
-            add_cache_headers(
-                response, max_age=300, etag=etag, last_modified=analysis.completed_at,
-                public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-battleground"]
-            )
-            return BattlegroundResponse(**cached)
-    except Exception as e:
-        logger.warning(f"Battleground cache read failed: {e}")
+    cache = get_postgres_cache(db)
+    cached = cache.get_dashboard(str(domain_id), "battleground", analysis_id)
+    if cached is not None:
+        add_cache_headers(
+            response, max_age=300, etag=etag, last_modified=analysis.completed_at,
+            public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-battleground"]
+        )
+        return BattlegroundResponse(**cached)
 
     # ATTACK: Keywords from gaps (competitors rank, we don't or rank worse)
     gaps = db.query(KeywordGap).filter(
@@ -1172,17 +1115,14 @@ async def get_topical_authority(
         return not_modified
 
     # Try cache first
-    try:
-        cache = await get_redis_cache()
-        cached = await cache.get_dashboard(str(domain_id), "clusters", analysis_id)
-        if cached is not None:
-            add_cache_headers(
-                response, max_age=300, etag=etag, last_modified=analysis.completed_at,
-                public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-clusters"]
-            )
-            return TopicalAuthorityResponse(**cached)
-    except Exception as e:
-        logger.warning(f"Clusters cache read failed: {e}")
+    cache = get_postgres_cache(db)
+    cached = cache.get_dashboard(str(domain_id), "clusters", analysis_id)
+    if cached is not None:
+        add_cache_headers(
+            response, max_age=300, etag=etag, last_modified=analysis.completed_at,
+            public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-clusters"]
+        )
+        return TopicalAuthorityResponse(**cached)
 
     # Get clusters
     clusters = db.query(ContentCluster).filter(
@@ -1260,17 +1200,14 @@ async def get_content_audit(
         return not_modified
 
     # Try cache first
-    try:
-        cache = await get_redis_cache()
-        cached = await cache.get_dashboard(str(domain_id), "content-audit", analysis_id)
-        if cached is not None:
-            add_cache_headers(
-                response, max_age=300, etag=etag, last_modified=analysis.completed_at,
-                public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-content-audit"]
-            )
-            return ContentAuditResponse(**cached)
-    except Exception as e:
-        logger.warning(f"Content audit cache read failed: {e}")
+    cache = get_postgres_cache(db)
+    cached = cache.get_dashboard(str(domain_id), "content-audit", analysis_id)
+    if cached is not None:
+        add_cache_headers(
+            response, max_age=300, etag=etag, last_modified=analysis.completed_at,
+            public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-content-audit"]
+        )
+        return ContentAuditResponse(**cached)
 
     # Get pages with KUCK recommendations
     pages = db.query(Page).filter(
@@ -1518,17 +1455,14 @@ async def get_ranked_opportunities(
             return not_modified
 
         # Try cache first
-        try:
-            cache = await get_redis_cache()
-            cached = await cache.get_dashboard(str(domain_id), "opportunities", analysis_id)
-            if cached is not None:
-                add_cache_headers(
-                    response, max_age=300, etag=etag, last_modified=analysis.completed_at,
-                    public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-opportunities"]
-                )
-                return OpportunitiesResponse(**cached)
-        except Exception as e:
-            logger.warning(f"Opportunities cache read failed: {e}")
+        cache = get_postgres_cache(db)
+        cached = cache.get_dashboard(str(domain_id), "opportunities", analysis_id)
+        if cached is not None:
+            add_cache_headers(
+                response, max_age=300, etag=etag, last_modified=analysis.completed_at,
+                public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-opportunities"]
+            )
+            return OpportunitiesResponse(**cached)
 
     analysis = db.query(AnalysisRun).filter(
         AnalysisRun.domain_id == domain_id,

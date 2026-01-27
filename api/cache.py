@@ -1,7 +1,7 @@
 """
 Cache Management API
 
-Provides endpoints for cache monitoring, health checks, and manual operations.
+Provides endpoints for cache monitoring and manual operations.
 
 Endpoints:
 - Health check for monitoring/alerting
@@ -12,7 +12,7 @@ Endpoints:
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
@@ -20,12 +20,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.database.session import get_db
-from src.database.models import AnalysisRun, Domain
-from src.cache.redis_cache import get_redis_cache
-from src.cache.monitoring import get_cache_monitor, HealthStatus, run_health_check
-from src.cache.invalidation import get_cache_invalidator, CacheEvent
+from src.database.models import AnalysisRun, Domain, AnalysisStatus
+from src.cache.postgres_cache import PostgresCache, get_postgres_cache
 from src.cache.precomputation import trigger_precomputation
-from src.cache.warming import CacheWarmer
 
 
 logger = logging.getLogger(__name__)
@@ -38,42 +35,26 @@ router = APIRouter(prefix="/api/cache", tags=["Cache Management"])
 
 class CacheHealthResponse(BaseModel):
     """Cache health check response."""
-    status: str = Field(..., description="healthy, degraded, or unhealthy")
-    latency_ms: float = Field(..., description="Health check latency in ms")
-    checks: Dict[str, bool] = Field(..., description="Individual check results")
-    issues: List[Dict[str, Any]] = Field(default=[], description="List of issues found")
+    status: str = Field(..., description="healthy or unhealthy")
+    backend: str = Field(default="postgresql", description="Cache backend type")
+    cached_entries: int = Field(..., description="Number of cached entries")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
 class CacheStatsResponse(BaseModel):
     """Cache statistics response."""
     enabled: bool
-    initialized: bool
+    backend: str
     hits: int
     misses: int
+    writes: int
     hit_rate_percent: float
-    avg_latency_ms: float
-    bytes_written: int
-    bytes_read: int
-    bytes_saved_compression: int
-    errors: int
-    circuit_breaker_open: bool
-
-
-class CacheSummaryResponse(BaseModel):
-    """Cache performance summary."""
-    health: Dict[str, Any]
-    performance: Dict[str, Any]
-    storage: Dict[str, Any]
-    reliability: Dict[str, Any]
-    timestamp: datetime
 
 
 class InvalidationResponse(BaseModel):
     """Cache invalidation response."""
     success: bool
     keys_invalidated: int
-    cdn_purged: bool
     duration_ms: float
     errors: List[str] = []
 
@@ -93,166 +74,113 @@ class PrecomputeResponse(BaseModel):
 # =============================================================================
 
 @router.get("/health", response_model=CacheHealthResponse)
-async def cache_health_check():
+def cache_health_check(db: Session = Depends(get_db)):
     """
     Check cache infrastructure health.
 
     Use this endpoint for monitoring and alerting systems.
-
-    Returns:
-    - status: overall health (healthy/degraded/unhealthy)
-    - latency_ms: how long the check took
-    - checks: individual check results (connectivity, latency, hit_rate, memory)
-    - issues: list of problems found with severity and recommended actions
-
-    Health thresholds:
-    - Latency: <50ms = healthy
-    - Hit rate: >80% = healthy
-    - Memory: <1GB = healthy
+    With PostgreSQL caching, this simply verifies database connectivity.
     """
-    result = await run_health_check()
+    cache = get_postgres_cache(db)
+    health = cache.health_check()
 
     return CacheHealthResponse(
-        status=result.status.value,
-        latency_ms=result.latency_ms,
-        checks=result.checks,
-        issues=result.issues,
-        timestamp=result.timestamp,
+        status="healthy" if health["healthy"] else "unhealthy",
+        backend=health["backend"],
+        cached_entries=health.get("cached_entries", 0),
+        timestamp=datetime.utcnow(),
     )
 
 
 @router.get("/stats", response_model=CacheStatsResponse)
-async def get_cache_stats():
+def get_cache_stats(db: Session = Depends(get_db)):
     """
     Get current cache statistics.
 
     Useful for monitoring cache performance over time.
+    Note: Stats are reset on application restart.
     """
-    try:
-        cache = await get_redis_cache()
-        stats = cache.get_stats()
-        return CacheStatsResponse(**stats)
-    except Exception as e:
-        logger.error(f"Failed to get cache stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/summary", response_model=CacheSummaryResponse)
-async def get_cache_summary():
-    """
-    Get comprehensive cache performance summary.
-
-    Includes health status, performance metrics, storage stats, and trends.
-    """
-    try:
-        monitor = await get_cache_monitor()
-        summary = await monitor.get_summary()
-
-        return CacheSummaryResponse(
-            health=summary["health"],
-            performance=summary["performance"],
-            storage=summary["storage"],
-            reliability=summary["reliability"],
-            timestamp=datetime.fromisoformat(summary["timestamp"]),
-        )
-    except Exception as e:
-        logger.error(f"Failed to get cache summary: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/redis-info")
-async def get_redis_info():
-    """
-    Get Redis server information.
-
-    Returns detailed Redis server metrics including memory, connections,
-    and keyspace statistics.
-    """
-    try:
-        cache = await get_redis_cache()
-        info = await cache.get_info()
-        return info
-    except Exception as e:
-        logger.error(f"Failed to get Redis info: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    cache = get_postgres_cache(db)
+    stats = cache.get_stats()
+    return CacheStatsResponse(**stats)
 
 
 @router.post("/invalidate/domain/{domain_id}", response_model=InvalidationResponse)
-async def invalidate_domain_cache(domain_id: UUID):
+def invalidate_domain_cache(domain_id: UUID, db: Session = Depends(get_db)):
     """
     Invalidate all cache for a specific domain.
 
     Use this when you need to force-refresh all cached data for a domain,
     for example after manual data corrections or during debugging.
     """
-    try:
-        invalidator = await get_cache_invalidator()
-        result = await invalidator.handle_event(
-            CacheEvent.MANUAL_INVALIDATE_DOMAIN,
-            domain_id=str(domain_id),
-        )
+    start = datetime.utcnow()
 
-        return InvalidationResponse(
-            success=result.success,
-            keys_invalidated=result.keys_invalidated,
-            cdn_purged=result.cdn_purged,
-            duration_ms=result.duration_ms,
-            errors=result.errors,
-        )
-    except Exception as e:
-        logger.error(f"Failed to invalidate domain cache: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    cache = get_postgres_cache(db)
+    count = cache.invalidate_domain(str(domain_id))
+
+    elapsed = (datetime.utcnow() - start).total_seconds() * 1000
+
+    return InvalidationResponse(
+        success=True,
+        keys_invalidated=count,
+        duration_ms=elapsed,
+        errors=[],
+    )
 
 
 @router.post("/invalidate/analysis/{analysis_id}", response_model=InvalidationResponse)
-async def invalidate_analysis_cache(analysis_id: UUID):
+def invalidate_analysis_cache(analysis_id: UUID, db: Session = Depends(get_db)):
     """
     Invalidate all cache for a specific analysis.
     """
-    try:
-        cache = await get_redis_cache()
-        count = await cache.invalidate_analysis(str(analysis_id))
+    start = datetime.utcnow()
 
-        return InvalidationResponse(
-            success=True,
-            keys_invalidated=count,
-            cdn_purged=False,
-            duration_ms=0,
-            errors=[],
-        )
-    except Exception as e:
-        logger.error(f"Failed to invalidate analysis cache: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    cache = get_postgres_cache(db)
+    count = cache.invalidate_analysis(str(analysis_id))
+
+    elapsed = (datetime.utcnow() - start).total_seconds() * 1000
+
+    return InvalidationResponse(
+        success=True,
+        keys_invalidated=count,
+        duration_ms=elapsed,
+        errors=[],
+    )
 
 
 @router.post("/invalidate/all", response_model=InvalidationResponse)
-async def invalidate_all_cache():
+def invalidate_all_cache(db: Session = Depends(get_db)):
     """
     Invalidate ALL cache data.
 
-    ⚠️ CAUTION: This clears the entire cache and will temporarily
+    CAUTION: This clears the entire cache and will temporarily
     degrade performance until caches are repopulated.
 
     Use only in emergencies or during debugging.
     """
+    from src.database.models import PrecomputedDashboard
+
+    start = datetime.utcnow()
+
     try:
-        invalidator = await get_cache_invalidator()
-        result = await invalidator.handle_event(CacheEvent.MANUAL_INVALIDATE_ALL)
+        result = db.query(PrecomputedDashboard).update({"is_current": False})
+        db.commit()
+        elapsed = (datetime.utcnow() - start).total_seconds() * 1000
 
         return InvalidationResponse(
-            success=result.success,
-            keys_invalidated=result.keys_invalidated,
-            cdn_purged=result.cdn_purged,
-            duration_ms=result.duration_ms,
-            errors=result.errors,
+            success=True,
+            keys_invalidated=result,
+            duration_ms=elapsed,
+            errors=[],
         )
     except Exception as e:
         logger.error(f"Failed to invalidate all cache: {e}")
+        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/precompute/{analysis_id}", response_model=PrecomputeResponse)
-async def trigger_precompute(
+def trigger_precompute(
     analysis_id: UUID,
     db: Session = Depends(get_db),
 ):
@@ -267,8 +195,14 @@ async def trigger_precompute(
 
     Note: This is a synchronous operation and may take 10-30 seconds.
     """
+    from src.database.models import AnalysisRun
+
+    analysis = db.query(AnalysisRun).filter(AnalysisRun.id == analysis_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
     try:
-        result = await trigger_precomputation(analysis_id, db)
+        result = trigger_precomputation(analysis_id, db)
 
         return PrecomputeResponse(
             success=len(result.get("errors", [])) == 0,
@@ -286,7 +220,7 @@ async def trigger_precompute(
 
 
 @router.post("/warm/domain/{domain_id}")
-async def warm_domain_cache(
+def warm_domain_cache(
     domain_id: UUID,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -294,18 +228,21 @@ async def warm_domain_cache(
     """
     Warm cache for a specific domain.
 
-    Runs in background and returns immediately.
+    Triggers precomputation for the domain's latest analysis.
     """
     analysis = db.query(AnalysisRun).filter(
         AnalysisRun.domain_id == domain_id,
+        AnalysisRun.status == AnalysisStatus.COMPLETED,
     ).order_by(AnalysisRun.completed_at.desc()).first()
 
     if not analysis:
         raise HTTPException(status_code=404, detail="No analysis found for domain")
 
-    async def warm_task():
-        warmer = CacheWarmer(db)
-        await warmer.warm_domain(str(domain_id), str(analysis.id))
+    def warm_task():
+        try:
+            trigger_precomputation(analysis.id, db)
+        except Exception as e:
+            logger.error(f"Failed to warm cache for domain {domain_id}: {e}")
 
     background_tasks.add_task(warm_task)
 
@@ -313,28 +250,4 @@ async def warm_domain_cache(
         "status": "warming_started",
         "domain_id": str(domain_id),
         "analysis_id": str(analysis.id),
-    }
-
-
-@router.post("/warm/active")
-async def warm_active_domains(
-    limit: int = Query(20, ge=1, le=100),
-    background_tasks: BackgroundTasks = None,
-    db: Session = Depends(get_db),
-):
-    """
-    Warm cache for recently active domains.
-
-    Runs in background and returns immediately.
-    Warms up to `limit` most recently analyzed domains.
-    """
-    async def warm_task():
-        warmer = CacheWarmer(db)
-        await warmer.warm_active_domains(limit=limit)
-
-    background_tasks.add_task(warm_task)
-
-    return {
-        "status": "warming_started",
-        "limit": limit,
     }

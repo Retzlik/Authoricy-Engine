@@ -1,85 +1,25 @@
 """
-Tests for the caching layer.
+Tests for the PostgreSQL caching layer.
 
 These tests verify:
-- Redis cache operations (get, set, delete)
-- Compression (LZ4/ZSTD)
+- PostgreSQL cache operations (get, set, delete)
 - Cache invalidation
 - HTTP cache headers
-- Circuit breaker behavior
+- Config and TTL settings
 
-Requires Redis running locally for integration tests.
-Unit tests work without Redis.
+All tests use a mock database session.
 """
 
 import pytest
-import asyncio
 from datetime import timedelta, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 from src.cache.config import CacheConfig, CacheTTL, get_cache_config
-from src.cache.compression import CacheCompressor, serialize_value, deserialize_value
 from src.cache.headers import (
     generate_etag, parse_etag, etags_match,
     CacheHeadersBuilder, check_not_modified,
 )
-
-
-# =============================================================================
-# COMPRESSION TESTS
-# =============================================================================
-
-class TestCompression:
-    """Test compression utilities."""
-
-    def test_serialize_deserialize_dict(self):
-        """Test serialization of dict."""
-        data = {"key": "value", "number": 42, "nested": {"a": 1}}
-        serialized = serialize_value(data)
-        deserialized = deserialize_value(serialized)
-        assert deserialized == data
-
-    def test_serialize_deserialize_list(self):
-        """Test serialization of list."""
-        data = [1, 2, 3, {"key": "value"}]
-        serialized = serialize_value(data)
-        deserialized = deserialize_value(serialized)
-        assert deserialized == data
-
-    def test_serialize_datetime(self):
-        """Test serialization of datetime."""
-        data = {"timestamp": datetime(2024, 1, 15, 10, 30, 0)}
-        serialized = serialize_value(data)
-        deserialized = deserialize_value(serialized)
-        assert deserialized["timestamp"] == "2024-01-15T10:30:00"
-
-    def test_compressor_small_data_not_compressed(self):
-        """Small data should not be compressed."""
-        compressor = CacheCompressor(enabled=True, threshold=1024)
-        small_data = b"hello world"
-        compressed, stats = compressor.compress(small_data)
-
-        # Should have uncompressed marker
-        assert compressed[0:1] == b'\x00'
-        assert stats is None
-        assert compressor.decompress(compressed) == small_data
-
-    @pytest.mark.skipif(
-        not CacheCompressor().enabled,
-        reason="LZ4 not installed"
-    )
-    def test_compressor_large_data_compressed(self):
-        """Large data should be compressed."""
-        compressor = CacheCompressor(enabled=True, threshold=100)
-        large_data = b"x" * 10000  # 10KB of repeated data
-
-        compressed, stats = compressor.compress(large_data)
-
-        # Should have LZ4 marker
-        assert compressed[0:1] == b'\x01'
-        assert stats is not None
-        assert stats.compression_ratio > 1
-        assert compressor.decompress(compressed) == large_data
 
 
 # =============================================================================
@@ -232,9 +172,8 @@ class TestCacheConfig:
         """Test default configuration values."""
         config = CacheConfig()
         assert config.enabled is True
-        assert config.compression_enabled is True
-        assert config.redis_max_connections == 50
-        assert config.min_hit_rate == 0.8
+        assert config.precomputation_enabled is True
+        assert config.http_cache_enabled is True
 
     @patch.dict('os.environ', {'CACHE_ENABLED': 'false'})
     def test_config_from_env(self):
@@ -247,96 +186,115 @@ class TestCacheConfig:
 
 
 # =============================================================================
-# REDIS CACHE TESTS (Integration - requires Redis)
+# POSTGRES CACHE TESTS
 # =============================================================================
 
-@pytest.mark.asyncio
-class TestRedisCache:
-    """
-    Integration tests for Redis cache.
+class TestPostgresCache:
+    """Test PostgreSQL cache operations."""
 
-    These require a running Redis instance.
-    Skip if Redis is not available.
-    """
+    def test_cache_stats(self):
+        """Test cache statistics."""
+        from src.cache.postgres_cache import PostgresCache
 
-    @pytest.fixture
-    async def cache(self):
-        """Get a cache instance for testing."""
-        try:
-            from src.cache.redis_cache import RedisCache
-            cache = RedisCache()
-            await cache.initialize()
-            yield cache
-            await cache.close()
-        except Exception:
-            pytest.skip("Redis not available")
-
-    async def test_set_and_get(self, cache):
-        """Test basic set and get."""
-        key = "test:basic"
-        value = {"hello": "world", "number": 42}
-
-        success = await cache.set(key, value, timedelta(minutes=1))
-        assert success is True
-
-        retrieved = await cache.get(key)
-        assert retrieved == value
-
-        # Cleanup
-        await cache.delete(key)
-
-    async def test_get_nonexistent(self, cache):
-        """Test getting nonexistent key."""
-        result = await cache.get("test:nonexistent")
-        assert result is None
-
-    async def test_delete(self, cache):
-        """Test deletion."""
-        key = "test:delete"
-        await cache.set(key, "value", timedelta(minutes=1))
-        assert await cache.exists(key)
-
-        await cache.delete(key)
-        assert not await cache.exists(key)
-
-    async def test_delete_pattern(self, cache):
-        """Test pattern deletion."""
-        # Set multiple keys
-        for i in range(5):
-            await cache.set(f"test:pattern:{i}", f"value{i}", timedelta(minutes=1))
-
-        # Delete all matching pattern
-        deleted = await cache.delete_pattern("test:pattern:*")
-        assert deleted == 5
-
-    async def test_dashboard_operations(self, cache):
-        """Test dashboard-specific operations."""
-        domain_id = "test-domain"
-        analysis_id = "test-analysis"
-        data = {"health": 85, "keywords": 1000}
-
-        await cache.set_dashboard(domain_id, "overview", data, analysis_id)
-
-        retrieved = await cache.get_dashboard(domain_id, "overview", analysis_id)
-        assert retrieved == data
-
-        # Cleanup
-        await cache.invalidate_dashboard(domain_id)
-
-    async def test_stats(self, cache):
-        """Test statistics tracking."""
-        # Generate some activity
-        await cache.set("test:stats:1", "value", timedelta(minutes=1))
-        await cache.get("test:stats:1")  # Hit
-        await cache.get("test:stats:nonexistent")  # Miss
+        # Create a mock session
+        mock_db = MagicMock()
+        cache = PostgresCache(mock_db)
 
         stats = cache.get_stats()
-        assert stats["hits"] >= 1
-        assert stats["misses"] >= 1
+        assert stats["enabled"] is True
+        assert stats["backend"] == "postgresql"
+        assert "hits" in stats
+        assert "misses" in stats
         assert "hit_rate_percent" in stats
 
-        # Cleanup
-        await cache.delete("test:stats:1")
+    def test_health_check_success(self):
+        """Test health check with working database."""
+        from src.cache.postgres_cache import PostgresCache
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.count.return_value = 10
+
+        cache = PostgresCache(mock_db)
+        health = cache.health_check()
+
+        assert health["healthy"] is True
+        assert health["backend"] == "postgresql"
+        assert health["cached_entries"] == 10
+
+    def test_health_check_failure(self):
+        """Test health check with database error."""
+        from src.cache.postgres_cache import PostgresCache
+
+        mock_db = MagicMock()
+        mock_db.query.side_effect = Exception("Database error")
+
+        cache = PostgresCache(mock_db)
+        health = cache.health_check()
+
+        assert health["healthy"] is False
+        assert "error" in health
+
+    def test_get_dashboard_hit(self):
+        """Test cache hit."""
+        from src.cache.postgres_cache import PostgresCache
+        from src.database.models import PrecomputedDashboard
+
+        mock_db = MagicMock()
+        mock_record = MagicMock()
+        mock_record.data = {"health": 85, "keywords": 1000}
+        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = mock_record
+
+        cache = PostgresCache(mock_db)
+        result = cache.get_dashboard("domain-123", "overview")
+
+        assert result == {"health": 85, "keywords": 1000}
+        assert cache._stats["hits"] == 1
+
+    def test_get_dashboard_miss(self):
+        """Test cache miss."""
+        from src.cache.postgres_cache import PostgresCache
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        cache = PostgresCache(mock_db)
+        result = cache.get_dashboard("domain-123", "overview")
+
+        assert result is None
+        assert cache._stats["misses"] == 1
+
+    def test_set_dashboard(self):
+        """Test cache set."""
+        from src.cache.postgres_cache import PostgresCache
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = None
+
+        cache = PostgresCache(mock_db)
+        success = cache.set_dashboard(
+            "domain-123",
+            "overview",
+            {"health": 85},
+            "analysis-456"
+        )
+
+        assert success is True
+        assert cache._stats["writes"] == 1
+        mock_db.add.assert_called_once()
+        mock_db.commit.assert_called_once()
+
+    def test_invalidate_domain(self):
+        """Test domain invalidation."""
+        from src.cache.postgres_cache import PostgresCache
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.update.return_value = 5
+
+        cache = PostgresCache(mock_db)
+        count = cache.invalidate_domain("domain-123")
+
+        assert count == 5
+        mock_db.commit.assert_called_once()
 
 
 # =============================================================================

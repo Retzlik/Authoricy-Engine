@@ -6,26 +6,25 @@ after analysis completes, not on every page load.
 
 This pipeline:
 1. Runs automatically when analysis completes
-2. Computes all dashboard aggregations in parallel
-3. Stores results in Redis (hot cache) and PostgreSQL (persistence)
-4. Reduces dashboard load from 2-5s to <500ms
+2. Computes all dashboard aggregations
+3. Stores results in PostgreSQL precomputed_dashboard table
+4. Reduces dashboard load from 2-5s to <100ms
 
 Key insight: Most dashboard data only changes when a new analysis runs
 (weekly/monthly). We're re-computing data that hasn't changed on every
 page load - this eliminates that waste.
 """
 
-import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from uuid import UUID
 
 from sqlalchemy import func, and_, or_, case, desc, asc
 from sqlalchemy.orm import Session
 
-from src.cache.redis_cache import RedisCache, get_redis_cache
-from src.cache.config import CacheTTL
+from src.cache.postgres_cache import PostgresCache
+from src.cache.headers import generate_etag
 
 
 logger = logging.getLogger(__name__)
@@ -39,25 +38,11 @@ class PrecomputationPipeline:
     All dashboard queries become simple cache lookups.
     """
 
-    def __init__(
-        self,
-        db: Session,
-        cache: Optional[RedisCache] = None,
-    ):
+    def __init__(self, db: Session):
         self.db = db
-        self._cache = cache
+        self._cache = PostgresCache(db)
 
-    async def _get_cache(self) -> RedisCache:
-        """Get cache instance lazily."""
-        if self._cache is None:
-            self._cache = await get_redis_cache()
-        return self._cache
-
-    async def precompute_all(
-        self,
-        analysis_id: UUID,
-        store_in_db: bool = True,
-    ) -> Dict[str, Any]:
+    def precompute_all(self, analysis_id: UUID) -> Dict[str, Any]:
         """
         Precompute all dashboard data for an analysis.
 
@@ -65,7 +50,6 @@ class PrecomputationPipeline:
 
         Args:
             analysis_id: The completed analysis ID
-            store_in_db: Whether to also store in PostgreSQL (for persistence)
 
         Returns:
             Dict with precomputation results and timing
@@ -74,7 +58,7 @@ class PrecomputationPipeline:
         start_time = datetime.utcnow()
 
         # Import models here to avoid circular imports
-        from src.database.models import AnalysisRun, Domain
+        from src.database.models import AnalysisRun
 
         analysis = self.db.query(AnalysisRun).filter(
             AnalysisRun.id == analysis_id
@@ -86,36 +70,26 @@ class PrecomputationPipeline:
         domain_id = str(analysis.domain_id)
         analysis_id_str = str(analysis_id)
 
-        cache = await self._get_cache()
+        # Invalidate old cache for this domain
+        self._cache.invalidate_domain(domain_id)
 
-        # Run all precomputations in parallel
-        results = await asyncio.gather(
-            self._precompute_overview(domain_id, analysis_id_str, analysis, cache),
-            self._precompute_sparklines(domain_id, analysis_id_str, cache),
-            self._precompute_sov(domain_id, analysis_id_str, cache),
-            self._precompute_battleground(domain_id, analysis_id_str, cache),
-            self._precompute_clusters(domain_id, analysis_id_str, cache),
-            self._precompute_content_audit(domain_id, analysis_id_str, cache),
-            self._precompute_opportunities(domain_id, analysis_id_str, cache),
-            self._precompute_keywords_pages(domain_id, analysis_id_str, cache),
-            return_exceptions=True,
-        )
-
-        # Check for errors
+        # Run all precomputations
         errors = []
         component_names = [
             "overview", "sparklines", "sov", "battleground",
-            "clusters", "content_audit", "opportunities", "keywords"
+            "clusters", "content_audit", "opportunities"
         ]
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                errors.append(f"{component_names[i]}: {str(result)}")
-                logger.error(f"Precomputation error for {component_names[i]}: {result}")
 
-        # Compute dashboard bundle (all-in-one)
-        bundle_result = await self._precompute_bundle(
-            domain_id, analysis_id_str, cache
-        )
+        for component in component_names:
+            try:
+                method_name = f"_precompute_{component}"
+                if hasattr(self, method_name):
+                    method = getattr(self, method_name)
+                    method(domain_id, analysis_id_str, analysis)
+                    logger.debug(f"Precomputed {component} for analysis {analysis_id_str}")
+            except Exception as e:
+                errors.append(f"{component}: {str(e)}")
+                logger.error(f"Precomputation error for {component}: {e}")
 
         elapsed = (datetime.utcnow() - start_time).total_seconds()
         logger.info(
@@ -123,36 +97,24 @@ class PrecomputationPipeline:
             + (f" with {len(errors)} errors" if errors else "")
         )
 
-        # Store precomputation metadata in DB
-        if store_in_db:
-            await self._store_precomputation_metadata(
-                analysis_id_str,
-                elapsed,
-                errors,
-            )
-
         return {
             "analysis_id": analysis_id_str,
             "domain_id": domain_id,
             "duration_seconds": elapsed,
             "components_computed": len(component_names) - len(errors),
             "errors": errors,
-            "bundle_cached": bundle_result,
         }
 
-    async def _precompute_overview(
+    def _precompute_overview(
         self,
         domain_id: str,
         analysis_id: str,
         analysis,
-        cache: RedisCache,
     ) -> bool:
         """Precompute dashboard overview."""
-        logger.debug("Precomputing overview...")
-
         from src.database.models import (
             Keyword, DomainMetricsHistory, TechnicalMetrics,
-            KeywordGap, AIVisibility, AnalysisStatus
+            KeywordGap, AIVisibility, AnalysisStatus, AnalysisRun
         )
 
         # Get current metrics
@@ -161,7 +123,6 @@ class PrecomputationPipeline:
         ).first()
 
         # Get previous analysis for comparison
-        from src.database.models import AnalysisRun
         previous_analysis = self.db.query(AnalysisRun).filter(
             AnalysisRun.domain_id == domain_id,
             AnalysisRun.status == AnalysisStatus.COMPLETED,
@@ -292,20 +253,18 @@ class PrecomputationPipeline:
             "precomputed_at": datetime.utcnow().isoformat(),
         }
 
-        await cache.set_dashboard(domain_id, "overview", overview, analysis_id)
+        etag = generate_etag(analysis_id, "overview")
+        self._cache.set_dashboard(domain_id, "overview", overview, analysis_id, etag)
         return True
 
-    async def _precompute_sparklines(
+    def _precompute_sparklines(
         self,
         domain_id: str,
         analysis_id: str,
-        cache: RedisCache,
+        analysis,
     ) -> bool:
         """Precompute sparkline data for top keywords."""
-        logger.debug("Precomputing sparklines...")
-
         from src.database.models import Keyword, RankingHistory, DomainMetricsHistory
-        from datetime import timedelta
 
         # Get top 50 keywords by traffic
         keywords = self.db.query(Keyword).filter(
@@ -375,18 +334,17 @@ class PrecomputationPipeline:
             "precomputed_at": datetime.utcnow().isoformat(),
         }
 
-        await cache.set_dashboard(domain_id, "sparklines", sparklines_data, analysis_id)
+        etag = generate_etag(analysis_id, "sparklines")
+        self._cache.set_dashboard(domain_id, "sparklines", sparklines_data, analysis_id, etag)
         return True
 
-    async def _precompute_sov(
+    def _precompute_sov(
         self,
         domain_id: str,
         analysis_id: str,
-        cache: RedisCache,
+        analysis,
     ) -> bool:
         """Precompute Share of Voice data."""
-        logger.debug("Precomputing Share of Voice...")
-
         from src.database.models import Keyword, Competitor, CompetitorType, Domain
 
         domain = self.db.query(Domain).filter(Domain.id == domain_id).first()
@@ -451,18 +409,17 @@ class PrecomputationPipeline:
             "precomputed_at": datetime.utcnow().isoformat(),
         }
 
-        await cache.set_dashboard(domain_id, "sov", sov_data, analysis_id)
+        etag = generate_etag(analysis_id, "sov")
+        self._cache.set_dashboard(domain_id, "sov", sov_data, analysis_id, etag)
         return True
 
-    async def _precompute_battleground(
+    def _precompute_battleground(
         self,
         domain_id: str,
         analysis_id: str,
-        cache: RedisCache,
+        analysis,
     ) -> bool:
         """Precompute Attack/Defend battleground data."""
-        logger.debug("Precomputing battleground...")
-
         from src.database.models import Keyword, KeywordGap
 
         limit = 25
@@ -552,18 +509,17 @@ class PrecomputationPipeline:
             "precomputed_at": datetime.utcnow().isoformat(),
         }
 
-        await cache.set_dashboard(domain_id, "battleground", battleground_data, analysis_id)
+        etag = generate_etag(analysis_id, "battleground")
+        self._cache.set_dashboard(domain_id, "battleground", battleground_data, analysis_id, etag)
         return True
 
-    async def _precompute_clusters(
+    def _precompute_clusters(
         self,
         domain_id: str,
         analysis_id: str,
-        cache: RedisCache,
+        analysis,
     ) -> bool:
         """Precompute topical authority clusters."""
-        logger.debug("Precomputing clusters...")
-
         from src.database.models import ContentCluster
 
         clusters = self.db.query(ContentCluster).filter(
@@ -608,18 +564,17 @@ class PrecomputationPipeline:
             "precomputed_at": datetime.utcnow().isoformat(),
         }
 
-        await cache.set_dashboard(domain_id, "clusters", clusters_data, analysis_id)
+        etag = generate_etag(analysis_id, "clusters")
+        self._cache.set_dashboard(domain_id, "clusters", clusters_data, analysis_id, etag)
         return True
 
-    async def _precompute_content_audit(
+    def _precompute_content_audit(
         self,
         domain_id: str,
         analysis_id: str,
-        cache: RedisCache,
+        analysis,
     ) -> bool:
         """Precompute content audit (KUCK) data."""
-        logger.debug("Precomputing content audit...")
-
         from src.database.models import Page
 
         pages = self.db.query(Page).filter(
@@ -683,18 +638,17 @@ class PrecomputationPipeline:
             "precomputed_at": datetime.utcnow().isoformat(),
         }
 
-        await cache.set_dashboard(domain_id, "content-audit", content_audit_data, analysis_id)
+        etag = generate_etag(analysis_id, "content-audit")
+        self._cache.set_dashboard(domain_id, "content-audit", content_audit_data, analysis_id, etag)
         return True
 
-    async def _precompute_opportunities(
+    def _precompute_opportunities(
         self,
         domain_id: str,
         analysis_id: str,
-        cache: RedisCache,
+        analysis,
     ) -> bool:
         """Precompute ranked opportunities."""
-        logger.debug("Precomputing opportunities...")
-
         from src.database.models import Keyword, KeywordGap, Page, SERPFeature
 
         limit = 20
@@ -787,129 +741,9 @@ class PrecomputationPipeline:
             "precomputed_at": datetime.utcnow().isoformat(),
         }
 
-        await cache.set_dashboard(domain_id, "opportunities", opportunities_data, analysis_id)
+        etag = generate_etag(analysis_id, "opportunities")
+        self._cache.set_dashboard(domain_id, "opportunities", opportunities_data, analysis_id, etag)
         return True
-
-    async def _precompute_keywords_pages(
-        self,
-        domain_id: str,
-        analysis_id: str,
-        cache: RedisCache,
-    ) -> bool:
-        """Precompute first N pages of keywords in common sort orders."""
-        logger.debug("Precomputing keywords pages...")
-
-        from src.database.models import Keyword
-
-        sort_orders = [
-            ("search_volume", "desc"),
-            ("position", "asc"),
-            ("opportunity_score", "desc"),
-        ]
-
-        for field, direction in sort_orders:
-            # Get first 3 pages (150 keywords)
-            query = self.db.query(Keyword).filter(
-                Keyword.analysis_run_id == analysis_id
-            )
-
-            if field == "search_volume":
-                query = query.order_by(desc(Keyword.search_volume) if direction == "desc" else asc(Keyword.search_volume))
-            elif field == "position":
-                query = query.order_by(asc(Keyword.current_position) if direction == "asc" else desc(Keyword.current_position))
-            elif field == "opportunity_score":
-                query = query.order_by(desc(Keyword.opportunity_score) if direction == "desc" else asc(Keyword.opportunity_score))
-
-            keywords = query.limit(150).all()
-
-            # Split into pages of 50
-            for page_num in range(3):
-                start = page_num * 50
-                end = start + 50
-                page_keywords = keywords[start:end]
-
-                if not page_keywords:
-                    break
-
-                page_data = {
-                    "keywords": [
-                        {
-                            "id": str(kw.id),
-                            "keyword": kw.keyword,
-                            "search_volume": kw.search_volume or 0,
-                            "current_position": kw.current_position,
-                            "position_change": kw.position_change,
-                            "keyword_difficulty": kw.keyword_difficulty,
-                            "opportunity_score": kw.opportunity_score,
-                            "estimated_traffic": kw.estimated_traffic,
-                            "search_intent": kw.search_intent.value if kw.search_intent else None,
-                            "ranking_url": kw.ranking_url,
-                        }
-                        for kw in page_keywords
-                    ],
-                    "pagination": {
-                        "page": page_num,
-                        "page_size": 50,
-                        "total": len(keywords),
-                        "has_more": (page_num + 1) * 50 < len(keywords),
-                    },
-                    "sort": {"field": field, "direction": direction},
-                    "precomputed_at": datetime.utcnow().isoformat(),
-                }
-
-                cursor = None if page_num == 0 else f"page:{page_num}"
-                filters = {"sort_field": field, "sort_direction": direction}
-
-                await cache.set_keywords_page(
-                    domain_id, analysis_id, page_data, cursor, filters
-                )
-
-        return True
-
-    async def _precompute_bundle(
-        self,
-        domain_id: str,
-        analysis_id: str,
-        cache: RedisCache,
-    ) -> bool:
-        """
-        Create a bundle of all dashboard data for single API call.
-
-        This is the ultimate optimization: one cache lookup for the entire dashboard.
-        """
-        logger.debug("Precomputing dashboard bundle...")
-
-        # Retrieve all cached components
-        bundle = {}
-        components = [
-            "overview", "sparklines", "sov", "battleground",
-            "clusters", "content-audit", "opportunities"
-        ]
-
-        for component in components:
-            data = await cache.get_dashboard(domain_id, component, analysis_id)
-            if data:
-                bundle[component.replace("-", "_")] = data
-
-        bundle["precomputed_at"] = datetime.utcnow().isoformat()
-        bundle["analysis_id"] = analysis_id
-
-        await cache.set_dashboard_bundle(domain_id, analysis_id, bundle)
-        return True
-
-    async def _store_precomputation_metadata(
-        self,
-        analysis_id: str,
-        duration: float,
-        errors: List[str],
-    ):
-        """Store precomputation metadata in database for tracking."""
-        # This would update the AnalysisRun or a separate PrecomputationLog table
-        # For now, just log it
-        logger.info(
-            f"Precomputation metadata: analysis={analysis_id}, "
-            f"duration={duration:.2f}s, errors={len(errors)}"
-        )
 
     def _estimate_traffic(self, position: int, search_volume: int) -> int:
         """Estimate traffic from position and volume."""
@@ -968,7 +802,7 @@ class PrecomputationPipeline:
         return int(current * recovery_multiplier)
 
 
-async def trigger_precomputation(analysis_id: UUID, db: Session):
+def trigger_precomputation(analysis_id: UUID, db: Session) -> Dict[str, Any]:
     """
     Trigger precomputation after analysis completes.
 
@@ -976,4 +810,4 @@ async def trigger_precomputation(analysis_id: UUID, db: Session):
     transitions to COMPLETED status.
     """
     pipeline = PrecomputationPipeline(db)
-    return await pipeline.precompute_all(analysis_id)
+    return pipeline.precompute_all(analysis_id)

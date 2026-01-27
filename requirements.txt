@@ -34,10 +34,4 @@ pytest-asyncio>=0.21.0
 # Logging
 structlog>=23.2.0
 
-# Caching
-redis>=5.0.0
-hiredis>=2.3.0  # High-performance Redis parser
-
-# Compression
-lz4>=4.3.0  # Fast compression for cache entries
-zstandard>=0.22.0  # High-ratio compression option
+# Caching (PostgreSQL-based, no additional dependencies)

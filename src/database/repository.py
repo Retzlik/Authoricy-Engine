@@ -5,11 +5,9 @@ Provides simple functions to store and retrieve data.
 Handles all SQLAlchemy complexity internally.
 
 Includes cache integration:
-- Triggers cache invalidation on analysis completion
-- Schedules precomputation for dashboard data
+- Triggers cache precomputation on analysis completion
 """
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -50,42 +48,22 @@ logger = logging.getLogger(__name__)
 
 def _trigger_cache_operations(run_id: UUID, domain_id: UUID, db: Session):
     """
-    Trigger cache invalidation and precomputation after analysis completion.
+    Trigger cache precomputation after analysis completion.
 
-    Uses a background thread to avoid blocking and handle async/sync boundary.
+    Uses a background thread to avoid blocking the main request.
     Cache operations are non-critical - failures are logged but don't fail the operation.
     """
     import threading
 
     def _run_in_thread():
-        """Run cache operations in a separate thread with its own event loop."""
-        try:
-            # Create a new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            try:
-                loop.run_until_complete(_async_cache_ops())
-            finally:
-                loop.close()
-
-        except Exception as e:
-            logger.warning(f"Cache operations thread failed for {run_id}: {e}")
-
-    async def _async_cache_ops():
-        """Async cache operations."""
+        """Run cache operations in a separate thread with its own db session."""
         try:
             # Import here to avoid circular imports
-            from src.cache.invalidation import invalidate_on_analysis_complete
             from src.cache.precomputation import trigger_precomputation
-
-            # Invalidate old cache first
-            await invalidate_on_analysis_complete(str(domain_id), str(run_id))
-            logger.info(f"Cache invalidated for analysis {run_id}")
 
             # Trigger precomputation with a new db session
             with get_db_context() as new_db:
-                result = await trigger_precomputation(run_id, new_db)
+                result = trigger_precomputation(run_id, new_db)
                 logger.info(
                     f"Precomputation complete for {run_id}: "
                     f"{result['components_computed']} components in {result['duration_seconds']:.2f}s"
@@ -101,7 +79,7 @@ def _trigger_cache_operations(run_id: UUID, domain_id: UUID, db: Session):
     # Start background thread (non-blocking)
     thread = threading.Thread(target=_run_in_thread, daemon=True)
     thread.start()
-    logger.debug(f"Started cache operations thread for {run_id}")
+    logger.debug(f"Started cache precomputation thread for {run_id}")
 
 
 # =============================================================================
