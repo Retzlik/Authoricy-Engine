@@ -88,6 +88,23 @@ def get_intent_weight(intent: Optional[str]) -> int:
 
 
 # ============================================================================
+# DOMAIN RATING (DR) - NOTE ON DATA SOURCE
+# ============================================================================
+#
+# Domain Rating (DR) is retrieved from DataForSEO Backlinks Summary API.
+#
+# IMPORTANT: We use the `rank_scale="one_hundred"` parameter in the API request
+# to get DR on a 0-100 scale directly (similar to Ahrefs DR).
+#
+# Without this parameter, DataForSEO returns rank on a 0-1000 scale.
+# See: https://dataforseo.com/help-center/what_is_rank_in_backlinks_api
+# See: https://dataforseo.com/update/new-rank-scale-in-backlinks-api
+#
+# The actual API call is in src/collector/client.py:get_backlink_summary()
+#
+
+
+# ============================================================================
 # VOLUME SCORING
 # ============================================================================
 

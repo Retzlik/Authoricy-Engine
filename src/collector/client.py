@@ -414,29 +414,29 @@ class DataForSEOClient:
             if tasks and tasks[0].get("result"):
                 task_result = tasks[0]["result"]
                 if task_result and len(task_result) > 0:
-                    item = task_result[0]
-                    # Log the raw item structure to debug
-                    logger.debug(f"Domain overview raw item for {domain}: {item}")
+                    result_obj = task_result[0]
 
-                    # Extract organic metrics from the response
-                    # The structure is: item -> metrics -> organic -> {etv, count, etc}
-                    metrics = item.get("metrics", {}).get("organic", {})
+                    # The structure is: result[0] -> items[0] -> metrics -> organic
+                    # NOT: result[0] -> metrics -> organic (this was the bug!)
+                    items = result_obj.get("items", [])
+                    if items and len(items) > 0:
+                        item = items[0]
+                        logger.debug(f"Domain overview raw item for {domain}: {item}")
 
-                    # Also try alternative paths in case API structure changed
-                    if not metrics:
-                        # Try direct access
-                        metrics = item.get("organic", {})
+                        metrics = item.get("metrics", {}).get("organic", {})
 
-                    extracted = {
-                        "organic_traffic": metrics.get("etv", 0) or metrics.get("traffic", 0),
-                        "organic_keywords": metrics.get("count", 0) or metrics.get("keywords", 0),
-                        "pos_1": metrics.get("pos_1", 0),
-                        "pos_2_3": metrics.get("pos_2_3", 0),
-                        "pos_4_10": metrics.get("pos_4_10", 0),
-                    }
+                        extracted = {
+                            "organic_traffic": int(metrics.get("etv", 0) or 0),
+                            "organic_keywords": int(metrics.get("count", 0) or 0),
+                            "pos_1": int(metrics.get("pos_1", 0) or 0),
+                            "pos_2_3": int(metrics.get("pos_2_3", 0) or 0),
+                            "pos_4_10": int(metrics.get("pos_4_10", 0) or 0),
+                        }
 
-                    logger.debug(f"Extracted metrics for {domain}: {extracted}")
-                    return extracted
+                        logger.info(f"Domain metrics for {domain}: traffic={extracted['organic_traffic']}, keywords={extracted['organic_keywords']}")
+                        return extracted
+                    else:
+                        logger.warning(f"No items in domain_rank_overview for {domain}")
 
             logger.warning(f"No domain overview data for {domain} - tasks: {tasks}")
             return None
@@ -457,11 +457,17 @@ class DataForSEOClient:
 
         Uses DataForSEO Backlinks Summary API.
 
+        IMPORTANT: We use rank_scale="one_hundred" to get Domain Rating on a 0-100 scale
+        (similar to Ahrefs DR). Without this parameter, DataForSEO returns rank on 0-1000 scale.
+
+        See: https://dataforseo.com/help-center/what_is_rank_in_backlinks_api
+        See: https://dataforseo.com/update/new-rank-scale-in-backlinks-api
+
         Args:
             domain: Target domain
 
         Returns:
-            Dict with domain_rank (DR), referring_domains, backlinks, etc. or None on error
+            Dict with domain_rank (DR 0-100), referring_domains, backlinks, etc. or None on error
         """
         try:
             result = await self.post(
@@ -470,6 +476,9 @@ class DataForSEOClient:
                     "target": domain,
                     "internal_list_limit": 0,  # We don't need internal links
                     "backlinks_status_type": "all",
+                    # CRITICAL: Request 0-100 scale instead of default 0-1000
+                    # This gives us Domain Rating comparable to Ahrefs DR
+                    "rank_scale": "one_hundred",
                 }]
             )
 
@@ -478,8 +487,13 @@ class DataForSEOClient:
                 task_result = tasks[0]["result"]
                 if task_result and len(task_result) > 0:
                     item = task_result[0]
+                    # With rank_scale="one_hundred", this is already 0-100
+                    domain_rank = int(item.get("rank", 0) or 0)
+
+                    logger.info(f"Backlink summary for {domain}: DR={domain_rank} (0-100 scale)")
+
                     return {
-                        "domain_rank": item.get("rank", 0),  # Domain Rating
+                        "domain_rank": domain_rank,  # 0-100 scale (like Ahrefs DR)
                         "referring_domains": item.get("referring_domains", 0),
                         "backlinks": item.get("backlinks", 0),
                         "referring_main_domains": item.get("referring_main_domains", 0),

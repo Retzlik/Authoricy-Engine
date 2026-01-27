@@ -58,7 +58,7 @@ You will also receive a `data_quality` section containing:
 **FIELD INTERPRETATION GUIDE:**
 - `opportunity_score`: Pre-calculated as search_volume × (1 - difficulty/100) × intent_multiplier. Higher = better.
 - `competitor_type`: 'direct' means keyword overlap >30%, 'emerging' means >20% traffic growth
-- `domain_rank`: DataForSEO scale 0-1000, not 0-100. 300+ is strong.
+- `domain_rank`: 0-100 scale (similar to Ahrefs Domain Rating). 30+ is notable, 50+ is strong, 70+ is authoritative.
 - Traffic estimates: Use for RELATIVE comparison only, typically 60-80% of actual
 - Position tiers: 1-3 = high CTR (20-30%), 4-10 = moderate (5-10%), 11-20 = low (1-3%)"""
 
@@ -337,7 +337,7 @@ class DataInterpreter:
         dictionary_summary = {
             "scoring_formulas": data_dictionary.get("_scoring_formulas", {}),
             "key_field_scales": {
-                "domain_rank": "0-1000 scale. <100=low, 100-300=moderate, 300+=strong",
+                "domain_rank": "0-100 scale (like Ahrefs DR). <30=weak, 30-50=notable, 50-70=strong, 70+=authoritative",
                 "keyword_difficulty": "0-100 scale. 0-30=easy, 30-60=moderate, 60+=hard",
                 "position_tiers": "1-3=high CTR (20-30%), 4-10=moderate (5-10%), 11-20=low (1-3%)",
                 "traffic_reliability": "Estimated, typically 60-80% of actual analytics",
