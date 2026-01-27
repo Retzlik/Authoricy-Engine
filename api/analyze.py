@@ -88,6 +88,10 @@ app.include_router(greenfield_router)
 from api.cache import router as cache_router
 app.include_router(cache_router)
 
+# Include Domain Management router
+from api.domains import router as domains_router
+app.include_router(domains_router)
+
 
 # ============================================================================
 # STARTUP - Initialize Database
