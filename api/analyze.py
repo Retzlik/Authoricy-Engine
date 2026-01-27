@@ -68,6 +68,10 @@ app = FastAPI(
     version="0.3.0",
 )
 
+# Include User Management router (auth endpoints)
+from api.users import router as users_router
+app.include_router(users_router)
+
 # Include Strategy Builder router
 from api.strategy import router as strategy_router
 app.include_router(strategy_router)

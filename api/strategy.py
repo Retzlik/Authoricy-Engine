@@ -29,10 +29,46 @@ from src.utils.ordering import (
     generate_position_at_start,
     generate_position_between,
 )
+from src.auth.dependencies import get_current_user
+from src.auth.models import User
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["strategy"])
+
+
+# =============================================================================
+# AUTH HELPERS
+# =============================================================================
+
+def check_strategy_access(strategy: Strategy, user: User) -> None:
+    """
+    Check if user has access to a strategy.
+
+    Admins can access any strategy.
+    Users can only access strategies for domains they own.
+    """
+    if user.is_admin:
+        return
+
+    # Get the domain for this strategy
+    if strategy.domain and strategy.domain.user_id != user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied to this strategy"
+        )
+
+
+def check_domain_access_strategy(domain: Domain, user: User) -> None:
+    """Check if user has access to a domain for strategy operations."""
+    if user.is_admin:
+        return
+
+    if domain.user_id != user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied to this domain"
+        )
 
 
 # =============================================================================
@@ -407,6 +443,7 @@ def slugify(text: str) -> str:
 @router.get("/domains/{domain_id}/strategies", response_model=StrategyListResponse)
 async def list_strategies(
     domain_id: UUID,
+    current_user: User = Depends(get_current_user),
     status: Optional[str] = Query(None, description="Filter by status: draft, approved, archived"),
     include_archived: bool = Query(False, description="Include archived strategies"),
 ):
@@ -416,8 +453,16 @@ async def list_strategies(
     Returns strategies with aggregated counts for threads, topics, and keywords.
 
     Performance: Uses 4 total queries regardless of result count (no N+1).
+
+    Requires authentication. Users can only access strategies for their own domains.
     """
     with get_db_context() as db:
+        # Check domain access
+        domain = db.query(Domain).filter(Domain.id == domain_id).first()
+        if not domain:
+            raise HTTPException(status_code=404, detail="Domain not found")
+        check_domain_access_strategy(domain, current_user)
+
         # Build query
         query = db.query(Strategy).filter(Strategy.domain_id == domain_id)
 
@@ -569,18 +614,24 @@ async def get_strategy(strategy_id: UUID):
 
 
 @router.post("/strategies", response_model=StrategyResponse, status_code=201)
-async def create_strategy(request: StrategyCreate):
+async def create_strategy(
+    request: StrategyCreate,
+    current_user: User = Depends(get_current_user),
+):
     """
     Create a new strategy from an analysis.
 
     The strategy is bound to a specific analysis_run_id and will use keywords
     from that analysis only.
+
+    Requires authentication. Users can only create strategies for their own domains.
     """
     with get_db_context() as db:
-        # Validate domain exists
+        # Validate domain exists and user has access
         domain = db.query(Domain).filter(Domain.id == request.domain_id).first()
         if not domain:
             raise HTTPException(status_code=404, detail="Domain not found")
+        check_domain_access_strategy(domain, current_user)
 
         # Validate analysis exists and belongs to domain
         analysis = db.query(AnalysisRun).filter(

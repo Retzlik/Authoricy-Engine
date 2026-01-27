@@ -115,6 +115,7 @@ class Domain(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)  # Owner (from Supabase Auth)
 
     # Domain identification
     domain = Column(String(255), nullable=False)
@@ -144,11 +145,14 @@ class Domain(Base):
 
     # Relationships
     client = relationship("Client", back_populates="domains")
+    user = relationship("User", back_populates="domains", foreign_keys=[user_id])
     analysis_runs = relationship("AnalysisRun", back_populates="domain", cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("client_id", "domain", name="uq_client_domain"),
+        UniqueConstraint("user_id", "domain", name="uq_user_domain"),
         Index("idx_domain_lookup", "domain"),
+        Index("idx_domain_user", "user_id"),
     )
 
 

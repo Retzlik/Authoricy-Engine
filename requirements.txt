@@ -34,4 +34,7 @@ pytest-asyncio>=0.21.0
 # Logging
 structlog>=23.2.0
 
+# Authentication (Supabase JWT validation)
+PyJWT>=2.8.0
+
 # Caching (PostgreSQL-based, no additional dependencies)

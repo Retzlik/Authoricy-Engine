@@ -39,6 +39,8 @@ from src.database.models import (
     AnalysisStatus, SearchIntent, CompetitorType
 )
 from src.cache.postgres_cache import PostgresCache, get_postgres_cache
+from src.auth.dependencies import get_current_user, get_current_user_optional
+from src.auth.models import User
 from src.cache.headers import (
     add_cache_headers, generate_etag, check_not_modified,
     CacheHeadersBuilder
@@ -47,6 +49,47 @@ from src.cache.config import CacheTTL
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard Intelligence"])
+
+
+# =============================================================================
+# DOMAIN ACCESS HELPER
+# =============================================================================
+
+def check_domain_access(domain: Domain, user: User) -> None:
+    """
+    Check if user has access to a domain.
+
+    Raises HTTPException 403 if access denied.
+    Admins can access any domain, users can only access their own.
+    """
+    if user.is_admin:
+        return  # Admins have access to all domains
+
+    if domain.user_id != user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied to this domain"
+        )
+
+
+def get_domain_with_access(
+    domain_id: UUID,
+    user: User,
+    db: Session,
+) -> Domain:
+    """
+    Get domain and verify user access in one step.
+
+    Returns the domain if user has access.
+    Raises HTTPException 404 if domain not found.
+    Raises HTTPException 403 if access denied.
+    """
+    domain = db.query(Domain).filter(Domain.id == domain_id).first()
+    if not domain:
+        raise HTTPException(status_code=404, detail="Domain not found")
+
+    check_domain_access(domain, user)
+    return domain
 
 
 # =============================================================================
@@ -411,6 +454,7 @@ async def get_dashboard_bundle(
         "overview,sparklines,sov,battleground,clusters",
         description="Comma-separated list of components to include"
     ),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     if_none_match: Optional[str] = Header(None),
 ):
@@ -437,11 +481,12 @@ async def get_dashboard_bundle(
     - Cache TTL: 4 hours (dashboard data changes only on new analysis)
     - HTTP caching: 5 minutes with stale-while-revalidate
     - Supports conditional requests (ETag/If-None-Match)
+
+    Requires authentication. Users can only access their own domains.
+    Admins can access all domains.
     """
-    # Get domain and analysis
-    domain = db.query(Domain).filter(Domain.id == domain_id).first()
-    if not domain:
-        raise HTTPException(status_code=404, detail="Domain not found")
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
 
     analysis = get_latest_analysis(domain_id, db)
     if not analysis:
@@ -523,6 +568,7 @@ async def get_dashboard_overview(
     domain_id: UUID,
     request: Request,
     response: Response,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     if_none_match: Optional[str] = Header(None),
 ) -> DashboardOverview:
@@ -532,11 +578,11 @@ async def get_dashboard_overview(
     Aggregates key metrics, health scores, and quick stats for the main dashboard.
 
     Performance: Serves from cache in <50ms when precomputed.
+
+    Requires authentication. Users can only access their own domains.
     """
-    # Get domain and latest analysis
-    domain = db.query(Domain).filter(Domain.id == domain_id).first()
-    if not domain:
-        raise HTTPException(status_code=404, detail="Domain not found")
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
 
     analysis = get_latest_analysis(domain_id, db)
     if not analysis:
@@ -702,6 +748,7 @@ async def get_share_of_voice(
     domain_id: UUID,
     request: Request,
     response: Response,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     if_none_match: Optional[str] = Header(None),
 ) -> ShareOfVoiceResponse:
@@ -712,11 +759,11 @@ async def get_share_of_voice(
     Based on keywords where at least one party ranks in top 20.
 
     Performance: Serves from cache in <50ms when precomputed.
+
+    Requires authentication. Users can only access their own domains.
     """
-    # Get domain and latest analysis
-    domain = db.query(Domain).filter(Domain.id == domain_id).first()
-    if not domain:
-        raise HTTPException(status_code=404, detail="Domain not found")
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
 
     analysis = get_latest_analysis(domain_id, db)
     if not analysis:
@@ -823,6 +870,7 @@ async def get_sparklines(
     keyword_ids: Optional[str] = Query(None, description="Comma-separated keyword IDs"),
     top_n: int = Query(20, description="Number of top keywords to include"),
     days: int = Query(30, description="Number of days of history"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     if_none_match: Optional[str] = Header(None),
 ) -> SparklineResponse:
@@ -831,11 +879,11 @@ async def get_sparklines(
 
     Returns position history formatted for sparkline visualization.
     Performance: Serves from cache in <50ms when precomputed.
+
+    Requires authentication. Users can only access their own domains.
     """
-    # Get domain and analysis
-    domain = db.query(Domain).filter(Domain.id == domain_id).first()
-    if not domain:
-        raise HTTPException(status_code=404, detail="Domain not found")
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
 
     analysis = get_latest_analysis(domain_id, db)
     if not analysis:
@@ -949,6 +997,7 @@ async def get_battleground(
     request: Request,
     response: Response,
     limit: int = Query(25, description="Max items per category"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     if_none_match: Optional[str] = Header(None),
 ) -> BattlegroundResponse:
@@ -959,11 +1008,11 @@ async def get_battleground(
     Defend: Keywords where we rank but are losing ground or competitors gaining
 
     Performance: Serves from cache in <50ms when precomputed.
+
+    Requires authentication. Users can only access their own domains.
     """
-    # Get domain and analysis
-    domain = db.query(Domain).filter(Domain.id == domain_id).first()
-    if not domain:
-        raise HTTPException(status_code=404, detail="Domain not found")
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
 
     analysis = get_latest_analysis(domain_id, db)
     if not analysis:
@@ -1088,6 +1137,7 @@ async def get_topical_authority(
     domain_id: UUID,
     request: Request,
     response: Response,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     if_none_match: Optional[str] = Header(None),
 ) -> TopicalAuthorityResponse:
@@ -1096,11 +1146,11 @@ async def get_topical_authority(
 
     Shows authority scores, content completeness, and gaps for each topic cluster.
     Performance: Serves from cache in <50ms when precomputed.
+
+    Requires authentication. Users can only access their own domains.
     """
-    # Get domain and analysis
-    domain = db.query(Domain).filter(Domain.id == domain_id).first()
-    if not domain:
-        raise HTTPException(status_code=404, detail="Domain not found")
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
 
     analysis = get_latest_analysis(domain_id, db)
     if not analysis:
@@ -1173,6 +1223,7 @@ async def get_content_audit(
     domain_id: UUID,
     request: Request,
     response: Response,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     if_none_match: Optional[str] = Header(None),
 ) -> ContentAuditResponse:
@@ -1181,11 +1232,11 @@ async def get_content_audit(
 
     Categorizes pages as Keep, Update, Consolidate, or Kill based on performance.
     Performance: Serves from cache in <50ms when precomputed.
+
+    Requires authentication. Users can only access their own domains.
     """
-    # Get domain and analysis
-    domain = db.query(Domain).filter(Domain.id == domain_id).first()
-    if not domain:
-        raise HTTPException(status_code=404, detail="Domain not found")
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
 
     analysis = get_latest_analysis(domain_id, db)
     if not analysis:
@@ -1323,17 +1374,18 @@ def _estimate_traffic_potential(page: Page) -> int:
 @router.get("/{domain_id}/intelligence-summary", response_model=IntelligenceSummary)
 async def get_intelligence_summary(
     domain_id: UUID,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> IntelligenceSummary:
     """
     Get AI-generated intelligence summary.
 
     Synthesizes agent outputs into a narrative summary with key findings.
+
+    Requires authentication. Users can only access their own domains.
     """
-    # Get domain and analysis
-    domain = db.query(Domain).filter(Domain.id == domain_id).first()
-    if not domain:
-        raise HTTPException(status_code=404, detail="Domain not found")
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
 
     analysis = db.query(AnalysisRun).filter(
         AnalysisRun.domain_id == domain_id,
@@ -1429,6 +1481,7 @@ async def get_ranked_opportunities(
     request: Request,
     response: Response,
     limit: int = Query(20, description="Max opportunities to return"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     if_none_match: Optional[str] = Header(None),
 ) -> OpportunitiesResponse:
@@ -1438,11 +1491,11 @@ async def get_ranked_opportunities(
     Combines keyword, content, backlink, and competitive opportunities,
     ranked by impact/effort ratio.
     Performance: Serves from cache in <50ms when precomputed.
+
+    Requires authentication. Users can only access their own domains.
     """
-    # Get domain and analysis
-    domain = db.query(Domain).filter(Domain.id == domain_id).first()
-    if not domain:
-        raise HTTPException(status_code=404, detail="Domain not found")
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
 
     analysis = get_latest_analysis(domain_id, db)
     if analysis:
