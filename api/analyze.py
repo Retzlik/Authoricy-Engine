@@ -76,6 +76,10 @@ app.include_router(strategy_router)
 from api.dashboard import router as dashboard_router
 app.include_router(dashboard_router)
 
+# Include Greenfield Intelligence router
+from api.greenfield import router as greenfield_router
+app.include_router(greenfield_router)
+
 
 # ============================================================================
 # STARTUP - Initialize Database

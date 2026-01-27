@@ -27,6 +27,12 @@ from .models import (
     AIVisibility, AIVisibilitySource,
     LocalRanking,
     SERPCompetitor,
+    # Greenfield intelligence tables
+    AnalysisMode,
+    CompetitorPurpose,
+    GreenfieldAnalysis,
+    CompetitorIntelligenceSession,
+    GreenfieldCompetitor,
 )
 from .session import get_db_context, get_db_session
 
@@ -1541,3 +1547,615 @@ def get_context_intelligence(domain: str) -> Optional[Dict[str, Any]]:
                 "conflict_details": context.resolved_conflict_details,
             } if context.resolved_market_code else None,
         }
+
+
+# =============================================================================
+# GREENFIELD INTELLIGENCE - Competitor Sessions & Analysis
+# =============================================================================
+
+def create_greenfield_analysis_run(
+    domain: str,
+    greenfield_context: Dict[str, Any],
+    config: Dict[str, Any] = None,
+) -> UUID:
+    """
+    Create an analysis run configured for greenfield mode.
+
+    Args:
+        domain: Domain to analyze
+        greenfield_context: User-provided business context
+        config: Additional collection configuration
+
+    Returns:
+        UUID of the created analysis run
+    """
+    from .models import AnalysisMode
+
+    with get_db_context() as db:
+        # Find or create domain
+        domain_obj = db.query(Domain).filter(Domain.domain == domain).first()
+        if not domain_obj:
+            domain_obj = Domain(domain=domain)
+            db.add(domain_obj)
+            db.flush()
+
+        # Create analysis run with greenfield mode
+        run = AnalysisRun(
+            domain_id=domain_obj.id,
+            status=AnalysisStatus.PENDING,
+            analysis_mode=AnalysisMode.GREENFIELD,
+            domain_maturity_at_analysis="greenfield",
+            greenfield_context=greenfield_context,
+            config=config or {},
+            started_at=datetime.utcnow(),
+        )
+        db.add(run)
+        db.flush()
+
+        run_id = run.id
+        logger.info(f"Created greenfield analysis run {run_id} for {domain}")
+
+        return run_id
+
+
+def create_competitor_intelligence_session(
+    analysis_run_id: UUID,
+    domain_id: UUID,
+    user_provided_competitors: List[str] = None,
+) -> UUID:
+    """
+    Create a competitor intelligence session for curation workflow.
+
+    Args:
+        analysis_run_id: Parent analysis run
+        domain_id: Domain being analyzed
+        user_provided_competitors: User-provided competitor domains
+
+    Returns:
+        UUID of the created session
+    """
+    from .models import CompetitorIntelligenceSession
+
+    with get_db_context() as db:
+        session = CompetitorIntelligenceSession(
+            analysis_run_id=analysis_run_id,
+            domain_id=domain_id,
+            status="pending",
+            user_provided_competitors=user_provided_competitors or [],
+        )
+        db.add(session)
+        db.flush()
+
+        session_id = session.id
+        logger.info(f"Created competitor intelligence session {session_id}")
+
+        return session_id
+
+
+def get_competitor_session(session_id: UUID) -> Optional[Dict[str, Any]]:
+    """Get competitor intelligence session by ID."""
+    from .models import CompetitorIntelligenceSession
+
+    with get_db_context() as db:
+        session = db.query(CompetitorIntelligenceSession).get(session_id)
+        if not session:
+            return None
+
+        return {
+            "id": str(session.id),
+            "analysis_run_id": str(session.analysis_run_id),
+            "domain_id": str(session.domain_id),
+            "status": session.status,
+            "candidate_competitors": session.candidate_competitors or [],
+            "removed_competitors": session.removed_competitors or [],
+            "added_competitors": session.added_competitors or [],
+            "final_competitors": session.final_competitors or [],
+            "candidates_generated_at": session.candidates_generated_at.isoformat() if session.candidates_generated_at else None,
+            "curation_started_at": session.curation_started_at.isoformat() if session.curation_started_at else None,
+            "curation_completed_at": session.curation_completed_at.isoformat() if session.curation_completed_at else None,
+            "finalized_at": session.finalized_at.isoformat() if session.finalized_at else None,
+            "created_at": session.created_at.isoformat() if session.created_at else None,
+        }
+
+
+def update_session_candidates(
+    session_id: UUID,
+    candidates: List[Dict[str, Any]],
+) -> bool:
+    """Update session with discovered competitor candidates."""
+    from .models import CompetitorIntelligenceSession
+
+    with get_db_context() as db:
+        session = db.query(CompetitorIntelligenceSession).get(session_id)
+        if not session:
+            return False
+
+        session.candidate_competitors = candidates
+        session.candidates_generated_at = datetime.utcnow()
+        session.status = "awaiting_curation"
+
+        return True
+
+
+def submit_curation(
+    session_id: UUID,
+    removals: List[Dict[str, Any]],
+    additions: List[Dict[str, Any]],
+    purpose_overrides: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Submit user curation decisions and finalize competitor set.
+
+    Args:
+        session_id: Session to update
+        removals: List of {domain, reason, note}
+        additions: List of {domain, purpose}
+        purpose_overrides: List of {domain, new_purpose}
+
+    Returns:
+        Updated session data or None if not found
+    """
+    from .models import CompetitorIntelligenceSession, GreenfieldCompetitor, CompetitorPurpose
+
+    with get_db_context() as db:
+        session = db.query(CompetitorIntelligenceSession).get(session_id)
+        if not session:
+            return None
+
+        # Get current candidates
+        candidates = session.candidate_competitors or []
+        removed_domains = {r["domain"] for r in removals}
+
+        # Build final set
+        final_competitors = []
+        priority = 1
+
+        for candidate in candidates:
+            domain = candidate.get("domain", "")
+
+            if domain in removed_domains:
+                continue
+
+            # Check for purpose override
+            purpose = candidate.get("suggested_purpose", "keyword_source")
+            for override in purpose_overrides:
+                if override.get("domain") == domain:
+                    purpose = override.get("new_purpose", purpose)
+                    break
+
+            final_competitors.append({
+                "domain": domain,
+                "purpose": purpose,
+                "priority": priority,
+                "domain_rating": candidate.get("domain_rating", 0),
+                "organic_traffic": candidate.get("organic_traffic", 0),
+                "organic_keywords": candidate.get("organic_keywords", 0),
+                "keyword_overlap": candidate.get("keyword_overlap", 0),
+                "is_user_provided": candidate.get("discovery_source") == "user_provided",
+                "is_user_curated": True,
+            })
+            priority += 1
+
+        # Add user-added competitors
+        for addition in additions:
+            final_competitors.append({
+                "domain": addition.get("domain", ""),
+                "purpose": addition.get("purpose", "keyword_source"),
+                "priority": priority,
+                "domain_rating": 0,
+                "organic_traffic": 0,
+                "organic_keywords": 0,
+                "keyword_overlap": 0,
+                "is_user_provided": True,
+                "is_user_curated": True,
+            })
+            priority += 1
+
+        # Update session
+        session.removed_competitors = removals
+        session.added_competitors = additions
+        session.final_competitors = final_competitors
+        session.curation_completed_at = datetime.utcnow()
+        session.finalized_at = datetime.utcnow()
+        session.status = "curated"
+
+        # Create GreenfieldCompetitor records
+        for comp in final_competitors:
+            purpose_str = comp.get("purpose", "keyword_source")
+            try:
+                purpose_enum = CompetitorPurpose(purpose_str)
+            except ValueError:
+                purpose_enum = CompetitorPurpose.KEYWORD_SOURCE
+
+            gf_comp = GreenfieldCompetitor(
+                session_id=session.id,
+                analysis_run_id=session.analysis_run_id,
+                domain=comp.get("domain", ""),
+                purpose=purpose_enum,
+                priority=comp.get("priority", 1),
+                domain_rating=comp.get("domain_rating", 0),
+                organic_traffic=comp.get("organic_traffic", 0),
+                organic_keywords=comp.get("organic_keywords", 0),
+                is_user_provided=comp.get("is_user_provided", False),
+                is_validated=True,
+            )
+            db.add(gf_comp)
+
+        db.flush()
+
+        return {
+            "session_id": str(session.id),
+            "status": session.status,
+            "final_competitors": final_competitors,
+            "competitor_count": len(final_competitors),
+            "removed_count": len(removals),
+            "added_count": len(additions),
+            "finalized_at": session.finalized_at.isoformat(),
+        }
+
+
+def update_competitors_post_curation(
+    session_id: UUID,
+    removals: List[Dict[str, Any]] = None,
+    additions: List[Dict[str, Any]] = None,
+    purpose_overrides: List[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Update competitors after initial curation (post-finalization edits).
+    """
+    from .models import CompetitorIntelligenceSession, GreenfieldCompetitor, CompetitorPurpose
+
+    with get_db_context() as db:
+        session = db.query(CompetitorIntelligenceSession).get(session_id)
+        if not session:
+            return None
+
+        final_competitors = session.final_competitors or []
+
+        # Apply removals
+        if removals:
+            removed_domains = {r["domain"] for r in removals}
+            final_competitors = [c for c in final_competitors if c.get("domain") not in removed_domains]
+
+            # Mark as removed in database
+            for removal in removals:
+                comp = (
+                    db.query(GreenfieldCompetitor)
+                    .filter(
+                        GreenfieldCompetitor.session_id == session_id,
+                        GreenfieldCompetitor.domain == removal["domain"]
+                    )
+                    .first()
+                )
+                if comp:
+                    comp.is_removed = True
+                    comp.removal_reason = removal.get("reason", "other")
+                    comp.removal_note = removal.get("note", "")
+
+        # Apply purpose overrides
+        if purpose_overrides:
+            for override in purpose_overrides:
+                domain = override.get("domain")
+                new_purpose = override.get("new_purpose")
+
+                for comp in final_competitors:
+                    if comp.get("domain") == domain:
+                        comp["purpose"] = new_purpose
+
+                # Update database
+                comp = (
+                    db.query(GreenfieldCompetitor)
+                    .filter(
+                        GreenfieldCompetitor.session_id == session_id,
+                        GreenfieldCompetitor.domain == domain
+                    )
+                    .first()
+                )
+                if comp:
+                    try:
+                        comp.purpose_override = CompetitorPurpose(new_purpose)
+                    except ValueError:
+                        pass
+
+        # Apply additions
+        if additions:
+            max_priority = max((c.get("priority", 0) for c in final_competitors), default=0)
+            for addition in additions:
+                max_priority += 1
+                new_comp = {
+                    "domain": addition.get("domain", ""),
+                    "purpose": addition.get("purpose", "keyword_source"),
+                    "priority": max_priority,
+                    "domain_rating": 0,
+                    "organic_traffic": 0,
+                    "organic_keywords": 0,
+                    "is_user_provided": True,
+                    "is_user_curated": True,
+                }
+                final_competitors.append(new_comp)
+
+                # Add to database
+                purpose_str = addition.get("purpose", "keyword_source")
+                try:
+                    purpose_enum = CompetitorPurpose(purpose_str)
+                except ValueError:
+                    purpose_enum = CompetitorPurpose.KEYWORD_SOURCE
+
+                gf_comp = GreenfieldCompetitor(
+                    session_id=session.id,
+                    analysis_run_id=session.analysis_run_id,
+                    domain=addition.get("domain", ""),
+                    purpose=purpose_enum,
+                    priority=max_priority,
+                    is_user_provided=True,
+                    is_validated=False,
+                )
+                db.add(gf_comp)
+
+        session.final_competitors = final_competitors
+        session.updated_at = datetime.utcnow()
+        db.flush()
+
+        return {
+            "session_id": str(session.id),
+            "status": session.status,
+            "final_competitors": final_competitors,
+            "competitor_count": len(final_competitors),
+        }
+
+
+def save_greenfield_analysis(
+    analysis_run_id: UUID,
+    domain_id: UUID,
+    market_opportunity: Dict[str, Any],
+    beachhead_summary: Dict[str, Any],
+    projections: Dict[str, Any],
+    growth_roadmap: List[Dict[str, Any]],
+) -> UUID:
+    """
+    Save greenfield analysis results.
+
+    Args:
+        analysis_run_id: Parent analysis run
+        domain_id: Domain analyzed
+        market_opportunity: TAM/SAM/SOM data
+        beachhead_summary: Beachhead keyword summary
+        projections: Three-scenario traffic projections
+        growth_roadmap: Phased growth plan
+
+    Returns:
+        UUID of the created greenfield analysis
+    """
+    from .models import GreenfieldAnalysis
+
+    with get_db_context() as db:
+        analysis = GreenfieldAnalysis(
+            analysis_run_id=analysis_run_id,
+            domain_id=domain_id,
+
+            # Market opportunity
+            total_addressable_market=market_opportunity.get("tam_volume", 0),
+            serviceable_addressable_market=market_opportunity.get("sam_volume", 0),
+            serviceable_obtainable_market=market_opportunity.get("som_volume", 0),
+            tam_keyword_count=market_opportunity.get("tam_keywords", 0),
+            sam_keyword_count=market_opportunity.get("sam_keywords", 0),
+            som_keyword_count=market_opportunity.get("som_keywords", 0),
+            market_opportunity_score=market_opportunity.get("opportunity_score", 0),
+            competition_intensity=market_opportunity.get("competition_intensity", 0),
+
+            # Beachhead summary
+            beachhead_keyword_count=beachhead_summary.get("count", 0),
+            total_beachhead_volume=beachhead_summary.get("total_volume", 0),
+            avg_beachhead_winnability=beachhead_summary.get("avg_winnability", 0),
+            beachhead_keywords=beachhead_summary.get("keywords", []),
+
+            # Projections
+            projection_conservative=projections.get("conservative", {}),
+            projection_expected=projections.get("expected", {}),
+            projection_aggressive=projections.get("aggressive", {}),
+
+            # Growth roadmap
+            growth_roadmap=growth_roadmap,
+
+            data_completeness_score=market_opportunity.get("completeness", 0),
+        )
+        db.add(analysis)
+        db.flush()
+
+        analysis_id = analysis.id
+        logger.info(f"Saved greenfield analysis {analysis_id}")
+
+        return analysis_id
+
+
+def get_greenfield_dashboard(analysis_run_id: UUID) -> Optional[Dict[str, Any]]:
+    """
+    Get complete greenfield dashboard data.
+
+    Returns all data needed for the greenfield dashboard UI.
+    """
+    from .models import (
+        GreenfieldAnalysis,
+        CompetitorIntelligenceSession,
+        GreenfieldCompetitor,
+    )
+
+    with get_db_context() as db:
+        # Get analysis run
+        run = db.query(AnalysisRun).get(analysis_run_id)
+        if not run:
+            return None
+
+        # Get greenfield analysis
+        gf_analysis = (
+            db.query(GreenfieldAnalysis)
+            .filter(GreenfieldAnalysis.analysis_run_id == analysis_run_id)
+            .first()
+        )
+
+        # Get competitor session
+        ci_session = (
+            db.query(CompetitorIntelligenceSession)
+            .filter(CompetitorIntelligenceSession.analysis_run_id == analysis_run_id)
+            .first()
+        )
+
+        # Get beachhead keywords
+        beachhead_keywords = (
+            db.query(Keyword)
+            .filter(
+                Keyword.analysis_run_id == analysis_run_id,
+                Keyword.is_beachhead == True
+            )
+            .order_by(Keyword.beachhead_priority.asc())
+            .all()
+        )
+
+        # Get domain
+        domain = db.query(Domain).get(run.domain_id)
+
+        result = {
+            "domain": domain.domain if domain else "",
+            "analysis_run_id": str(analysis_run_id),
+            "maturity": run.domain_maturity_at_analysis or "greenfield",
+
+            # Competitors
+            "competitors": ci_session.final_competitors if ci_session else [],
+            "competitor_count": len(ci_session.final_competitors) if ci_session else 0,
+
+            # Beachheads
+            "beachhead_keywords": [
+                {
+                    "keyword": kw.keyword,
+                    "search_volume": kw.search_volume or 0,
+                    "winnability_score": kw.winnability_score or 0,
+                    "personalized_difficulty": kw.personalized_difficulty or 0,
+                    "keyword_difficulty": kw.keyword_difficulty or 0,
+                    "beachhead_priority": kw.beachhead_priority or 0,
+                    "growth_phase": kw.growth_phase or 1,
+                    "has_ai_overview": kw.has_ai_overview or False,
+                }
+                for kw in beachhead_keywords
+            ],
+            "beachhead_count": len(beachhead_keywords),
+            "total_beachhead_volume": sum(kw.search_volume or 0 for kw in beachhead_keywords),
+            "avg_winnability": (
+                sum(kw.winnability_score or 0 for kw in beachhead_keywords) / len(beachhead_keywords)
+                if beachhead_keywords else 0
+            ),
+
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "last_updated": run.completed_at.isoformat() if run.completed_at else run.created_at.isoformat() if run.created_at else None,
+        }
+
+        # Add analysis data if available
+        if gf_analysis:
+            result["market_opportunity"] = {
+                "total_addressable_market": gf_analysis.total_addressable_market or 0,
+                "serviceable_addressable_market": gf_analysis.serviceable_addressable_market or 0,
+                "serviceable_obtainable_market": gf_analysis.serviceable_obtainable_market or 0,
+                "tam_keyword_count": gf_analysis.tam_keyword_count or 0,
+                "sam_keyword_count": gf_analysis.sam_keyword_count or 0,
+                "som_keyword_count": gf_analysis.som_keyword_count or 0,
+                "market_opportunity_score": gf_analysis.market_opportunity_score or 0,
+                "competition_intensity": gf_analysis.competition_intensity or 0,
+            }
+
+            result["traffic_projections"] = {
+                "conservative": gf_analysis.projection_conservative or {},
+                "expected": gf_analysis.projection_expected or {},
+                "aggressive": gf_analysis.projection_aggressive or {},
+            }
+
+            result["growth_roadmap"] = gf_analysis.growth_roadmap or []
+
+        return result
+
+
+def get_beachhead_keywords(
+    analysis_run_id: UUID,
+    phase: Optional[int] = None,
+    min_winnability: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Get beachhead keywords with optional filters."""
+    with get_db_context() as db:
+        query = (
+            db.query(Keyword)
+            .filter(
+                Keyword.analysis_run_id == analysis_run_id,
+                Keyword.is_beachhead == True
+            )
+        )
+
+        if phase is not None:
+            query = query.filter(Keyword.growth_phase == phase)
+
+        if min_winnability is not None:
+            query = query.filter(Keyword.winnability_score >= min_winnability)
+
+        keywords = query.order_by(Keyword.beachhead_priority.asc()).all()
+
+        return [
+            {
+                "id": str(kw.id),
+                "keyword": kw.keyword,
+                "search_volume": kw.search_volume or 0,
+                "winnability_score": kw.winnability_score or 0,
+                "personalized_difficulty": kw.personalized_difficulty or 0,
+                "keyword_difficulty": kw.keyword_difficulty or 0,
+                "beachhead_priority": kw.beachhead_priority or 0,
+                "growth_phase": kw.growth_phase or 1,
+                "has_ai_overview": kw.has_ai_overview or False,
+                "source_competitor": kw.source_competitor or "",
+            }
+            for kw in keywords
+        ]
+
+
+def update_keyword_phase(keyword_id: UUID, phase: int) -> bool:
+    """Update a keyword's growth phase assignment."""
+    with get_db_context() as db:
+        keyword = db.query(Keyword).get(keyword_id)
+        if not keyword:
+            return False
+
+        keyword.growth_phase = phase
+        return True
+
+
+def save_beachhead_keywords(
+    analysis_run_id: UUID,
+    beachhead_keywords: List[Dict[str, Any]],
+) -> int:
+    """
+    Save or update beachhead keywords.
+
+    Returns number of keywords updated.
+    """
+    with get_db_context() as db:
+        count = 0
+        for bh in beachhead_keywords:
+            keyword_text = bh.get("keyword", "")
+
+            # Find existing keyword
+            keyword = (
+                db.query(Keyword)
+                .filter(
+                    Keyword.analysis_run_id == analysis_run_id,
+                    Keyword.keyword == keyword_text
+                )
+                .first()
+            )
+
+            if keyword:
+                keyword.is_beachhead = True
+                keyword.beachhead_priority = bh.get("beachhead_priority", 0)
+                keyword.beachhead_score = bh.get("beachhead_score", 0)
+                keyword.winnability_score = bh.get("winnability_score", 0)
+                keyword.personalized_difficulty = bh.get("personalized_difficulty", 0)
+                keyword.growth_phase = bh.get("growth_phase", 1)
+                keyword.serp_avg_dr = bh.get("avg_serp_dr", 0)
+                keyword.has_ai_overview = bh.get("has_ai_overview", False)
+                count += 1
+
+        return count
