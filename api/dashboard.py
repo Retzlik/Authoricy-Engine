@@ -852,6 +852,12 @@ async def get_share_of_voice(
 
     target_share = next((e.share_percent for e in entries if e.is_target), 0)
 
+    # Add cache headers for computed response
+    add_cache_headers(
+        response, max_age=300, etag=etag, last_modified=analysis.completed_at,
+        public=True, surrogate_keys=[f"domain:{domain_id}", "dashboard-sov"]
+    )
+
     return ShareOfVoiceResponse(
         total_market_traffic=int(total_traffic),
         target_share=target_share,
