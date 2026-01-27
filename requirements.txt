@@ -36,5 +36,6 @@ structlog>=23.2.0
 
 # Authentication (Supabase JWT validation)
 PyJWT>=2.8.0
+cryptography>=41.0.0  # Required for ES256/RS256 JWT algorithms
 
 # Caching (PostgreSQL-based, no additional dependencies)
