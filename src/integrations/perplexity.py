@@ -84,11 +84,12 @@ class PerplexityClient:
 
     BASE_URL = "https://api.perplexity.ai"
 
-    # Available models
+    # Available models - Updated January 2026
+    # See: https://docs.perplexity.ai/getting-started/models
     MODELS = {
-        "sonar": "llama-3.1-sonar-small-128k-online",  # Fast, cheaper
-        "sonar-pro": "llama-3.1-sonar-large-128k-online",  # More capable
-        "sonar-huge": "llama-3.1-sonar-huge-128k-online",  # Most capable
+        "sonar": "sonar",  # Lightweight, fast search
+        "sonar-pro": "sonar-pro",  # Deeper retrieval, more capable
+        "sonar-reasoning": "sonar-reasoning",  # Real-time reasoning with search
     }
 
     def __init__(

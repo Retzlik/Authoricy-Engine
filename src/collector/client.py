@@ -414,29 +414,29 @@ class DataForSEOClient:
             if tasks and tasks[0].get("result"):
                 task_result = tasks[0]["result"]
                 if task_result and len(task_result) > 0:
-                    item = task_result[0]
-                    # Log the raw item structure to debug
-                    logger.debug(f"Domain overview raw item for {domain}: {item}")
+                    result_obj = task_result[0]
 
-                    # Extract organic metrics from the response
-                    # The structure is: item -> metrics -> organic -> {etv, count, etc}
-                    metrics = item.get("metrics", {}).get("organic", {})
+                    # The structure is: result[0] -> items[0] -> metrics -> organic
+                    # NOT: result[0] -> metrics -> organic (this was the bug!)
+                    items = result_obj.get("items", [])
+                    if items and len(items) > 0:
+                        item = items[0]
+                        logger.debug(f"Domain overview raw item for {domain}: {item}")
 
-                    # Also try alternative paths in case API structure changed
-                    if not metrics:
-                        # Try direct access
-                        metrics = item.get("organic", {})
+                        metrics = item.get("metrics", {}).get("organic", {})
 
-                    extracted = {
-                        "organic_traffic": metrics.get("etv", 0) or metrics.get("traffic", 0),
-                        "organic_keywords": metrics.get("count", 0) or metrics.get("keywords", 0),
-                        "pos_1": metrics.get("pos_1", 0),
-                        "pos_2_3": metrics.get("pos_2_3", 0),
-                        "pos_4_10": metrics.get("pos_4_10", 0),
-                    }
+                        extracted = {
+                            "organic_traffic": int(metrics.get("etv", 0) or 0),
+                            "organic_keywords": int(metrics.get("count", 0) or 0),
+                            "pos_1": int(metrics.get("pos_1", 0) or 0),
+                            "pos_2_3": int(metrics.get("pos_2_3", 0) or 0),
+                            "pos_4_10": int(metrics.get("pos_4_10", 0) or 0),
+                        }
 
-                    logger.debug(f"Extracted metrics for {domain}: {extracted}")
-                    return extracted
+                        logger.info(f"Domain metrics for {domain}: traffic={extracted['organic_traffic']}, keywords={extracted['organic_keywords']}")
+                        return extracted
+                    else:
+                        logger.warning(f"No items in domain_rank_overview for {domain}")
 
             logger.warning(f"No domain overview data for {domain} - tasks: {tasks}")
             return None
