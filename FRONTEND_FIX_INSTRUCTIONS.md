@@ -5,16 +5,6 @@
 
 ---
 
-## CRITICAL FINDING: Missing Backend Endpoint
-
-**The backend is MISSING a `GET /api/domains` endpoint to list user's domains.**
-
-This needs to be added to the backend, OR the frontend needs to work around it by:
-- Getting domains from the user profile
-- Using `GET /api/domains/{domain_id}/analyses` for known domain IDs
-
----
-
 ## VERIFIED BACKEND ENDPOINTS
 
 ### Health & Status (No Auth Required)
@@ -22,6 +12,24 @@ This needs to be added to the backend, OR the frontend needs to work around it b
 GET  /                              → Health check
 GET  /api/health                    → Detailed health with DB status
 GET  /api/database                  → Database debug info
+```
+
+### Domains (Auth Required)
+```
+GET    /api/domains                 → List user's domains
+       → Query: include_inactive (bool), limit (int), offset (int)
+       → Response: { domains: Domain[], total: number }
+
+GET    /api/domains/{domain_id}     → Get single domain
+       → Response: Domain with latest_analysis_id and latest_analysis_status
+
+POST   /api/domains                 → Create domain manually (without analysis)
+       → Body: { domain, display_name?, industry?, business_type?, ... }
+
+PATCH  /api/domains/{domain_id}     → Update domain settings
+       → Body: { display_name?, industry?, is_active?, ... }
+
+DELETE /api/domains/{domain_id}     → Delete domain (cascades to all data)
 ```
 
 ### Domain Maturity Check (No Auth Required)
