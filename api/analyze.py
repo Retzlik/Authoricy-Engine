@@ -20,7 +20,6 @@ from typing import List, Literal, Optional
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
 from src.collector import (
@@ -119,48 +118,32 @@ def get_cors_headers(origin: str) -> dict:
     return {}
 
 
-class CORSErrorMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware to ensure CORS headers are added to ALL responses including errors.
-
-    This catches exceptions and error responses that might bypass the standard
-    CORSMiddleware and ensures they have proper CORS headers.
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        origin = request.headers.get("origin", "")
-
-        # Handle preflight OPTIONS requests directly
-        if request.method == "OPTIONS":
-            if is_allowed_origin(origin):
-                return JSONResponse(
-                    content={"status": "ok"},
-                    status_code=200,
-                    headers=get_cors_headers(origin),
-                )
-
-        try:
-            response = await call_next(request)
-            # Add CORS headers to all responses
-            if is_allowed_origin(origin):
-                cors_headers = get_cors_headers(origin)
-                for header, value in cors_headers.items():
-                    response.headers[header] = value
-            return response
-        except Exception as e:
-            # Even on exception, add CORS headers
-            logger.error(f"Request failed with exception: {e}")
-            headers = get_cors_headers(origin) if is_allowed_origin(origin) else {}
-            return JSONResponse(
-                content={"detail": "Internal server error"},
-                status_code=500,
-                headers=headers,
-            )
+# Exception handler to add CORS headers to error responses
+@app.exception_handler(Exception)
+async def cors_exception_handler(request: Request, exc: Exception):
+    """Add CORS headers to unhandled exception responses."""
+    import traceback
+    origin = request.headers.get("origin", "")
+    logger.error(f"Unhandled exception: {exc}\n{traceback.format_exc()}")
+    headers = get_cors_headers(origin) if is_allowed_origin(origin) else {}
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
+        headers=headers,
+    )
 
 
-# Add custom CORS error middleware FIRST (will run LAST due to LIFO order)
-# This ensures CORS headers are added even to error responses
-app.add_middleware(CORSErrorMiddleware)
+@app.exception_handler(HTTPException)
+async def cors_http_exception_handler(request: Request, exc: HTTPException):
+    """Add CORS headers to HTTP exception responses (401, 403, 404, etc.)."""
+    origin = request.headers.get("origin", "")
+    headers = get_cors_headers(origin) if is_allowed_origin(origin) else {}
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=headers,
+    )
+
 
 # Standard CORS middleware
 app.add_middleware(
