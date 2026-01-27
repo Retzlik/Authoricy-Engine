@@ -23,10 +23,19 @@ from src.database.session import get_db
 from src.database.models import AnalysisRun, Domain, AnalysisStatus
 from src.cache.postgres_cache import PostgresCache, get_postgres_cache
 from src.cache.precomputation import trigger_precomputation
+from src.auth.dependencies import require_admin
+from src.auth.models import User
 
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/cache", tags=["Cache Management"])
+
+# Router with admin-only access for cache management operations
+# Health check is public (overridden with dependencies=[])
+router = APIRouter(
+    prefix="/api/cache",
+    tags=["Cache Management"],
+    dependencies=[Depends(require_admin)],  # Admin only by default
+)
 
 
 # =============================================================================
@@ -73,13 +82,15 @@ class PrecomputeResponse(BaseModel):
 # ENDPOINTS
 # =============================================================================
 
-@router.get("/health", response_model=CacheHealthResponse)
+@router.get("/health", response_model=CacheHealthResponse, dependencies=[])
 def cache_health_check(db: Session = Depends(get_db)):
     """
     Check cache infrastructure health.
 
     Use this endpoint for monitoring and alerting systems.
     With PostgreSQL caching, this simply verifies database connectivity.
+
+    Note: This is a public endpoint for external monitoring systems.
     """
     cache = get_postgres_cache(db)
     health = cache.health_check()
@@ -92,13 +103,15 @@ def cache_health_check(db: Session = Depends(get_db)):
     )
 
 
-@router.get("/stats", response_model=CacheStatsResponse)
+@router.get("/stats", response_model=CacheStatsResponse, dependencies=[])
 def get_cache_stats(db: Session = Depends(get_db)):
     """
     Get current cache statistics.
 
     Useful for monitoring cache performance over time.
     Note: Stats are reset on application restart.
+
+    Note: This is a public endpoint for external monitoring systems.
     """
     cache = get_postgres_cache(db)
     stats = cache.get_stats()

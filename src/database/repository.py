@@ -1614,6 +1614,7 @@ def create_greenfield_analysis_run(
     domain: str,
     greenfield_context: Dict[str, Any],
     config: Dict[str, Any] = None,
+    user_id: UUID = None,
 ) -> UUID:
     """
     Create an analysis run configured for greenfield mode.
@@ -1632,8 +1633,12 @@ def create_greenfield_analysis_run(
         # Find or create domain
         domain_obj = db.query(Domain).filter(Domain.domain == domain).first()
         if not domain_obj:
-            domain_obj = Domain(domain=domain)
+            domain_obj = Domain(domain=domain, user_id=user_id)
             db.add(domain_obj)
+            db.flush()
+        elif user_id and not domain_obj.user_id:
+            # Assign ownership if domain exists but has no owner
+            domain_obj.user_id = user_id
             db.flush()
 
         # Create analysis run with greenfield mode

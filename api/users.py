@@ -27,7 +27,11 @@ from src.auth.models import User, UserRole
 from src.auth.dependencies import get_current_user, require_admin
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/users", tags=["Users"])
+router = APIRouter(
+    prefix="/api/users",
+    tags=["Users"],
+    dependencies=[Depends(get_current_user)],  # All endpoints require authentication
+)
 
 
 # =============================================================================

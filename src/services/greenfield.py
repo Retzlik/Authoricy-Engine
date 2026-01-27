@@ -119,6 +119,7 @@ class GreenfieldService:
         self,
         domain: str,
         greenfield_context: Dict[str, Any],
+        user_id: Optional[UUID] = None,
     ) -> Tuple[UUID, UUID]:
         """
         Start a greenfield analysis.
@@ -128,6 +129,7 @@ class GreenfieldService:
         Args:
             domain: Domain to analyze
             greenfield_context: User-provided business context
+            user_id: Optional user ID to associate with the domain
 
         Returns:
             Tuple of (analysis_run_id, session_id)
@@ -137,6 +139,7 @@ class GreenfieldService:
             domain=domain,
             greenfield_context=greenfield_context,
             config={"mode": "greenfield"},
+            user_id=user_id,
         )
 
         # Get domain ID
