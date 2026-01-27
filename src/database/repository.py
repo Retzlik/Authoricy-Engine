@@ -1628,6 +1628,12 @@ def create_greenfield_analysis_run(
         UUID of the created analysis run
     """
     from .models import AnalysisMode
+    from .session import ensure_greenfield_columns_exist
+
+    # Ensure the analysis_mode column exists before inserting
+    # This is a safety check in case the startup migration failed
+    if not ensure_greenfield_columns_exist():
+        logger.warning("Could not verify greenfield columns exist - proceeding anyway")
 
     with get_db_context() as db:
         # Find or create domain
