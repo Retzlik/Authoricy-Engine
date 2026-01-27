@@ -1,19 +1,24 @@
 """
 JWT Token Validation for Supabase Auth
 
-Validates JWTs issued by Supabase using the project's JWT secret.
+Validates JWTs issued by Supabase using the project's JWT secret or JWKS.
+Supports both symmetric (HS256) and asymmetric (ES256, RS256) algorithms.
 """
 
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
+from functools import lru_cache
 
 import jwt
-from jwt import PyJWTError
+from jwt import PyJWTError, PyJWKClient
 
 from src.auth.config import get_auth_config
 
 logger = logging.getLogger(__name__)
+
+# Asymmetric algorithms that require public key (JWKS) verification
+ASYMMETRIC_ALGORITHMS = {"RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512"}
 
 
 class JWTError(Exception):
@@ -21,9 +26,55 @@ class JWTError(Exception):
     pass
 
 
+@lru_cache(maxsize=1)
+def get_jwks_client(jwks_url: str) -> PyJWKClient:
+    """Get cached JWKS client for fetching public keys."""
+    return PyJWKClient(jwks_url, cache_keys=True, lifespan=3600)
+
+
+def get_verification_key(token: str, config) -> Any:
+    """
+    Get the appropriate verification key based on algorithm.
+
+    - For symmetric algorithms (HS256): Use the JWT secret directly
+    - For asymmetric algorithms (ES256, RS256): Fetch public key from JWKS
+    """
+    if config.jwt_algorithm in ASYMMETRIC_ALGORITHMS:
+        # Asymmetric: need to fetch public key from Supabase JWKS
+        if not config.supabase_url:
+            raise JWTError(
+                f"SUPABASE_URL required for {config.jwt_algorithm} algorithm. "
+                "Set SUPABASE_URL environment variable."
+            )
+
+        # Extract project ref from URL: https://abc123.supabase.co -> abc123
+        project_ref = config.supabase_project_ref
+        if not project_ref:
+            raise JWTError("Could not extract project reference from SUPABASE_URL")
+
+        jwks_url = f"https://{project_ref}.supabase.co/auth/v1/.well-known/jwks.json"
+
+        try:
+            jwks_client = get_jwks_client(jwks_url)
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            return signing_key.key
+        except Exception as e:
+            logger.error(f"Failed to fetch JWKS from {jwks_url}: {e}")
+            raise JWTError(f"Failed to fetch public key from Supabase: {str(e)}")
+    else:
+        # Symmetric: use JWT secret directly
+        if not config.supabase_jwt_secret:
+            raise JWTError("SUPABASE_JWT_SECRET not configured")
+        return config.supabase_jwt_secret
+
+
 def verify_supabase_token(token: str) -> Dict[str, Any]:
     """
     Verify and decode a Supabase JWT token.
+
+    Supports both symmetric (HS256) and asymmetric (ES256, RS256) algorithms.
+    - HS256: Uses SUPABASE_JWT_SECRET for verification
+    - ES256/RS256: Fetches public key from Supabase JWKS endpoint
 
     Args:
         token: The JWT token from the Authorization header
@@ -36,11 +87,8 @@ def verify_supabase_token(token: str) -> Dict[str, Any]:
     """
     config = get_auth_config()
 
-    if not config.supabase_jwt_secret:
-        raise JWTError("Supabase JWT secret not configured")
-
     try:
-        # Get token header to check algorithm (for debugging)
+        # Get token header to check algorithm
         try:
             unverified_header = jwt.get_unverified_header(token)
             token_alg = unverified_header.get("alg", "unknown")
@@ -53,10 +101,13 @@ def verify_supabase_token(token: str) -> Dict[str, Any]:
         except Exception:
             pass  # Don't fail on header inspection
 
+        # Get appropriate verification key (secret or public key)
+        verification_key = get_verification_key(token, config)
+
         # Decode and verify the token
         payload = jwt.decode(
             token,
-            config.supabase_jwt_secret,
+            verification_key,
             algorithms=[config.jwt_algorithm],
             audience=config.jwt_audience,
         )
