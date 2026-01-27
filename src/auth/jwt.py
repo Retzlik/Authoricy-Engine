@@ -40,6 +40,19 @@ def verify_supabase_token(token: str) -> Dict[str, Any]:
         raise JWTError("Supabase JWT secret not configured")
 
     try:
+        # Get token header to check algorithm (for debugging)
+        try:
+            unverified_header = jwt.get_unverified_header(token)
+            token_alg = unverified_header.get("alg", "unknown")
+            if token_alg != config.jwt_algorithm:
+                logger.warning(
+                    f"JWT algorithm mismatch: token uses '{token_alg}', "
+                    f"config expects '{config.jwt_algorithm}'. "
+                    f"Set JWT_ALGORITHM env var if needed."
+                )
+        except Exception:
+            pass  # Don't fail on header inspection
+
         # Decode and verify the token
         payload = jwt.decode(
             token,
@@ -59,6 +72,18 @@ def verify_supabase_token(token: str) -> Dict[str, Any]:
 
         return payload
 
+    except jwt.exceptions.InvalidAlgorithmError as e:
+        # Algorithm mismatch - provide helpful error message
+        try:
+            header = jwt.get_unverified_header(token)
+            token_alg = header.get("alg", "unknown")
+        except Exception:
+            token_alg = "unknown"
+        raise JWTError(
+            f"JWT algorithm mismatch: token uses '{token_alg}', "
+            f"server expects '{config.jwt_algorithm}'. "
+            f"Set JWT_ALGORITHM={token_alg} in environment variables."
+        )
     except jwt.ExpiredSignatureError:
         raise JWTError("Token has expired")
     except jwt.InvalidAudienceError:

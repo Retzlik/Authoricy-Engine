@@ -29,12 +29,18 @@ from src.auth.models import User
 
 logger = logging.getLogger(__name__)
 
-# Router with admin-only access for cache management operations
-# Health check is public (overridden with dependencies=[])
+# Admin-only router for cache management operations (invalidation, precomputation)
 router = APIRouter(
     prefix="/api/cache",
     tags=["Cache Management"],
-    dependencies=[Depends(require_admin)],  # Admin only by default
+    dependencies=[Depends(require_admin)],
+)
+
+# Public router for monitoring endpoints (health, stats)
+# These should be accessible by external monitoring systems without auth
+public_router = APIRouter(
+    prefix="/api/cache",
+    tags=["Cache Management"],
 )
 
 
@@ -82,7 +88,7 @@ class PrecomputeResponse(BaseModel):
 # ENDPOINTS
 # =============================================================================
 
-@router.get("/health", response_model=CacheHealthResponse, dependencies=[])
+@public_router.get("/health", response_model=CacheHealthResponse)
 def cache_health_check(db: Session = Depends(get_db)):
     """
     Check cache infrastructure health.
@@ -90,7 +96,7 @@ def cache_health_check(db: Session = Depends(get_db)):
     Use this endpoint for monitoring and alerting systems.
     With PostgreSQL caching, this simply verifies database connectivity.
 
-    Note: This is a public endpoint for external monitoring systems.
+    PUBLIC endpoint - accessible without authentication.
     """
     cache = get_postgres_cache(db)
     health = cache.health_check()
@@ -103,7 +109,7 @@ def cache_health_check(db: Session = Depends(get_db)):
     )
 
 
-@router.get("/stats", response_model=CacheStatsResponse, dependencies=[])
+@public_router.get("/stats", response_model=CacheStatsResponse)
 def get_cache_stats(db: Session = Depends(get_db)):
     """
     Get current cache statistics.
@@ -111,7 +117,7 @@ def get_cache_stats(db: Session = Depends(get_db)):
     Useful for monitoring cache performance over time.
     Note: Stats are reset on application restart.
 
-    Note: This is a public endpoint for external monitoring systems.
+    PUBLIC endpoint - accessible without authentication.
     """
     cache = get_postgres_cache(db)
     stats = cache.get_stats()

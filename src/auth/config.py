@@ -75,6 +75,7 @@ def get_auth_config() -> AuthConfig:
         supabase_url=os.getenv("SUPABASE_URL", ""),
         supabase_anon_key=os.getenv("SUPABASE_ANON_KEY", ""),
         supabase_jwt_secret=os.getenv("SUPABASE_JWT_SECRET", ""),
+        jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
         auth_enabled=os.getenv("AUTH_ENABLED", "true").lower() == "true",
         admin_emails=parse_admin_emails_from_env(),
     )

@@ -173,9 +173,10 @@ from api.greenfield import router as greenfield_router, public_router as greenfi
 app.include_router(greenfield_router)
 app.include_router(greenfield_public_router)  # Public endpoints (no auth required)
 
-# Include Cache Management router
-from api.cache import router as cache_router
+# Include Cache Management routers
+from api.cache import router as cache_router, public_router as cache_public_router
 app.include_router(cache_router)
+app.include_router(cache_public_router)  # Public endpoints (health, stats)
 
 # Include Domain Management router
 from api.domains import router as domains_router
