@@ -5,25 +5,18 @@ Settings for Supabase JWT validation and auth behavior.
 """
 
 import os
-from typing import Annotated, Optional
+from typing import Optional
 from functools import lru_cache
-from pydantic import BeforeValidator
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
-def parse_comma_separated_emails(v) -> list[str]:
-    """Parse comma-separated string into list of emails."""
-    if v is None:
+def parse_admin_emails_from_env() -> list[str]:
+    """Parse ADMIN_EMAILS env var as comma-separated string."""
+    raw = os.getenv("ADMIN_EMAILS", "")
+    if not raw:
         return []
-    if isinstance(v, str):
-        return [email.strip() for email in v.split(',') if email.strip()]
-    if isinstance(v, list):
-        return v
-    return []
-
-
-# Custom type that handles comma-separated strings from env vars
-EmailList = Annotated[list[str], BeforeValidator(parse_comma_separated_emails)]
+    return [email.strip() for email in raw.split(",") if email.strip()]
 
 
 class AuthConfig(BaseSettings):
@@ -42,8 +35,14 @@ class AuthConfig(BaseSettings):
     auth_enabled: bool = True  # Set to False for local dev without auth
     allow_unauthenticated_health: bool = True  # Health endpoints don't require auth
 
-    # Admin configuration - uses custom type to parse comma-separated env var
-    admin_emails: EmailList = []
+    # Admin configuration
+    # NOTE: validation_alias prevents BaseSettings from auto-loading ADMIN_EMAILS env var
+    # (which would fail because it tries to JSON-parse a comma-separated string).
+    # The value is parsed manually in get_auth_config() using parse_admin_emails_from_env().
+    admin_emails: list[str] = Field(
+        default_factory=list,
+        validation_alias="__ADMIN_EMAILS_DO_NOT_AUTO_LOAD__"
+    )
 
     class Config:
         env_prefix = ""
@@ -77,5 +76,5 @@ def get_auth_config() -> AuthConfig:
         supabase_anon_key=os.getenv("SUPABASE_ANON_KEY", ""),
         supabase_jwt_secret=os.getenv("SUPABASE_JWT_SECRET", ""),
         auth_enabled=os.getenv("AUTH_ENABLED", "true").lower() == "true",
-        admin_emails=os.getenv("ADMIN_EMAILS", "").split(",") if os.getenv("ADMIN_EMAILS") else [],
+        admin_emails=parse_admin_emails_from_env(),
     )
