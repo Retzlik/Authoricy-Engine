@@ -374,29 +374,69 @@ class PerplexityDiscovery:
     Competitor discovery using Perplexity AI search.
 
     Executes multiple targeted queries to find competitors:
-    1. Direct competitors by company name
+    1. Direct SEO competitors (same keywords/audience)
     2. Alternative products/services
     3. Market leaders in the category
     4. Emerging players/startups
     """
 
-    # Query templates for competitor discovery
+    # Optimized system prompt for competitor extraction
+    SYSTEM_PROMPT = """You are an expert SEO competitive intelligence analyst. Your task is to identify competitors for SEO and content strategy purposes.
+
+CRITICAL OUTPUT FORMAT REQUIREMENTS:
+- For EACH competitor, you MUST provide the company name followed by their domain in parentheses
+- Format: "Company Name (domain.com)"
+- Only include companies with active websites
+- Prioritize companies that:
+  1. Target the same keywords and audience
+  2. Create similar content
+  3. Compete for the same SERP positions
+  4. Offer competing products/services
+
+Example format:
+1. Ahrefs (ahrefs.com) - Leading SEO tool
+2. Semrush (semrush.com) - All-in-one marketing platform
+3. Moz (moz.com) - SEO software and resources
+
+Be comprehensive. Include 10-15 competitors per query. Always include the domain."""
+
+    # Query templates for competitor discovery - SEO-focused
     QUERY_TEMPLATES = {
-        "direct": (
-            "Who are the main direct competitors to {company_name} "
-            "in the {category} market? List specific company names and their websites."
+        "seo_competitors": (
+            "I'm analyzing SEO competitors for {company_name}, a company that {offering}.\n\n"
+            "Their target keywords include: {seed_keywords}\n\n"
+            "List 10-15 companies that would compete for the same search rankings and target audience. "
+            "For each competitor, provide: Company Name (domain.com) and why they're an SEO competitor.\n\n"
+            "Focus on companies creating content around similar topics, targeting similar keywords, "
+            "and competing for the same organic search traffic."
+        ),
+        "direct_competitors": (
+            "Who are the main direct business competitors to {company_name} in the {category} industry?\n\n"
+            "Context: {company_name} offers {offering} for {customer_type}.\n\n"
+            "List 10-15 direct competitors with their website domains. Format: Company Name (domain.com)\n\n"
+            "Include:\n"
+            "- Established market leaders\n"
+            "- Similar-sized competitors\n"
+            "- Emerging challengers\n\n"
+            "Each competitor must have an active website."
+        ),
+        "content_competitors": (
+            "What companies and websites create content competing for these topics: {seed_keywords}?\n\n"
+            "I need to find content competitors for {company_name} ({category}).\n\n"
+            "List 10-15 websites/companies that:\n"
+            "1. Rank for similar keywords\n"
+            "2. Create educational content in this space\n"
+            "3. Target the same audience ({customer_type})\n\n"
+            "Format each as: Company/Site Name (domain.com)"
         ),
         "alternatives": (
-            "What are the best alternatives to {company_name} for {offering}? "
-            "Include both direct competitors and similar tools with their domains."
-        ),
-        "market_leaders": (
-            "Who are the leading companies in the {category} market "
-            "for {customer_type} in 2024-2025? List company names and websites."
-        ),
-        "emerging": (
-            "What are the fastest growing startups or new companies "
-            "in the {category} space? Include their websites."
+            "What are the best alternatives to {company_name} for {category}?\n\n"
+            "Context: {company_name} provides {offering}\n\n"
+            "List 10-15 alternative solutions that {customer_type} might consider instead. "
+            "Include each company's website domain in format: Company Name (domain.com)\n\n"
+            "Include both:\n"
+            "- Direct alternatives (same product category)\n"
+            "- Indirect alternatives (different approach, same problem)"
         ),
     }
 
@@ -421,6 +461,7 @@ class PerplexityDiscovery:
         category: str,
         offering: str,
         customer_type: str = "businesses",
+        seed_keywords: List[str] = None,
         additional_context: str = "",
     ) -> List[DiscoveredCompetitor]:
         """
@@ -431,17 +472,23 @@ class PerplexityDiscovery:
             category: Product/service category (e.g., "project management software")
             offering: Specific offering description
             customer_type: Target customer type
+            seed_keywords: List of target keywords for SEO-focused discovery
             additional_context: Extra context to include in queries
 
         Returns:
             List of discovered competitors, deduplicated and ranked
         """
         all_competitors = []
+
+        # Format seed keywords for queries
+        keywords_str = ", ".join(seed_keywords[:10]) if seed_keywords else category
+
         query_vars = {
             "company_name": company_name,
             "category": category,
             "offering": offering,
             "customer_type": customer_type,
+            "seed_keywords": keywords_str,
         }
 
         queries_to_run = list(self.QUERY_TEMPLATES.items())[: self.max_queries]
@@ -450,13 +497,16 @@ class PerplexityDiscovery:
             try:
                 question = template.format(**query_vars)
                 if additional_context:
-                    question += f" Context: {additional_context}"
+                    question += f"\n\nAdditional context: {additional_context}"
 
                 logger.info(f"Running Perplexity query: {query_type}")
 
+                # Use optimized system prompt
                 result = await self.client.query_for_competitors(
                     question,
+                    system_prompt=self.SYSTEM_PROMPT,
                     search_recency_filter="year",  # Focus on recent info
+                    max_tokens=2048,  # Allow longer responses for more competitors
                 )
 
                 # Tag competitors with discovery source
@@ -465,6 +515,7 @@ class PerplexityDiscovery:
                     comp.discovery_reason = f"Found via {query_type} query"
 
                 all_competitors.extend(result.competitors)
+                logger.info(f"Query '{query_type}' found {len(result.competitors)} competitors")
 
                 # Small delay between queries
                 await asyncio.sleep(0.5)
@@ -473,6 +524,7 @@ class PerplexityDiscovery:
                 logger.warning(f"Perplexity query '{query_type}' failed: {e}")
 
         # Deduplicate and merge
+        logger.info(f"Total competitors found before dedup: {len(all_competitors)}")
         return self._deduplicate_competitors(all_competitors)
 
     def _deduplicate_competitors(

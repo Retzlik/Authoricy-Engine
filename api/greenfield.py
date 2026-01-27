@@ -13,6 +13,7 @@ These endpoints implement the flows described in:
 """
 
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID, uuid4
@@ -38,6 +39,8 @@ from src.services.greenfield import GreenfieldService
 from src.database.models import Domain
 from src.auth.dependencies import get_current_user
 from src.auth.models import User
+from src.collector.client import DataForSEOClient
+from src.integrations import ExternalAPIClients, ExternalAPIConfig
 
 logger = logging.getLogger(__name__)
 
@@ -721,20 +724,75 @@ async def start_greenfield_analysis(
         "target_audience": request.target_audience,
     }
 
+    # Get DataForSEO credentials
+    dataforseo_login = os.environ.get("DATAFORSEO_LOGIN")
+    dataforseo_password = os.environ.get("DATAFORSEO_PASSWORD")
+
     try:
+        # Use the global service for creating the analysis run (no client needed)
         analysis_run_id, session_id = greenfield_service.start_greenfield_analysis(
             domain=request.domain,
             greenfield_context=greenfield_context,
             user_id=current_user.id,
         )
 
-        # Trigger competitor discovery
-        await greenfield_service.discover_competitors(
-            session_id=session_id,
-            seed_keywords=request.seed_keywords,
-            known_competitors=request.known_competitors,
-            market=request.target_market.lower().replace(" ", "_")[:2] if request.target_market else "us",
-        )
+        # Initialize API clients for competitor discovery
+        external_clients = None
+        dataforseo_client = None
+
+        try:
+            # Initialize external API clients (Perplexity, Firecrawl)
+            external_clients = ExternalAPIClients()
+            logger.info(
+                f"External API clients initialized: "
+                f"perplexity={external_clients.perplexity is not None}, "
+                f"firecrawl={external_clients.firecrawl is not None}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to initialize external API clients: {e}")
+
+        # Trigger competitor discovery with clients
+        if dataforseo_login and dataforseo_password:
+            async with DataForSEOClient(
+                login=dataforseo_login,
+                password=dataforseo_password
+            ) as dataforseo_client:
+                # Create service with clients
+                service_with_clients = GreenfieldService(
+                    dataforseo_client=dataforseo_client,
+                    external_api_clients=external_clients,
+                )
+
+                await service_with_clients.discover_competitors(
+                    session_id=session_id,
+                    seed_keywords=request.seed_keywords,
+                    known_competitors=request.known_competitors,
+                    market=request.target_market.lower().replace(" ", "_")[:2] if request.target_market else "us",
+                    business_context=greenfield_context,
+                    target_domain=request.domain,  # Enable Firecrawl website scraping
+                )
+        else:
+            # No DataForSEO credentials - use service with just external clients
+            logger.warning("DataForSEO credentials not configured - SERP discovery disabled")
+            service_with_clients = GreenfieldService(
+                external_api_clients=external_clients,
+            )
+
+            await service_with_clients.discover_competitors(
+                session_id=session_id,
+                seed_keywords=request.seed_keywords,
+                known_competitors=request.known_competitors,
+                market=request.target_market.lower().replace(" ", "_")[:2] if request.target_market else "us",
+                business_context=greenfield_context,
+                target_domain=request.domain,  # Enable Firecrawl website scraping
+            )
+
+        # Cleanup external clients
+        if external_clients:
+            try:
+                await external_clients.close()
+            except Exception:
+                pass
 
         return {
             "analysis_run_id": str(analysis_run_id),
