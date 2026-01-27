@@ -1936,3 +1936,113 @@ class GreenfieldCompetitor(Base):
         Index("idx_gf_competitor_purpose", "session_id", "purpose"),
         Index("idx_gf_competitor_removed", "session_id", "is_removed"),
     )
+
+
+# =============================================================================
+# PRECOMPUTED DASHBOARD DATA - Caching layer for fast dashboard loads
+# =============================================================================
+
+class PrecomputedDashboard(Base):
+    """
+    Precomputed dashboard data for instant retrieval.
+
+    This table stores the results of expensive dashboard aggregations
+    computed after each analysis completion. Instead of computing these
+    on every dashboard load (slow), we compute once and retrieve instantly.
+
+    Data types stored:
+    - overview: Health scores, position distribution, quick stats
+    - sparklines: 30-day position trends for all keywords
+    - sov: Share of Voice calculations
+    - battleground: Attack/Defend keyword classifications
+    - clusters: Topical authority analysis
+    - content_audit: KUCK recommendations
+    - opportunities: Ranked opportunity list
+    - bundle: All-in-one dashboard bundle
+    """
+    __tablename__ = "precomputed_dashboard"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+
+    # Data type identifier
+    data_type = Column(String(50), nullable=False)  # overview, sparklines, sov, etc.
+
+    # The precomputed data (JSONB for efficient storage and querying)
+    data = Column(JSONB, nullable=False)
+
+    # Metadata
+    version = Column(Integer, default=1)  # For cache busting
+    size_bytes = Column(Integer)  # Size of the JSON data
+    computation_time_ms = Column(Integer)  # How long it took to compute
+
+    # Validity
+    valid_until = Column(DateTime)  # When this cache expires
+    is_current = Column(Boolean, default=True)  # Is this the latest version?
+
+    # ETag for HTTP caching
+    etag = Column(String(64))
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    domain = relationship("Domain")
+    analysis_run = relationship("AnalysisRun")
+
+    __table_args__ = (
+        # Unique constraint: one record per analysis + data_type
+        UniqueConstraint("analysis_run_id", "data_type", name="uq_precomputed_analysis_type"),
+        # Fast lookup by domain and data type
+        Index("idx_precomputed_domain_type", "domain_id", "data_type", "is_current"),
+        # Fast lookup by analysis
+        Index("idx_precomputed_analysis", "analysis_run_id"),
+    )
+
+
+class CacheMetricsLog(Base):
+    """
+    Cache performance metrics log.
+
+    Tracks cache performance over time for monitoring and optimization.
+    Stored in PostgreSQL for historical analysis and alerting.
+    """
+    __tablename__ = "cache_metrics_log"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+
+    # Time window
+    recorded_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    window_start = Column(DateTime, nullable=False)
+    window_end = Column(DateTime, nullable=False)
+
+    # Hit/miss statistics
+    hits = Column(Integer, default=0)
+    misses = Column(Integer, default=0)
+    hit_rate = Column(Float)
+
+    # Latency (milliseconds)
+    avg_latency_ms = Column(Float)
+    p95_latency_ms = Column(Float)
+    p99_latency_ms = Column(Float)
+
+    # Memory usage (MB)
+    memory_used_mb = Column(Float)
+    memory_peak_mb = Column(Float)
+
+    # Throughput
+    bytes_read = Column(Integer, default=0)
+    bytes_written = Column(Integer, default=0)
+    bytes_saved_compression = Column(Integer, default=0)
+
+    # Errors
+    errors = Column(Integer, default=0)
+    error_rate = Column(Float)
+
+    # Circuit breaker state
+    circuit_breaker_triggered = Column(Boolean, default=False)
+
+    __table_args__ = (
+        Index("idx_cache_metrics_time", "recorded_at"),
+    )

@@ -3,8 +3,13 @@ Repository Layer - Clean Interface for Data Operations
 
 Provides simple functions to store and retrieve data.
 Handles all SQLAlchemy complexity internally.
+
+Includes cache integration:
+- Triggers cache invalidation on analysis completion
+- Schedules precomputation for dashboard data
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -37,6 +42,52 @@ from .models import (
 from .session import get_db_context, get_db_session
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# CACHE INTEGRATION HELPERS
+# =============================================================================
+
+def _trigger_cache_operations(run_id: UUID, domain_id: UUID, db: Session):
+    """
+    Trigger cache invalidation and precomputation after analysis completion.
+
+    This runs asynchronously in a background task to not block the completion.
+    """
+    async def _async_cache_ops():
+        try:
+            # Import here to avoid circular imports
+            from src.cache.invalidation import invalidate_on_analysis_complete
+            from src.cache.precomputation import trigger_precomputation
+
+            # Invalidate old cache first
+            await invalidate_on_analysis_complete(str(domain_id), str(run_id))
+            logger.info(f"Cache invalidated for analysis {run_id}")
+
+            # Trigger precomputation with a new db session
+            with get_db_context() as new_db:
+                result = await trigger_precomputation(run_id, new_db)
+                logger.info(
+                    f"Precomputation complete for {run_id}: "
+                    f"{result['components_computed']} components in {result['duration_seconds']:.2f}s"
+                )
+
+        except Exception as e:
+            # Log but don't fail - cache operations are non-critical
+            logger.warning(f"Cache operations failed for {run_id}: {e}")
+
+    # Run async operations in background
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If we're in an async context, create a task
+            asyncio.create_task(_async_cache_ops())
+        else:
+            # If we're in a sync context, run in new event loop
+            asyncio.run(_async_cache_ops())
+    except RuntimeError:
+        # No event loop - create one
+        asyncio.run(_async_cache_ops())
 
 
 # =============================================================================
@@ -109,8 +160,18 @@ def complete_run(
     quality_level: DataQualityLevel,
     quality_score: float,
     quality_issues: List[Dict] = None,
+    trigger_cache: bool = True,
 ):
-    """Mark analysis run as complete with quality assessment"""
+    """
+    Mark analysis run as complete with quality assessment.
+
+    Args:
+        run_id: The analysis run ID
+        quality_level: Data quality level (EXCELLENT, GOOD, FAIR, POOR, INVALID)
+        quality_score: Numeric quality score (0-100)
+        quality_issues: List of quality issues found
+        trigger_cache: Whether to trigger cache invalidation and precomputation
+    """
     with get_db_context() as db:
         run = db.query(AnalysisRun).get(run_id)
         if run:
@@ -122,6 +183,10 @@ def complete_run(
             if run.started_at:
                 run.duration_seconds = int((run.completed_at - run.started_at).total_seconds())
             logger.info(f"Run {run_id} completed: {quality_level.value} ({quality_score:.1f}%)")
+
+            # Trigger cache operations in background (non-blocking)
+            if trigger_cache:
+                _trigger_cache_operations(run_id, run.domain_id, db)
 
 
 def fail_run(run_id: UUID, error_message: str, errors: List[Dict] = None):

@@ -80,14 +80,19 @@ app.include_router(dashboard_router)
 from api.greenfield import router as greenfield_router
 app.include_router(greenfield_router)
 
+# Include Cache Management router
+from api.cache import router as cache_router
+app.include_router(cache_router)
+
 
 # ============================================================================
-# STARTUP - Initialize Database
+# STARTUP - Initialize Database and Cache
 # ============================================================================
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database on startup."""
+    """Initialize database and cache on startup."""
+    # Initialize database
     logger.info("Initializing database...")
     try:
         init_db()
@@ -98,6 +103,31 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         # Don't fail startup - the app can still work without DB
+
+    # Initialize Redis cache
+    logger.info("Initializing Redis cache...")
+    try:
+        from src.cache.redis_cache import get_redis_cache
+        cache = await get_redis_cache()
+        health = await cache.health_check()
+        if health.get("healthy"):
+            logger.info(f"Redis cache connected: {health.get('status')}")
+        else:
+            logger.warning(f"Redis cache not healthy: {health.get('status')}")
+    except Exception as e:
+        logger.warning(f"Redis cache initialization failed: {e} - continuing without cache")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown."""
+    logger.info("Shutting down...")
+    try:
+        from src.cache.redis_cache import close_redis_cache
+        await close_redis_cache()
+        logger.info("Redis cache closed")
+    except Exception as e:
+        logger.warning(f"Redis cache shutdown error: {e}")
 
 
 # ============================================================================
