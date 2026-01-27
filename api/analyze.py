@@ -168,9 +168,10 @@ app.include_router(strategy_router)
 from api.dashboard import router as dashboard_router
 app.include_router(dashboard_router)
 
-# Include Greenfield Intelligence router
-from api.greenfield import router as greenfield_router
+# Include Greenfield Intelligence routers
+from api.greenfield import router as greenfield_router, public_router as greenfield_public_router
 app.include_router(greenfield_router)
+app.include_router(greenfield_public_router)  # Public endpoints (no auth required)
 
 # Include Cache Management router
 from api.cache import router as cache_router
