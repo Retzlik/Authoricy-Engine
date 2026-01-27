@@ -7,6 +7,7 @@ Settings for Supabase JWT validation and auth behavior.
 import os
 from typing import Optional
 from functools import lru_cache
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -28,6 +29,15 @@ class AuthConfig(BaseSettings):
 
     # Admin configuration
     admin_emails: list[str] = []  # Emails that are auto-promoted to admin
+
+    @field_validator('admin_emails', mode='before')
+    @classmethod
+    def parse_admin_emails(cls, v):
+        """Parse comma-separated string into list of emails."""
+        if isinstance(v, str):
+            # Handle comma-separated string from env var
+            return [email.strip() for email in v.split(',') if email.strip()]
+        return v or []
 
     class Config:
         env_prefix = ""
