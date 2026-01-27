@@ -5,10 +5,25 @@ Settings for Supabase JWT validation and auth behavior.
 """
 
 import os
-from typing import Optional
+from typing import Annotated, Optional
 from functools import lru_cache
-from pydantic import field_validator
+from pydantic import BeforeValidator
 from pydantic_settings import BaseSettings
+
+
+def parse_comma_separated_emails(v) -> list[str]:
+    """Parse comma-separated string into list of emails."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [email.strip() for email in v.split(',') if email.strip()]
+    if isinstance(v, list):
+        return v
+    return []
+
+
+# Custom type that handles comma-separated strings from env vars
+EmailList = Annotated[list[str], BeforeValidator(parse_comma_separated_emails)]
 
 
 class AuthConfig(BaseSettings):
@@ -27,17 +42,8 @@ class AuthConfig(BaseSettings):
     auth_enabled: bool = True  # Set to False for local dev without auth
     allow_unauthenticated_health: bool = True  # Health endpoints don't require auth
 
-    # Admin configuration
-    admin_emails: list[str] = []  # Emails that are auto-promoted to admin
-
-    @field_validator('admin_emails', mode='before')
-    @classmethod
-    def parse_admin_emails(cls, v):
-        """Parse comma-separated string into list of emails."""
-        if isinstance(v, str):
-            # Handle comma-separated string from env var
-            return [email.strip() for email in v.split(',') if email.strip()]
-        return v or []
+    # Admin configuration - uses custom type to parse comma-separated env var
+    admin_emails: EmailList = []
 
     class Config:
         env_prefix = ""
