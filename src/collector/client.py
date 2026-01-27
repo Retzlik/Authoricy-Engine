@@ -415,17 +415,30 @@ class DataForSEOClient:
                 task_result = tasks[0]["result"]
                 if task_result and len(task_result) > 0:
                     item = task_result[0]
+                    # Log the raw item structure to debug
+                    logger.debug(f"Domain overview raw item for {domain}: {item}")
+
                     # Extract organic metrics from the response
+                    # The structure is: item -> metrics -> organic -> {etv, count, etc}
                     metrics = item.get("metrics", {}).get("organic", {})
-                    return {
-                        "organic_traffic": metrics.get("etv", 0),  # Estimated Traffic Value
-                        "organic_keywords": metrics.get("count", 0),  # Keyword count
-                        "pos_1": metrics.get("pos_1", 0),  # Keywords in position 1
-                        "pos_2_3": metrics.get("pos_2_3", 0),  # Keywords in positions 2-3
-                        "pos_4_10": metrics.get("pos_4_10", 0),  # Keywords in positions 4-10
+
+                    # Also try alternative paths in case API structure changed
+                    if not metrics:
+                        # Try direct access
+                        metrics = item.get("organic", {})
+
+                    extracted = {
+                        "organic_traffic": metrics.get("etv", 0) or metrics.get("traffic", 0),
+                        "organic_keywords": metrics.get("count", 0) or metrics.get("keywords", 0),
+                        "pos_1": metrics.get("pos_1", 0),
+                        "pos_2_3": metrics.get("pos_2_3", 0),
+                        "pos_4_10": metrics.get("pos_4_10", 0),
                     }
 
-            logger.warning(f"No domain overview data for {domain}")
+                    logger.debug(f"Extracted metrics for {domain}: {extracted}")
+                    return extracted
+
+            logger.warning(f"No domain overview data for {domain} - tasks: {tasks}")
             return None
 
         except DataForSEOError as e:

@@ -770,7 +770,7 @@ async def start_greenfield_analysis(
                     session_id=session_id,
                     seed_keywords=request.seed_keywords,
                     known_competitors=request.known_competitors,
-                    market=request.target_market.lower().replace(" ", "_")[:2] if request.target_market else "us",
+                    market=request.target_market or "United States",  # FIXED: pass full name, not broken [:2]
                     business_context=greenfield_context,
                     target_domain=request.domain,  # Enable Firecrawl website scraping
                 )
@@ -789,7 +789,7 @@ async def start_greenfield_analysis(
                 session_id=session_id,
                 seed_keywords=request.seed_keywords,
                 known_competitors=request.known_competitors,
-                market=request.target_market.lower().replace(" ", "_")[:2] if request.target_market else "us",
+                market=request.target_market or "United States",  # FIXED: pass full name, not broken [:2]
                 business_context=greenfield_context,
                 target_domain=request.domain,  # Enable Firecrawl website scraping
             )
