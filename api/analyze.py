@@ -17,8 +17,10 @@ import uuid
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
 from src.collector import (
@@ -73,26 +75,98 @@ app = FastAPI(
 # Production frontend URL (explicit for reliability)
 PRODUCTION_FRONTEND = "https://authoricy-app.vercel.app"
 
-cors_origins = [
+# All allowed origins (exact matches)
+CORS_ORIGINS = [
     # Local development
     "http://localhost:3000",
-    "http://localhost:5173",      # Vite default
+    "http://localhost:5173",
     "http://localhost:8080",
     "https://localhost:3000",
     "https://localhost:5173",
     # Production frontend (explicit)
     PRODUCTION_FRONTEND,
-    # Custom frontend URL from environment (if set)
-    os.getenv("FRONTEND_URL", ""),
 ]
-# Filter out empty strings
-cors_origins = [o for o in cors_origins if o]
+# Add custom frontend URL from environment if set
+if os.getenv("FRONTEND_URL"):
+    CORS_ORIGINS.append(os.getenv("FRONTEND_URL"))
 
+# Regex pattern for preview deployments
+CORS_ORIGIN_REGEX = r"^https://[a-zA-Z0-9-]+\.(lovable\.app|lovableproject\.com|vercel\.app|netlify\.app)$"
+
+
+def is_allowed_origin(origin: str) -> bool:
+    """Check if origin is allowed by exact match or regex."""
+    import re
+    if not origin:
+        return False
+    if origin in CORS_ORIGINS:
+        return True
+    if re.match(CORS_ORIGIN_REGEX, origin):
+        return True
+    return False
+
+
+def get_cors_headers(origin: str) -> dict:
+    """Get CORS headers for a given origin."""
+    if is_allowed_origin(origin):
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Requested-With, Accept, Origin",
+            "Access-Control-Expose-Headers": "*",
+        }
+    return {}
+
+
+class CORSErrorMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware to ensure CORS headers are added to ALL responses including errors.
+
+    This catches exceptions and error responses that might bypass the standard
+    CORSMiddleware and ensures they have proper CORS headers.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        origin = request.headers.get("origin", "")
+
+        # Handle preflight OPTIONS requests directly
+        if request.method == "OPTIONS":
+            if is_allowed_origin(origin):
+                return JSONResponse(
+                    content={"status": "ok"},
+                    status_code=200,
+                    headers=get_cors_headers(origin),
+                )
+
+        try:
+            response = await call_next(request)
+            # Add CORS headers to all responses
+            if is_allowed_origin(origin):
+                cors_headers = get_cors_headers(origin)
+                for header, value in cors_headers.items():
+                    response.headers[header] = value
+            return response
+        except Exception as e:
+            # Even on exception, add CORS headers
+            logger.error(f"Request failed with exception: {e}")
+            headers = get_cors_headers(origin) if is_allowed_origin(origin) else {}
+            return JSONResponse(
+                content={"detail": "Internal server error"},
+                status_code=500,
+                headers=headers,
+            )
+
+
+# Add custom CORS error middleware FIRST (will run LAST due to LIFO order)
+# This ensures CORS headers are added even to error responses
+app.add_middleware(CORSErrorMiddleware)
+
+# Standard CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
-    # Regex for preview/staging deployments (Lovable, Vercel previews, Netlify)
-    allow_origin_regex=r"^https://[a-zA-Z0-9-]+\.lovable\.app$|^https://[a-zA-Z0-9-]+\.lovableproject\.com$|^https://[a-zA-Z0-9-]+\.vercel\.app$|^https://[a-zA-Z0-9-]+\.netlify\.app$",
+    allow_origins=CORS_ORIGINS,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
