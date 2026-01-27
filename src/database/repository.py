@@ -1633,7 +1633,10 @@ def create_greenfield_analysis_run(
     # Ensure the analysis_mode column exists before inserting
     # This is a safety check in case the startup migration failed
     if not ensure_greenfield_columns_exist():
-        logger.warning("Could not verify greenfield columns exist - proceeding anyway")
+        raise RuntimeError(
+            "Cannot create greenfield analysis run: the analysis_mode column "
+            "does not exist in the database. Please check database migrations."
+        )
 
     with get_db_context() as db:
         # Find or create domain
