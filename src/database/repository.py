@@ -3,6 +3,9 @@ Repository Layer - Clean Interface for Data Operations
 
 Provides simple functions to store and retrieve data.
 Handles all SQLAlchemy complexity internally.
+
+Includes cache integration:
+- Triggers cache precomputation on analysis completion
 """
 
 import logging
@@ -37,6 +40,46 @@ from .models import (
 from .session import get_db_context, get_db_session
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# CACHE INTEGRATION HELPERS
+# =============================================================================
+
+def _trigger_cache_operations(run_id: UUID, domain_id: UUID, db: Session):
+    """
+    Trigger cache precomputation after analysis completion.
+
+    Uses a background thread to avoid blocking the main request.
+    Cache operations are non-critical - failures are logged but don't fail the operation.
+    """
+    import threading
+
+    def _run_in_thread():
+        """Run cache operations in a separate thread with its own db session."""
+        try:
+            # Import here to avoid circular imports
+            from src.cache.precomputation import trigger_precomputation
+
+            # Trigger precomputation with a new db session
+            with get_db_context() as new_db:
+                result = trigger_precomputation(run_id, new_db)
+                logger.info(
+                    f"Precomputation complete for {run_id}: "
+                    f"{result['components_computed']} components in {result['duration_seconds']:.2f}s"
+                )
+
+        except ImportError as e:
+            # Cache module not available - that's OK, caching is optional
+            logger.debug(f"Cache module not available: {e}")
+        except Exception as e:
+            # Log but don't fail - cache operations are non-critical
+            logger.warning(f"Cache operations failed for {run_id}: {e}")
+
+    # Start background thread (non-blocking)
+    thread = threading.Thread(target=_run_in_thread, daemon=True)
+    thread.start()
+    logger.debug(f"Started cache precomputation thread for {run_id}")
 
 
 # =============================================================================
@@ -109,8 +152,18 @@ def complete_run(
     quality_level: DataQualityLevel,
     quality_score: float,
     quality_issues: List[Dict] = None,
+    trigger_cache: bool = True,
 ):
-    """Mark analysis run as complete with quality assessment"""
+    """
+    Mark analysis run as complete with quality assessment.
+
+    Args:
+        run_id: The analysis run ID
+        quality_level: Data quality level (EXCELLENT, GOOD, FAIR, POOR, INVALID)
+        quality_score: Numeric quality score (0-100)
+        quality_issues: List of quality issues found
+        trigger_cache: Whether to trigger cache invalidation and precomputation
+    """
     with get_db_context() as db:
         run = db.query(AnalysisRun).get(run_id)
         if run:
@@ -122,6 +175,10 @@ def complete_run(
             if run.started_at:
                 run.duration_seconds = int((run.completed_at - run.started_at).total_seconds())
             logger.info(f"Run {run_id} completed: {quality_level.value} ({quality_score:.1f}%)")
+
+            # Trigger cache operations in background (non-blocking)
+            if trigger_cache:
+                _trigger_cache_operations(run_id, run.domain_id, db)
 
 
 def fail_run(run_id: UUID, error_message: str, errors: List[Dict] = None):

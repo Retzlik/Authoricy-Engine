@@ -115,6 +115,7 @@ class Domain(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)  # Owner (from Supabase Auth)
 
     # Domain identification
     domain = Column(String(255), nullable=False)
@@ -144,11 +145,14 @@ class Domain(Base):
 
     # Relationships
     client = relationship("Client", back_populates="domains")
+    user = relationship("User", back_populates="domains", foreign_keys=[user_id])
     analysis_runs = relationship("AnalysisRun", back_populates="domain", cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("client_id", "domain", name="uq_client_domain"),
+        UniqueConstraint("user_id", "domain", name="uq_user_domain"),
         Index("idx_domain_lookup", "domain"),
+        Index("idx_domain_user", "user_id"),
     )
 
 
@@ -1936,3 +1940,68 @@ class GreenfieldCompetitor(Base):
         Index("idx_gf_competitor_purpose", "session_id", "purpose"),
         Index("idx_gf_competitor_removed", "session_id", "is_removed"),
     )
+
+
+# =============================================================================
+# PRECOMPUTED DASHBOARD DATA - Caching layer for fast dashboard loads
+# =============================================================================
+
+class PrecomputedDashboard(Base):
+    """
+    Precomputed dashboard data for instant retrieval.
+
+    This table stores the results of expensive dashboard aggregations
+    computed after each analysis completion. Instead of computing these
+    on every dashboard load (slow), we compute once and retrieve instantly.
+
+    Data types stored:
+    - overview: Health scores, position distribution, quick stats
+    - sparklines: 30-day position trends for all keywords
+    - sov: Share of Voice calculations
+    - battleground: Attack/Defend keyword classifications
+    - clusters: Topical authority analysis
+    - content_audit: KUCK recommendations
+    - opportunities: Ranked opportunity list
+    - bundle: All-in-one dashboard bundle
+    """
+    __tablename__ = "precomputed_dashboard"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    domain_id = Column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=False)
+    analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("analysis_runs.id"), nullable=False)
+
+    # Data type identifier
+    data_type = Column(String(50), nullable=False)  # overview, sparklines, sov, etc.
+
+    # The precomputed data (JSONB for efficient storage and querying)
+    data = Column(JSONB, nullable=False)
+
+    # Metadata
+    version = Column(Integer, default=1)  # For cache busting
+    size_bytes = Column(Integer)  # Size of the JSON data
+    computation_time_ms = Column(Integer)  # How long it took to compute
+
+    # Validity
+    valid_until = Column(DateTime)  # When this cache expires
+    is_current = Column(Boolean, default=True)  # Is this the latest version?
+
+    # ETag for HTTP caching
+    etag = Column(String(64))
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    domain = relationship("Domain")
+    analysis_run = relationship("AnalysisRun")
+
+    __table_args__ = (
+        # Unique constraint: one record per analysis + data_type
+        UniqueConstraint("analysis_run_id", "data_type", name="uq_precomputed_analysis_type"),
+        # Fast lookup by domain and data type
+        Index("idx_precomputed_domain_type", "domain_id", "data_type", "is_current"),
+        # Fast lookup by analysis
+        Index("idx_precomputed_analysis", "analysis_run_id"),
+    )
+
+

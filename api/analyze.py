@@ -68,6 +68,10 @@ app = FastAPI(
     version="0.3.0",
 )
 
+# Include User Management router (auth endpoints)
+from api.users import router as users_router
+app.include_router(users_router)
+
 # Include Strategy Builder router
 from api.strategy import router as strategy_router
 app.include_router(strategy_router)
@@ -79,6 +83,10 @@ app.include_router(dashboard_router)
 # Include Greenfield Intelligence router
 from api.greenfield import router as greenfield_router
 app.include_router(greenfield_router)
+
+# Include Cache Management router
+from api.cache import router as cache_router
+app.include_router(cache_router)
 
 
 # ============================================================================
@@ -98,6 +106,12 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         # Don't fail startup - the app can still work without DB
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown."""
+    logger.info("Shutting down...")
 
 
 # ============================================================================
