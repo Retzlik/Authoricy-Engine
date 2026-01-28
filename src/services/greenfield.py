@@ -1178,13 +1178,14 @@ class GreenfieldService:
         """
         from src.scoring.greenfield import (
             DomainMaturity,
-            Industry,
+            WinnabilityAnalysis,
             calculate_market_opportunity,
             project_traffic_scenarios,
             select_beachhead_keywords,
             get_industry_from_string,
         )
         from src.database.models import DataQualityLevel
+        from src.collector.client import safe_get_result
 
         errors = []
         warnings = []
@@ -1231,50 +1232,69 @@ class GreenfieldService:
 
         try:
             if self.client:
-                # Mine keywords from each competitor
+                # Mine keywords from each competitor using direct API calls
                 for comp_domain in competitor_domains[:10]:  # Limit to top 10
                     try:
-                        # Get competitor's ranked keywords
-                        comp_keywords = await self.client.get_ranked_keywords(
-                            domain=comp_domain,
-                            location_name=market,
-                            limit=500,
+                        # Get competitor's ranked keywords via DataForSEO API
+                        result = await self.client.post(
+                            "dataforseo_labs/google/ranked_keywords/live",
+                            [{
+                                "target": comp_domain,
+                                "location_name": market,
+                                "language_name": "English",
+                                "limit": 500,
+                                "include_subdomains": True,
+                            }]
                         )
 
-                        for kw in comp_keywords:
+                        items = safe_get_result(result, get_items=True)
+
+                        for item in items:
+                            kw_data = item.get("keyword_data") or {}
+                            kw_info = kw_data.get("keyword_info") or {}
+                            serp_item = (item.get("ranked_serp_element") or {}).get("serp_item") or {}
+
                             keyword_universe.append({
-                                "keyword": kw.get("keyword", ""),
-                                "search_volume": kw.get("search_volume", 0),
-                                "keyword_difficulty": kw.get("keyword_difficulty", 0),
-                                "cpc": kw.get("cpc", 0),
+                                "keyword": kw_data.get("keyword", ""),
+                                "search_volume": kw_info.get("search_volume") or 0,
+                                "keyword_difficulty": kw_info.get("keyword_difficulty") or 0,
+                                "cpc": kw_info.get("cpc") or 0,
                                 "source_competitor": comp_domain,
-                                "competitor_position": kw.get("position", 0),
-                                "search_intent": kw.get("intent", "informational"),
+                                "competitor_position": serp_item.get("rank_group", 0),
+                                "search_intent": "informational",
                                 "business_relevance": 0.7,
                             })
 
-                        logger.info(f"Mined {len(comp_keywords)} keywords from {comp_domain}")
+                        logger.info(f"Mined {len(items)} keywords from {comp_domain}")
 
                     except Exception as e:
                         logger.warning(f"Failed to mine keywords from {comp_domain}: {e}")
                         warnings.append(f"Keyword mining failed for {comp_domain}")
 
-                # Also expand from seed keywords
+                # Also expand from seed keywords using keyword ideas API
                 for seed in seed_keywords[:5]:
                     try:
-                        related = await self.client.get_related_keywords(
-                            keyword=seed,
-                            location_name=market,
-                            limit=100,
+                        result = await self.client.post(
+                            "dataforseo_labs/google/keyword_ideas/live",
+                            [{
+                                "keyword": seed,
+                                "location_name": market,
+                                "language_name": "English",
+                                "limit": 100,
+                            }]
                         )
-                        for kw in related:
+
+                        items = safe_get_result(result, get_items=True)
+
+                        for item in items:
+                            kw_info = item.get("keyword_info") or item
                             keyword_universe.append({
-                                "keyword": kw.get("keyword", ""),
-                                "search_volume": kw.get("search_volume", 0),
-                                "keyword_difficulty": kw.get("keyword_difficulty", 0),
-                                "cpc": kw.get("cpc", 0),
+                                "keyword": item.get("keyword", ""),
+                                "search_volume": kw_info.get("search_volume") or item.get("search_volume") or 0,
+                                "keyword_difficulty": kw_info.get("keyword_difficulty") or item.get("keyword_difficulty") or 0,
+                                "cpc": kw_info.get("cpc") or item.get("cpc") or 0,
                                 "source_competitor": f"seed:{seed}",
-                                "search_intent": kw.get("intent", "informational"),
+                                "search_intent": "informational",
                                 "business_relevance": 0.8,
                             })
                     except Exception as e:
@@ -1321,37 +1341,50 @@ class GreenfieldService:
                 for kw in keywords_to_analyze:
                     keyword_text = kw.get("keyword", "")
                     try:
-                        # Get SERP for this keyword
-                        serp = await self.client.get_serp_results(
+                        # Get SERP for this keyword using direct API
+                        serp_result = await self.client.get_serp_results(
                             keyword=keyword_text,
                             location_name=market,
                             limit=10,
                         )
 
-                        if serp:
+                        if serp_result:
                             # Calculate SERP metrics
-                            serp_drs = [r.get("domain_rank", 0) for r in serp if r.get("domain_rank")]
+                            serp_drs = [r.get("domain_rank", 0) for r in serp_result if r.get("domain_rank")]
                             avg_dr = sum(serp_drs) / len(serp_drs) if serp_drs else 50
                             min_dr = min(serp_drs) if serp_drs else 0
+                            has_low_dr = any(dr <= target_dr + 10 for dr in serp_drs) if serp_drs else False
+                            low_dr_positions = [i+1 for i, dr in enumerate(serp_drs) if dr <= target_dr + 10]
 
                             # Calculate winnability
                             kd = kw.get("keyword_difficulty", 50)
-                            dr_advantage = max(0, target_dr - min_dr) / 10
-                            weak_content_count = sum(1 for r in serp if r.get("content_score", 50) < 40)
+                            dr_gap = max(0, avg_dr - target_dr)
+                            dr_gap_penalty = min(40, dr_gap * 0.8)
+                            low_dr_bonus = len(low_dr_positions) * 3
+                            kd_penalty = kd * 0.4
 
-                            winnability = 100 - kd + (dr_advantage * 5) + (weak_content_count * 3)
+                            winnability = 100 - dr_gap_penalty + low_dr_bonus - kd_penalty
                             winnability = max(0, min(100, winnability))
 
-                            personalized_difficulty = kd - (dr_advantage * 5)
+                            personalized_difficulty = kd + (dr_gap * 0.3)
                             personalized_difficulty = max(0, min(100, personalized_difficulty))
 
-                            winnability_analyses[keyword_text] = {
-                                "winnability_score": winnability,
-                                "personalized_difficulty": personalized_difficulty,
-                                "avg_serp_dr": avg_dr,
-                                "min_serp_dr": min_dr,
-                                "weak_content_signals": weak_content_count,
-                            }
+                            # Create proper WinnabilityAnalysis object
+                            winnability_analyses[keyword_text] = WinnabilityAnalysis(
+                                keyword=keyword_text,
+                                winnability_score=winnability,
+                                personalized_difficulty=personalized_difficulty,
+                                avg_serp_dr=avg_dr,
+                                min_serp_dr=min_dr,
+                                has_low_dr_rankings=has_low_dr,
+                                low_dr_positions=low_dr_positions,
+                                weak_content_signals=[],
+                                has_ai_overview=False,  # Would need AI Overview detection
+                                dr_gap_penalty=dr_gap_penalty,
+                                low_dr_bonus=low_dr_bonus,
+                                kd_penalty=kd_penalty,
+                                is_beachhead_candidate=winnability >= 55 and kd <= 35,
+                            )
 
                             # Update keyword with winnability
                             kw["winnability_score"] = winnability
@@ -1524,6 +1557,16 @@ class GreenfieldService:
             # Prepare market opportunity dict
             market_opp_dict = {}
             if market_opportunity:
+                # Calculate derived metrics
+                opportunity_score = (
+                    (market_opportunity.som_volume / max(1, market_opportunity.tam_volume)) * 100
+                    if market_opportunity.tam_volume > 0 else 0
+                )
+                competition_intensity = (
+                    1 - (market_opportunity.som_keywords / max(1, market_opportunity.sam_keywords))
+                    if market_opportunity.sam_keywords > 0 else 0.5
+                )
+
                 market_opp_dict = {
                     "tam_volume": market_opportunity.tam_volume,
                     "sam_volume": market_opportunity.sam_volume,
@@ -1531,8 +1574,8 @@ class GreenfieldService:
                     "tam_keywords": market_opportunity.tam_keywords,
                     "sam_keywords": market_opportunity.sam_keywords,
                     "som_keywords": market_opportunity.som_keywords,
-                    "opportunity_score": market_opportunity.opportunity_score,
-                    "competition_intensity": market_opportunity.competition_intensity,
+                    "opportunity_score": round(opportunity_score, 1),
+                    "competition_intensity": round(competition_intensity, 2),
                 }
 
             # Prepare projections dict
@@ -1540,25 +1583,25 @@ class GreenfieldService:
             if traffic_projections:
                 projections_dict = {
                     "conservative": {
-                        "month_3": traffic_projections.conservative.month_3,
-                        "month_6": traffic_projections.conservative.month_6,
-                        "month_12": traffic_projections.conservative.month_12,
-                        "month_18": traffic_projections.conservative.month_18,
-                        "month_24": traffic_projections.conservative.month_24,
+                        "month_3": traffic_projections.conservative.traffic_by_month.get(3, 0),
+                        "month_6": traffic_projections.conservative.traffic_by_month.get(6, 0),
+                        "month_12": traffic_projections.conservative.traffic_by_month.get(12, 0),
+                        "month_18": traffic_projections.conservative.traffic_by_month.get(18, 0),
+                        "month_24": traffic_projections.conservative.traffic_by_month.get(24, 0),
                     },
                     "expected": {
-                        "month_3": traffic_projections.expected.month_3,
-                        "month_6": traffic_projections.expected.month_6,
-                        "month_12": traffic_projections.expected.month_12,
-                        "month_18": traffic_projections.expected.month_18,
-                        "month_24": traffic_projections.expected.month_24,
+                        "month_3": traffic_projections.expected.traffic_by_month.get(3, 0),
+                        "month_6": traffic_projections.expected.traffic_by_month.get(6, 0),
+                        "month_12": traffic_projections.expected.traffic_by_month.get(12, 0),
+                        "month_18": traffic_projections.expected.traffic_by_month.get(18, 0),
+                        "month_24": traffic_projections.expected.traffic_by_month.get(24, 0),
                     },
                     "aggressive": {
-                        "month_3": traffic_projections.aggressive.month_3,
-                        "month_6": traffic_projections.aggressive.month_6,
-                        "month_12": traffic_projections.aggressive.month_12,
-                        "month_18": traffic_projections.aggressive.month_18,
-                        "month_24": traffic_projections.aggressive.month_24,
+                        "month_3": traffic_projections.aggressive.traffic_by_month.get(3, 0),
+                        "month_6": traffic_projections.aggressive.traffic_by_month.get(6, 0),
+                        "month_12": traffic_projections.aggressive.traffic_by_month.get(12, 0),
+                        "month_18": traffic_projections.aggressive.traffic_by_month.get(18, 0),
+                        "month_24": traffic_projections.aggressive.traffic_by_month.get(24, 0),
                     },
                 }
 
