@@ -1341,32 +1341,51 @@ class GreenfieldService:
                 for kw in keywords_to_analyze:
                     keyword_text = kw.get("keyword", "")
                     try:
-                        # Get SERP for this keyword using direct API
-                        serp_result = await self.client.get_serp_results(
-                            keyword=keyword_text,
-                            location_name=market,
-                            limit=10,
+                        # Get SERP for this keyword using direct API call
+                        result = await self.client.post(
+                            "serp/google/organic/live/regular",
+                            [{
+                                "keyword": keyword_text,
+                                "location_name": market,
+                                "language_name": "English",
+                                "device": "desktop",
+                                "depth": 10,
+                            }]
                         )
 
+                        task_result = safe_get_result(result, get_items=False)
+                        serp_result = task_result.get("items") or [] if task_result else []
+
                         if serp_result:
-                            # Calculate SERP metrics
-                            serp_drs = [r.get("domain_rank", 0) for r in serp_result if r.get("domain_rank")]
-                            avg_dr = sum(serp_drs) / len(serp_drs) if serp_drs else 50
-                            min_dr = min(serp_drs) if serp_drs else 0
-                            has_low_dr = any(dr <= target_dr + 10 for dr in serp_drs) if serp_drs else False
-                            low_dr_positions = [i+1 for i, dr in enumerate(serp_drs) if dr <= target_dr + 10]
+                            # Extract organic results
+                            organic_results = [
+                                item for item in serp_result
+                                if item.get("type") == "organic"
+                            ]
 
-                            # Calculate winnability
+                            # Check for AI overview / featured snippets
+                            has_ai_overview = any(
+                                item.get("type") in ["ai_overview", "featured_snippet", "knowledge_graph"]
+                                for item in serp_result
+                            )
+
+                            # Estimate SERP competitiveness from organic result count and presence
+                            # Without direct DR data, estimate based on KD and SERP features
                             kd = kw.get("keyword_difficulty", 50)
-                            dr_gap = max(0, avg_dr - target_dr)
-                            dr_gap_penalty = min(40, dr_gap * 0.8)
-                            low_dr_bonus = len(low_dr_positions) * 3
-                            kd_penalty = kd * 0.4
+                            organic_count = len(organic_results)
 
-                            winnability = 100 - dr_gap_penalty + low_dr_bonus - kd_penalty
+                            # Calculate winnability based on KD primarily
+                            # Lower KD = more winnable
+                            kd_penalty = kd * 0.6
+                            ai_penalty = 15 if has_ai_overview else 0
+                            dr_estimate = max(30, kd * 1.2)  # Estimate avg DR from KD
+
+                            winnability = 100 - kd_penalty - ai_penalty
                             winnability = max(0, min(100, winnability))
 
-                            personalized_difficulty = kd + (dr_gap * 0.3)
+                            # Personalized difficulty considers target DR
+                            dr_gap = max(0, dr_estimate - target_dr)
+                            personalized_difficulty = kd + (dr_gap * 0.2)
                             personalized_difficulty = max(0, min(100, personalized_difficulty))
 
                             # Create proper WinnabilityAnalysis object
@@ -1374,15 +1393,16 @@ class GreenfieldService:
                                 keyword=keyword_text,
                                 winnability_score=winnability,
                                 personalized_difficulty=personalized_difficulty,
-                                avg_serp_dr=avg_dr,
-                                min_serp_dr=min_dr,
-                                has_low_dr_rankings=has_low_dr,
-                                low_dr_positions=low_dr_positions,
+                                avg_serp_dr=dr_estimate,  # Estimated from KD
+                                min_serp_dr=max(10, dr_estimate - 15),  # Estimated
+                                has_low_dr_rankings=kd < 30,  # Approximate
+                                low_dr_positions=[],
                                 weak_content_signals=[],
-                                has_ai_overview=False,  # Would need AI Overview detection
-                                dr_gap_penalty=dr_gap_penalty,
-                                low_dr_bonus=low_dr_bonus,
+                                has_ai_overview=has_ai_overview,
+                                dr_gap_penalty=dr_gap * 0.5,
+                                low_dr_bonus=5 if kd < 25 else 0,
                                 kd_penalty=kd_penalty,
+                                ai_penalty=ai_penalty,
                                 is_beachhead_candidate=winnability >= 55 and kd <= 35,
                             )
 
@@ -1390,7 +1410,8 @@ class GreenfieldService:
                             kw["winnability_score"] = winnability
                             kw["personalized_difficulty"] = personalized_difficulty
                             kw["serp_analyzed"] = True
-                            kw["avg_serp_dr"] = avg_dr
+                            kw["avg_serp_dr"] = dr_estimate
+                            kw["has_ai_overview"] = has_ai_overview
 
                     except Exception as e:
                         logger.debug(f"SERP analysis failed for '{keyword_text}': {e}")
