@@ -390,40 +390,42 @@ interface GreenfieldDashboard {
 │ 1. POST /api/greenfield/analyze                                  │
 │    → Returns analysis_run_id + session_id                        │
 │    → Status: "awaiting_curation"                                 │
+│    → Discovers competitors (smart auto-curation: max 15)         │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ 2. GET /api/greenfield/sessions/{session_id}                     │
-│    → Returns 15+ competitor candidates (auto-discovered)         │
-│    → User reviews candidates in UI                               │
+│    → Returns max 15 pre-curated competitor candidates            │
+│    → Tiered: benchmarks, keyword_sources, market_intel           │
+│    → User reviews and optionally removes/adds                    │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ 3. POST /api/greenfield/sessions/{session_id}/curate             │
-│    → User removes irrelevant competitors                         │
-│    → User adds known competitors                                 │
-│    → User overrides purposes if needed                           │
-│    → Returns final competitor set (5-10 competitors)             │
+│    → Validates final count (3-15 competitors)                    │
+│    → Saves curation decisions                                    │
+│    → AUTOMATICALLY TRIGGERS DEEP ANALYSIS (G2-G5):               │
+│      • Keyword mining from competitors                           │
+│      • SERP analysis & winnability scoring                       │
+│      • Market sizing (TAM/SAM/SOM)                               │
+│      • Beachhead selection & roadmap                             │
+│    → Returns curation result + analysis status                   │
+│    → Response includes: analysis_status, keywords_count, etc.    │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ 4. Analysis continues in background...                           │
-│    → Keyword extraction from competitors                         │
-│    → Winnability scoring                                         │
-│    → Beachhead identification                                    │
-│    → Market sizing (TAM/SAM/SOM)                                 │
-│    → Traffic projections                                         │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 5. GET /api/greenfield/dashboard/{analysis_run_id}               │
+│ 4. GET /api/greenfield/dashboard/{analysis_run_id}               │
 │    → Full greenfield dashboard with beachheads, projections      │
+│    → Dashboard is immediately ready after step 3 completes       │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Important:** The /curate endpoint now automatically triggers deep analysis.
+No separate call is needed. The endpoint will take longer to respond (30-60s)
+as it runs the full keyword mining and analysis pipeline.
 
 ---
 

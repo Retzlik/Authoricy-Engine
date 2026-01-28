@@ -666,28 +666,49 @@ class GreenfieldService:
 
         # Update session with tiered candidates and website context
         # Convert tiered set to storage format
+        # SMART AUTO-CURATION: Limit candidates presented to user
+        # - Max 5 benchmarks (most important)
+        # - Max 7 keyword sources (high value for mining)
+        # - Max 3 market intel (awareness only)
+        # Total max: 15 candidates (down from potentially 35+)
+
         all_candidates_for_storage = []
 
-        # Benchmarks first (highest priority)
-        for comp in tiered_set.benchmarks:
+        # Benchmarks first (highest priority) - max 5
+        for comp in tiered_set.benchmarks[:5]:
             all_candidates_for_storage.append({
                 **comp.to_dict(),
                 "suggested_purpose": "benchmark_peer",
+                "auto_selected": True,
             })
 
-        # Then keyword sources
-        for comp in tiered_set.keyword_sources:
+        # Then keyword sources - max 7
+        for comp in tiered_set.keyword_sources[:7]:
             all_candidates_for_storage.append({
                 **comp.to_dict(),
                 "suggested_purpose": "keyword_source",
+                "auto_selected": True,
             })
 
-        # Then market intel
-        for comp in tiered_set.market_intel:
+        # Then market intel - max 3
+        for comp in tiered_set.market_intel[:3]:
             all_candidates_for_storage.append({
                 **comp.to_dict(),
                 "suggested_purpose": "market_intel",
+                "auto_selected": False,  # Optional - user can remove
             })
+
+        # Log what was auto-filtered
+        auto_filtered_count = (
+            max(0, len(tiered_set.benchmarks) - 5) +
+            max(0, len(tiered_set.keyword_sources) - 7) +
+            max(0, len(tiered_set.market_intel) - 3)
+        )
+        if auto_filtered_count > 0:
+            logger.info(
+                f"Smart auto-curation: Filtered {auto_filtered_count} lower-scored "
+                f"competitors to present {len(all_candidates_for_storage)} candidates"
+            )
 
         repository.update_session_candidates(
             session_id,
@@ -1032,20 +1053,17 @@ class GreenfieldService:
             return None
 
         candidates = session.get("candidate_competitors", [])
-        required_removals = max(0, len(candidates) - 10)
 
-        # Validate removal count
-        if len(removals) < required_removals:
-            raise ValueError(
-                f"Must remove at least {required_removals} competitors "
-                f"(removed {len(removals)})"
-            )
-
-        # Validate final count
+        # Validate final count (flexible limits: 3-15 competitors)
         final_count = len(candidates) - len(removals) + len(additions)
-        if final_count < 8 or final_count > 10:
+        if final_count < 3:
             raise ValueError(
-                f"Final competitor count must be 8-10 (got {final_count})"
+                f"Must have at least 3 competitors (got {final_count})"
+            )
+        if final_count > 15:
+            raise ValueError(
+                f"Maximum 15 competitors allowed (got {final_count}). "
+                f"Please remove {final_count - 15} more."
             )
 
         return repository.submit_curation(
@@ -1222,7 +1240,7 @@ class GreenfieldService:
         logger.info("G2: Building keyword universe from competitors...")
         repository.update_run_status(
             analysis_run_id,
-            AnalysisStatus.IN_PROGRESS,
+            AnalysisStatus.ANALYZING,
             phase="keyword_mining",
             progress=20,
         )
@@ -1322,7 +1340,7 @@ class GreenfieldService:
         logger.info("G3: Analyzing SERPs and calculating winnability...")
         repository.update_run_status(
             analysis_run_id,
-            AnalysisStatus.IN_PROGRESS,
+            AnalysisStatus.ANALYZING,
             phase="serp_analysis",
             progress=40,
         )
@@ -1428,7 +1446,7 @@ class GreenfieldService:
         logger.info("G4: Calculating market opportunity...")
         repository.update_run_status(
             analysis_run_id,
-            AnalysisStatus.IN_PROGRESS,
+            AnalysisStatus.ANALYZING,
             phase="market_sizing",
             progress=60,
         )
@@ -1467,7 +1485,7 @@ class GreenfieldService:
         logger.info("G5: Selecting beachhead keywords...")
         repository.update_run_status(
             analysis_run_id,
-            AnalysisStatus.IN_PROGRESS,
+            AnalysisStatus.ANALYZING,
             phase="beachhead_selection",
             progress=80,
         )
@@ -1523,7 +1541,7 @@ class GreenfieldService:
         logger.info("Saving analysis results...")
         repository.update_run_status(
             analysis_run_id,
-            AnalysisStatus.IN_PROGRESS,
+            AnalysisStatus.ANALYZING,
             phase="saving_results",
             progress=90,
         )

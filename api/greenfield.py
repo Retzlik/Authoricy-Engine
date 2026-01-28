@@ -397,18 +397,24 @@ async def submit_curation(
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
-    Submit user's curation decisions.
+    Submit user's curation decisions and automatically trigger deep analysis.
+
+    This endpoint:
+    1. Validates and saves the curation decisions
+    2. Automatically triggers deep analysis (G2-G5)
+    3. Returns when analysis is complete
 
     Validates that:
-    - Required number of competitors removed
-    - Final count is within limits (8-10)
+    - Final count is within limits (5-15 competitors)
     - Purpose overrides are valid
 
-    Returns the finalized competitor set.
+    Returns the finalized competitor set and analysis status.
     """
     from src.database.session import get_db_context
+    from src.database import repository
+    from src.database.models import AnalysisStatus
 
-    # Check access
+    # Check access and get session data
     with get_db_context() as db:
         session = db.query(CompetitorIntelligenceSession).filter(
             CompetitorIntelligenceSession.id == session_id
@@ -416,21 +422,110 @@ async def submit_curation(
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         check_session_access(session, current_user, db)
+
+        # Get analysis run info for later
+        analysis_run_id = session.analysis_run_id
+        run = db.query(AnalysisRun).get(analysis_run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Analysis run not found")
+
+        domain_id = run.domain_id
+        domain_obj = db.query(Domain).get(domain_id)
+        domain = domain_obj.domain if domain_obj else None
+        greenfield_context = run.greenfield_context or {}
+
+    # Step 1: Submit curation
     try:
-        result = greenfield_service.submit_curation(
+        curation_result = greenfield_service.submit_curation(
             session_id=session_id,
             removals=[r.model_dump() for r in curation.removals],
             additions=[a.model_dump() for a in curation.additions],
             purpose_overrides=[p.model_dump() for p in curation.purpose_overrides],
         )
 
-        if not result:
+        if not curation_result:
             raise HTTPException(status_code=404, detail="Session not found")
-
-        return result
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # Step 2: Get finalized competitors
+    final_competitors = curation_result.get("final_competitors", [])
+
+    if not final_competitors:
+        raise HTTPException(
+            status_code=400,
+            detail="No finalized competitors. Curation may have failed."
+        )
+
+    # Step 3: Automatically trigger deep analysis
+    dataforseo_login = os.environ.get("DATAFORSEO_LOGIN")
+    dataforseo_password = os.environ.get("DATAFORSEO_PASSWORD")
+
+    if not dataforseo_login or not dataforseo_password:
+        # Return curation result but note analysis cannot proceed
+        return {
+            **curation_result,
+            "analysis_status": "pending",
+            "analysis_message": "Curation complete. Deep analysis requires DataForSEO credentials.",
+        }
+
+    try:
+        # Update status to ANALYZING
+        repository.update_run_status(
+            analysis_run_id,
+            AnalysisStatus.ANALYZING,
+            phase="deep_analysis",
+            progress=10,
+        )
+
+        # Run deep analysis
+        async with DataForSEOClient(
+            login=dataforseo_login,
+            password=dataforseo_password
+        ) as dataforseo_client:
+            service_with_client = GreenfieldService(
+                dataforseo_client=dataforseo_client,
+            )
+
+            analysis_result = await service_with_client.run_deep_analysis(
+                session_id=session_id,
+                analysis_run_id=analysis_run_id,
+                domain_id=domain_id,
+                domain=domain,
+                final_competitors=final_competitors,
+                greenfield_context=greenfield_context,
+                market=greenfield_context.get("target_market", "United States"),
+            )
+
+        # Return combined result
+        if analysis_result.get("success"):
+            return {
+                **curation_result,
+                "analysis_status": "completed",
+                "analysis_message": "Deep analysis completed. Dashboard is ready.",
+                "keywords_count": analysis_result.get("keywords_count", 0),
+                "beachheads_count": analysis_result.get("beachheads_count", 0),
+                "market_opportunity": analysis_result.get("market_opportunity", {}),
+                "next_step": f"/api/greenfield/dashboard/{analysis_run_id}",
+            }
+        else:
+            return {
+                **curation_result,
+                "analysis_status": "failed",
+                "analysis_message": analysis_result.get("error", "Deep analysis failed"),
+                "analysis_errors": analysis_result.get("errors", []),
+            }
+
+    except Exception as e:
+        logger.error(f"Deep analysis failed after curation for session {session_id}: {e}")
+        repository.fail_run(analysis_run_id, error_message=str(e))
+        # Return curation success but analysis failure
+        return {
+            **curation_result,
+            "analysis_status": "failed",
+            "analysis_message": f"Curation succeeded but deep analysis failed: {str(e)}",
+        }
 
 
 @router.patch("/sessions/{session_id}/competitors")
@@ -548,10 +643,10 @@ async def continue_analysis(
         )
 
     try:
-        # Update status to IN_PROGRESS
+        # Update status to ANALYZING
         repository.update_run_status(
             analysis_run_id,
-            AnalysisStatus.IN_PROGRESS,
+            AnalysisStatus.ANALYZING,
             phase="deep_analysis",
             progress=10,
         )
