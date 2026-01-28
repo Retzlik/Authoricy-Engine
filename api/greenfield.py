@@ -473,6 +473,139 @@ async def update_competitors(
     return result
 
 
+@router.post("/sessions/{session_id}/continue")
+async def continue_analysis(
+    session_id: UUID,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Continue analysis after competitor curation.
+
+    This triggers the deep analysis pipeline (G2-G5):
+    - G2: Keyword Universe Construction (mining competitor keywords)
+    - G3: SERP Analysis & Winnability Scoring
+    - G4: Market Sizing (TAM/SAM/SOM)
+    - G5: Beachhead Selection & Growth Roadmap
+
+    Prerequisites:
+    - Session must be in "curated" status (competitors confirmed)
+
+    Returns:
+    - analysis_run_id: UUID of the analysis
+    - status: "completed" or "failed"
+    - keywords_count: Number of keywords discovered
+    - beachheads_count: Number of beachhead keywords selected
+    - market_opportunity: TAM/SAM/SOM summary
+    """
+    from src.database.session import get_db_context
+    from src.database import repository
+    from src.database.models import AnalysisStatus
+
+    # Check access and get session
+    with get_db_context() as db:
+        session = db.query(CompetitorIntelligenceSession).filter(
+            CompetitorIntelligenceSession.id == session_id
+        ).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        check_session_access(session, current_user, db)
+
+        # Verify session is curated
+        if session.status != "curated":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Session must be curated before continuing. Current status: {session.status}"
+            )
+
+        # Get analysis run
+        analysis_run_id = session.analysis_run_id
+        run = db.query(AnalysisRun).get(analysis_run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Analysis run not found")
+
+        domain_id = run.domain_id
+        domain_obj = db.query(Domain).get(domain_id)
+        domain = domain_obj.domain if domain_obj else None
+        greenfield_context = run.greenfield_context or {}
+
+        # Get finalized competitors
+        final_competitors = session.final_competitors or []
+
+    if not final_competitors:
+        raise HTTPException(
+            status_code=400,
+            detail="No finalized competitors found. Please complete curation first."
+        )
+
+    # Get DataForSEO credentials
+    dataforseo_login = os.environ.get("DATAFORSEO_LOGIN")
+    dataforseo_password = os.environ.get("DATAFORSEO_PASSWORD")
+
+    if not dataforseo_login or not dataforseo_password:
+        raise HTTPException(
+            status_code=500,
+            detail="DataForSEO credentials not configured. Cannot run deep analysis."
+        )
+
+    try:
+        # Update status to IN_PROGRESS
+        repository.update_run_status(
+            analysis_run_id,
+            AnalysisStatus.IN_PROGRESS,
+            phase="deep_analysis",
+            progress=10,
+        )
+
+        # Run deep analysis
+        async with DataForSEOClient(
+            login=dataforseo_login,
+            password=dataforseo_password
+        ) as dataforseo_client:
+            # Create service with client
+            service_with_client = GreenfieldService(
+                dataforseo_client=dataforseo_client,
+            )
+
+            result = await service_with_client.run_deep_analysis(
+                session_id=session_id,
+                analysis_run_id=analysis_run_id,
+                domain_id=domain_id,
+                domain=domain,
+                final_competitors=final_competitors,
+                greenfield_context=greenfield_context,
+                market=greenfield_context.get("target_market", "United States"),
+            )
+
+        if result.get("success"):
+            return {
+                "analysis_run_id": str(analysis_run_id),
+                "session_id": str(session_id),
+                "status": "completed",
+                "message": "Deep analysis completed successfully. Dashboard is now ready.",
+                "keywords_count": result.get("keywords_count", 0),
+                "beachheads_count": result.get("beachheads_count", 0),
+                "market_opportunity": result.get("market_opportunity", {}),
+                "next_step": f"/api/greenfield/dashboard/{analysis_run_id}",
+            }
+        else:
+            return {
+                "analysis_run_id": str(analysis_run_id),
+                "session_id": str(session_id),
+                "status": "failed",
+                "message": result.get("error", "Deep analysis failed"),
+                "errors": result.get("errors", []),
+            }
+
+    except Exception as e:
+        logger.error(f"Deep analysis failed for session {session_id}: {e}")
+        # Mark as failed
+        repository.fail_run(
+            analysis_run_id,
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =============================================================================
 # GREENFIELD DASHBOARD ENDPOINTS
 # =============================================================================

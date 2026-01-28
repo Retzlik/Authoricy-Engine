@@ -158,6 +158,33 @@ from .greenfield import (
     INDUSTRY_COEFFICIENTS,
 )
 
+# Competitor Scoring
+from .competitor_scoring import (
+    # Enums
+    CompetitorTier,
+    RejectionGate,
+    # Data classes
+    ScoreBreakdown,
+    ScoredCompetitor,
+    RejectedCompetitor,
+    TieredCompetitorSet,
+    # Scoring functions
+    calculate_relevance_score,
+    calculate_authority_proximity_score,
+    calculate_data_richness_score,
+    calculate_market_presence_score,
+    calculate_strategic_value,
+    # Tier assignment
+    assign_tier,
+    generate_tier_explanation,
+    # Main entry point
+    score_and_tier_competitors,
+    get_tier_summary,
+    # Constants
+    TIER_THRESHOLDS,
+    TIER_LIMITS,
+)
+
 __all__ = [
     # Helpers
     "CTR_CURVE",
@@ -233,6 +260,25 @@ __all__ = [
     "requires_eeat_compliance",
     "get_coefficient",
     "INDUSTRY_COEFFICIENTS",
+
+    # Competitor Scoring
+    "CompetitorTier",
+    "RejectionGate",
+    "ScoreBreakdown",
+    "ScoredCompetitor",
+    "RejectedCompetitor",
+    "TieredCompetitorSet",
+    "calculate_relevance_score",
+    "calculate_authority_proximity_score",
+    "calculate_data_richness_score",
+    "calculate_market_presence_score",
+    "calculate_strategic_value",
+    "assign_tier",
+    "generate_tier_explanation",
+    "score_and_tier_competitors",
+    "get_tier_summary",
+    "TIER_THRESHOLDS",
+    "TIER_LIMITS",
 ]
 
-__version__ = "1.1.0"  # Added greenfield scoring
+__version__ = "1.2.0"  # Added competitor scoring and tiering
