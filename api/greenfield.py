@@ -82,6 +82,64 @@ async def debug_ping():
     }
 
 
+@public_router.post("/debug/sessions/{session_id}/test-curate")
+async def debug_curate_route(session_id: str):
+    """
+    Debug endpoint to test if POST to /sessions/{id}/xxx pattern works.
+    No auth required. This helps diagnose routing issues.
+    """
+    logger.info(f"[DEBUG] Test curate route called with session_id={session_id}")
+    return {
+        "status": "ok",
+        "message": "POST route pattern is working",
+        "session_id_received": session_id,
+        "route_pattern": "/sessions/{session_id}/test-curate",
+    }
+
+
+@public_router.get("/debug/sessions/{session_id}/check")
+async def debug_session_check(session_id: str):
+    """
+    Debug endpoint to check if a session exists in the database.
+    No auth required. Helps diagnose session lookup issues.
+    """
+    from src.database.session import get_db_context
+    from src.database.models import CompetitorIntelligenceSession
+    from uuid import UUID
+
+    logger.info(f"[DEBUG] Session check called for session_id={session_id}")
+
+    try:
+        session_uuid = UUID(session_id)
+    except ValueError:
+        return {
+            "status": "error",
+            "message": "Invalid UUID format",
+            "session_id": session_id,
+        }
+
+    with get_db_context() as db:
+        session = db.query(CompetitorIntelligenceSession).filter(
+            CompetitorIntelligenceSession.id == session_uuid
+        ).first()
+
+        if session:
+            return {
+                "status": "ok",
+                "message": "Session found",
+                "session_id": str(session.id),
+                "session_status": session.status,
+                "has_candidates": bool(session.candidate_competitors),
+                "candidate_count": len(session.candidate_competitors or []),
+            }
+        else:
+            return {
+                "status": "not_found",
+                "message": "Session does not exist in database",
+                "session_id": session_id,
+            }
+
+
 # =============================================================================
 # AUTH HELPERS
 # =============================================================================
@@ -413,6 +471,16 @@ async def get_competitor_session(
     return session_data
 
 
+@router.options("/sessions/{session_id}/curate")
+async def curate_options(session_id: UUID):
+    """
+    Handle OPTIONS preflight for /curate endpoint.
+    FastAPI's CORSMiddleware should handle this, but adding explicit handler for debugging.
+    """
+    logger.info(f"[CURATE-OPTIONS] Preflight request for session {session_id}")
+    return {"status": "ok"}
+
+
 @router.post("/sessions/{session_id}/curate")
 async def submit_curation(
     session_id: UUID,
@@ -435,8 +503,8 @@ async def submit_curation(
     """
     # DEBUG: Log entry to trace if requests are reaching this endpoint
     logger.info(
-        f"[CURATE] Received curation request for session {session_id} "
-        f"from user {current_user.email if current_user else 'unknown'}"
+        f"[CURATE] *** REQUEST REACHED HANDLER *** session={session_id} "
+        f"user={current_user.email if current_user else 'unknown'}"
     )
     logger.info(
         f"[CURATE] Curation input: removals={len(curation.removals)}, "
