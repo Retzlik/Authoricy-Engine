@@ -437,10 +437,10 @@ class GreenfieldService:
                     "Adjust tiers or remove competitors as needed, then confirm."
                 ),
             },
-            # Legacy fields for backward compatibility
+            # Curation limits (flexible: 3-15 competitors)
             "required_removals": 0,  # No longer required with auto-curation
-            "min_final_count": 8,
-            "max_final_count": 35,  # Total across all tiers
+            "min_final_count": 3,  # Minimum competitors needed
+            "max_final_count": 15,  # Maximum competitors allowed
         }
 
     async def discover_competitors(

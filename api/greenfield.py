@@ -60,6 +60,29 @@ public_router = APIRouter(
 
 
 # =============================================================================
+# DEBUG ENDPOINT (for testing routing)
+# =============================================================================
+
+@public_router.get("/debug/ping")
+async def debug_ping():
+    """
+    Simple ping endpoint to verify greenfield routing works.
+    No auth required. Use this to test if requests reach the server.
+    """
+    logger.info("[DEBUG] Ping endpoint called - routing is working!")
+    return {
+        "status": "ok",
+        "message": "Greenfield API is reachable",
+        "endpoints": {
+            "analyze": "POST /api/greenfield/analyze",
+            "get_session": "GET /api/greenfield/sessions/{session_id}",
+            "curate": "POST /api/greenfield/sessions/{session_id}/curate",
+            "dashboard": "GET /api/greenfield/dashboard/{analysis_run_id}",
+        }
+    }
+
+
+# =============================================================================
 # AUTH HELPERS
 # =============================================================================
 
@@ -405,11 +428,21 @@ async def submit_curation(
     3. Returns when analysis is complete
 
     Validates that:
-    - Final count is within limits (5-15 competitors)
+    - Final count is within limits (3-15 competitors)
     - Purpose overrides are valid
 
     Returns the finalized competitor set and analysis status.
     """
+    # DEBUG: Log entry to trace if requests are reaching this endpoint
+    logger.info(
+        f"[CURATE] Received curation request for session {session_id} "
+        f"from user {current_user.email if current_user else 'unknown'}"
+    )
+    logger.info(
+        f"[CURATE] Curation input: removals={len(curation.removals)}, "
+        f"additions={len(curation.additions)}, overrides={len(curation.purpose_overrides)}"
+    )
+
     from src.database.session import get_db_context
     from src.database import repository
     from src.database.models import AnalysisStatus
@@ -576,6 +609,11 @@ async def continue_analysis(
     """
     Continue analysis after competitor curation.
 
+    NOTE: This endpoint is DEPRECATED. The /curate endpoint now handles
+    everything automatically. You do NOT need to call this endpoint.
+
+    If you see this error, the frontend should be calling /curate instead.
+
     This triggers the deep analysis pipeline (G2-G5):
     - G2: Keyword Universe Construction (mining competitor keywords)
     - G3: SERP Analysis & Winnability Scoring
@@ -592,6 +630,12 @@ async def continue_analysis(
     - beachheads_count: Number of beachhead keywords selected
     - market_opportunity: TAM/SAM/SOM summary
     """
+    # DEBUG: Log that this deprecated endpoint was called
+    logger.warning(
+        f"[CONTINUE] DEPRECATED endpoint called for session {session_id}. "
+        f"Frontend should use /curate instead. User: {current_user.email if current_user else 'unknown'}"
+    )
+
     from src.database.session import get_db_context
     from src.database import repository
     from src.database.models import AnalysisStatus

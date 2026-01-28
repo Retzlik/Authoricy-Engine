@@ -156,6 +156,24 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
+
+# Request logging middleware for debugging
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all incoming requests for debugging."""
+    # Only log greenfield endpoints to avoid noise
+    if "/greenfield" in request.url.path:
+        logger.info(
+            f"[REQUEST] {request.method} {request.url.path} "
+            f"from origin={request.headers.get('origin', 'none')}"
+        )
+    response = await call_next(request)
+    if "/greenfield" in request.url.path:
+        logger.info(
+            f"[RESPONSE] {request.method} {request.url.path} -> {response.status_code}"
+        )
+    return response
+
 # Include User Management router (auth endpoints)
 from api.users import router as users_router
 app.include_router(users_router)
