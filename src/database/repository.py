@@ -1712,6 +1712,12 @@ def get_competitor_session(session_id: UUID) -> Optional[Dict[str, Any]]:
         if not session:
             return None
 
+        # Extract tiered results if available
+        ai_data = session.ai_discovered_competitors or {}
+        if isinstance(ai_data, list):
+            ai_data = {"competitors": ai_data}
+        tiered_results = ai_data.get("tiered_results", {})
+
         return {
             "id": str(session.id),
             "analysis_run_id": str(session.analysis_run_id),
@@ -1721,6 +1727,14 @@ def get_competitor_session(session_id: UUID) -> Optional[Dict[str, Any]]:
             "removed_competitors": session.removed_competitors or [],
             "added_competitors": session.added_competitors or [],
             "final_competitors": session.final_competitors or [],
+            # Tiered data for smart curation UI
+            "tiered_results": tiered_results,
+            "benchmarks": tiered_results.get("benchmarks", []),
+            "keyword_sources": tiered_results.get("keyword_sources", []),
+            "market_intel": tiered_results.get("market_intel", []),
+            "rejected": tiered_results.get("rejected", []),
+            "target_dr": tiered_results.get("target_dr", 0),
+            # Timestamps
             "candidates_generated_at": session.candidates_generated_at.isoformat() if session.candidates_generated_at else None,
             "curation_started_at": session.curation_started_at.isoformat() if session.curation_started_at else None,
             "curation_completed_at": session.curation_completed_at.isoformat() if session.curation_completed_at else None,
@@ -1733,14 +1747,16 @@ def update_session_candidates(
     session_id: UUID,
     candidates: List[Dict[str, Any]],
     website_context: Optional[Dict[str, Any]] = None,
+    tiered_data: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """
     Update session with discovered competitor candidates.
 
     Args:
         session_id: Session to update
-        candidates: List of competitor candidates
+        candidates: List of competitor candidates (sorted by tier)
         website_context: Optional scraped website context from Firecrawl
+        tiered_data: Optional tiered competitor data with scoring
     """
     from .models import CompetitorIntelligenceSession
 
@@ -1756,6 +1772,18 @@ def update_session_candidates(
         # Store website context if provided (from Firecrawl scraping)
         if website_context:
             session.website_context = website_context
+
+        # Store tiered data for UI display
+        # This includes: benchmarks, keyword_sources, market_intel, rejected
+        # Each with scores and explanations
+        if tiered_data:
+            # Store in the ai_discovered_competitors field which is JSONB
+            # and designed for discovery results
+            existing_ai_data = session.ai_discovered_competitors or {}
+            if isinstance(existing_ai_data, list):
+                existing_ai_data = {"competitors": existing_ai_data}
+            existing_ai_data["tiered_results"] = tiered_data
+            session.ai_discovered_competitors = existing_ai_data
 
         return True
 

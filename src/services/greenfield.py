@@ -13,7 +13,7 @@ Orchestrates the greenfield analysis workflow:
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import UUID
 
 from src.database import repository
@@ -27,6 +27,7 @@ from src.scoring.greenfield import (
     select_beachhead_keywords,
     project_traffic_scenarios,
 )
+from src.utils.domain_filter import is_excluded_domain, get_exclusion_reason
 
 logger = logging.getLogger(__name__)
 
@@ -384,23 +385,62 @@ class GreenfieldService:
         return analysis_run_id, session_id
 
     def get_session(self, session_id: UUID) -> Optional[Dict[str, Any]]:
-        """Get competitor intelligence session."""
+        """Get competitor intelligence session with tiered data."""
         session = repository.get_competitor_session(session_id)
         if not session:
             return None
 
-        # Calculate curation requirements
+        # Calculate curation guidance based on tiers
         candidates = session.get("candidate_competitors", [])
-        required_removals = max(0, len(candidates) - 10)
+        benchmarks = session.get("benchmarks", [])
+        keyword_sources = session.get("keyword_sources", [])
+        market_intel = session.get("market_intel", [])
+        rejected = session.get("rejected", [])
+
+        total_presented = len(benchmarks) + len(keyword_sources) + len(market_intel)
+
+        # Generate summary message
+        if total_presented > 0:
+            summary_message = (
+                f"Found {len(benchmarks) + len(keyword_sources) + len(market_intel) + len(rejected)} competitors. "
+                f"Auto-filtered {len(rejected)} (platforms, tools, irrelevant). "
+                f"Presenting {total_presented} ranked by strategic value: "
+                f"{len(benchmarks)} benchmarks, {len(keyword_sources)} keyword sources, "
+                f"{len(market_intel)} market intelligence."
+            )
+        else:
+            summary_message = f"Found {len(candidates)} candidates for review."
 
         return {
             **session,
-            # Frontend expects "candidates" not "candidate_competitors"
+            # Frontend expects "candidates" for backward compatibility
             "candidates": candidates,
             "candidates_count": len(candidates),
-            "required_removals": required_removals,
+            # New tiered curation guidance
+            "tier_counts": {
+                "benchmarks": len(benchmarks),
+                "keyword_sources": len(keyword_sources),
+                "market_intel": len(market_intel),
+                "rejected": len(rejected),
+            },
+            "tier_limits": {
+                "max_benchmarks": 5,
+                "max_keyword_sources": 15,
+                "max_market_intel": 15,
+            },
+            "curation_guidance": {
+                "total_presented": total_presented,
+                "summary_message": summary_message,
+                "instructions": (
+                    "Review our tiered recommendations. Benchmarks are your closest competitors "
+                    "for gap analysis. Keyword sources are where to mine opportunities. "
+                    "Adjust tiers or remove competitors as needed, then confirm."
+                ),
+            },
+            # Legacy fields for backward compatibility
+            "required_removals": 0,  # No longer required with auto-curation
             "min_final_count": 8,
-            "max_final_count": 10,
+            "max_final_count": 35,  # Total across all tiers
         }
 
     async def discover_competitors(
@@ -540,26 +580,37 @@ class GreenfieldService:
                 logger.error(f"DataForSEO competitors API FAILED: {e}", exc_info=True)
 
         # Deduplicate AND filter out non-competitors (tools, services, infrastructure)
+        # Track rejected domains WITH reasons for transparency
         seen = set()
         unique_candidates = []
-        filtered_out = []
+        rejected_domains = []  # Track rejections with reasons
+
         for c in candidates:
             domain = c.get("domain", "").lower()
             if not domain or domain in seen:
                 continue
 
             # Validate this is an actual competitor, not a tool/service
-            if not self._is_valid_competitor(domain, target_domain):
-                filtered_out.append(domain)
+            is_valid, rejection_reason = self._is_valid_competitor(
+                domain, target_domain, return_reason=True
+            )
+
+            if not is_valid:
+                rejected_domains.append({
+                    "domain": domain,
+                    "rejection_gate": "hard_exclusion",
+                    "rejection_reason": rejection_reason or "Invalid competitor",
+                    "discovery_source": c.get("discovery_source", ""),
+                })
                 continue
 
             seen.add(domain)
             unique_candidates.append(c)
 
-        if filtered_out:
+        if rejected_domains:
             logger.info(
-                f"Filtered out {len(filtered_out)} non-competitors (tools/services): "
-                f"{filtered_out[:5]}{'...' if len(filtered_out) > 5 else ''}"
+                f"Filtered out {len(rejected_domains)} non-competitors. "
+                f"Examples: {[r['domain'] for r in rejected_domains[:5]]}"
             )
 
         # Phase 5: Validate and enrich with metrics from DataForSEO
@@ -572,6 +623,31 @@ class GreenfieldService:
                 "DR, Traffic, and Keywords will be empty. "
                 "Set DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD to enable."
             )
+
+        # Phase 6: Get target domain DR for scoring comparison
+        target_dr = 0
+        if self.client and target_domain:
+            try:
+                backlink_summary = await self.client.get_backlink_summary(target_domain)
+                if backlink_summary:
+                    target_dr = backlink_summary.get("domain_rank", 0)
+                    logger.info(f"Target domain {target_domain} DR: {target_dr}")
+            except Exception as e:
+                logger.warning(f"Could not fetch target domain DR: {e}")
+
+        # Phase 7: Score and tier all candidates
+        from src.scoring.competitor_scoring import (
+            score_and_tier_competitors,
+            get_tier_summary,
+        )
+
+        tiered_set = score_and_tier_competitors(
+            candidates=unique_candidates,
+            target_dr=target_dr,
+            rejected_domains=rejected_domains,
+        )
+
+        logger.info(get_tier_summary(tiered_set))
 
         # Prepare website context for storage (business context only - NO competitor data)
         website_context_to_store = None
@@ -588,11 +664,36 @@ class GreenfieldService:
                 "has_features_page": enhanced_context.get("has_features_page", False),
             }
 
-        # Update session with candidates and website context
+        # Update session with tiered candidates and website context
+        # Convert tiered set to storage format
+        all_candidates_for_storage = []
+
+        # Benchmarks first (highest priority)
+        for comp in tiered_set.benchmarks:
+            all_candidates_for_storage.append({
+                **comp.to_dict(),
+                "suggested_purpose": "benchmark_peer",
+            })
+
+        # Then keyword sources
+        for comp in tiered_set.keyword_sources:
+            all_candidates_for_storage.append({
+                **comp.to_dict(),
+                "suggested_purpose": "keyword_source",
+            })
+
+        # Then market intel
+        for comp in tiered_set.market_intel:
+            all_candidates_for_storage.append({
+                **comp.to_dict(),
+                "suggested_purpose": "market_intel",
+            })
+
         repository.update_session_candidates(
             session_id,
-            unique_candidates,
+            all_candidates_for_storage,
             website_context=website_context_to_store,
+            tiered_data=tiered_set.to_dict(),  # Store full tiered data
         )
 
         # Log discovery summary
@@ -600,17 +701,32 @@ class GreenfieldService:
         for c in unique_candidates:
             src = c.get("discovery_source", "unknown")
             sources[src] = sources.get(src, 0) + 1
+
         logger.info(
-            f"Competitor discovery complete: {len(unique_candidates)} total candidates. "
-            f"Sources: {sources}"
+            f"Competitor discovery complete: {len(unique_candidates)} scored, "
+            f"{tiered_set.total_after_filtering} tiered, "
+            f"{len(tiered_set.rejected)} rejected. Sources: {sources}"
         )
 
         return {
             "session_id": str(session_id),
             "status": "awaiting_curation",
-            "candidates": unique_candidates,
-            "candidates_count": len(unique_candidates),
-            "required_removals": max(0, len(unique_candidates) - 10),
+            "discovery_summary": {
+                "total_discovered": tiered_set.total_discovered,
+                "total_after_filtering": tiered_set.total_after_filtering,
+                "rejected_count": len(tiered_set.rejected),
+                "message": get_tier_summary(tiered_set),
+            },
+            "target_dr": target_dr,
+            "benchmarks": [c.to_dict() for c in tiered_set.benchmarks],
+            "keyword_sources": [c.to_dict() for c in tiered_set.keyword_sources],
+            "market_intel": [c.to_dict() for c in tiered_set.market_intel],
+            "rejected": [r.to_dict() for r in tiered_set.rejected],
+            "tier_limits": {
+                "max_benchmarks": 5,
+                "max_keyword_sources": 15,
+                "max_market_intel": 15,
+            },
             "website_context_acquired": enhanced_context.get("scraped_from_website", False),
             "pages_scraped": enhanced_context.get("scraped_pages", 0),
         }
@@ -760,46 +876,75 @@ class GreenfieldService:
 
         return competitors
 
-    def _is_valid_competitor(self, domain: str, target_domain: Optional[str] = None) -> bool:
+    def _is_valid_competitor(
+        self,
+        domain: str,
+        target_domain: Optional[str] = None,
+        return_reason: bool = False,
+    ) -> Union[bool, Tuple[bool, Optional[str]]]:
         """
-        Validate that a domain is a legitimate competitor, not a tool/service.
+        Validate that a domain is a legitimate competitor.
 
-        Filters out:
-        - Known tools/services (payment, hosting, analytics, etc.)
-        - Invalid TLDs
-        - The target domain itself
+        Multi-gate filtering:
+        - Gate 1: Platform exclusions (social media, tech giants, news, gov, etc.)
+        - Gate 2: Tool/service exclusions (payment, hosting, analytics)
+        - Gate 3: Valid TLD check
+        - Gate 4: Not the target domain itself
+
+        Args:
+            domain: Domain to validate
+            target_domain: The user's domain (should not compete with self)
+            return_reason: If True, returns (is_valid, rejection_reason) tuple
+
+        Returns:
+            bool if return_reason=False, (bool, str|None) if return_reason=True
         """
         if not domain:
-            return False
+            return (False, "Empty domain") if return_reason else False
 
         domain_lower = domain.lower().strip()
 
-        # Skip if it's the target domain
-        if target_domain and domain_lower == target_domain.lower():
-            logger.debug(f"Filtering out {domain}: is target domain")
-            return False
+        # Remove www. prefix if present
+        if domain_lower.startswith("www."):
+            domain_lower = domain_lower[4:]
 
-        # Extract domain name without TLD for tool matching
+        # Gate 1: Check against comprehensive platform exclusions
+        # This catches: Facebook, X, YouTube, tech giants, news sites, gov, etc.
+        if is_excluded_domain(domain_lower):
+            reason = get_exclusion_reason(domain_lower) or "Excluded platform"
+            logger.debug(f"Filtering out {domain}: {reason}")
+            return (False, reason) if return_reason else False
+
+        # Gate 2: Check against known non-competitor tools/services
         domain_parts = domain_lower.split(".")
         domain_name = domain_parts[0] if domain_parts else domain_lower
 
-        # Check against known non-competitor tools
         if domain_name in NON_COMPETITOR_TOOLS:
-            logger.debug(f"Filtering out {domain}: is a known tool/service ({domain_name})")
-            return False
+            reason = f"Infrastructure/tool service ({domain_name})"
+            logger.debug(f"Filtering out {domain}: {reason}")
+            return (False, reason) if return_reason else False
 
         # Also check full domain (for cases like "cal.com")
-        if domain_lower.rstrip(".com").rstrip(".io").rstrip(".app") in NON_COMPETITOR_TOOLS:
-            logger.debug(f"Filtering out {domain}: is a known tool/service")
-            return False
+        base_domain = domain_lower.rstrip(".com").rstrip(".io").rstrip(".app")
+        if base_domain in NON_COMPETITOR_TOOLS:
+            reason = f"Infrastructure/tool service ({base_domain})"
+            logger.debug(f"Filtering out {domain}: {reason}")
+            return (False, reason) if return_reason else False
 
-        # Validate TLD
+        # Gate 3: Validate TLD
         tld = domain_parts[-1] if len(domain_parts) > 1 else None
         if tld and tld not in VALID_TLDS:
-            logger.debug(f"Filtering out {domain}: invalid TLD ({tld})")
-            return False
+            reason = f"Invalid TLD (.{tld})"
+            logger.debug(f"Filtering out {domain}: {reason}")
+            return (False, reason) if return_reason else False
 
-        return True
+        # Gate 4: Skip if it's the target domain
+        if target_domain and domain_lower == target_domain.lower().strip():
+            reason = "Target domain (self)"
+            logger.debug(f"Filtering out {domain}: {reason}")
+            return (False, reason) if return_reason else False
+
+        return (True, None) if return_reason else True
 
     async def _enrich_candidates(
         self,
