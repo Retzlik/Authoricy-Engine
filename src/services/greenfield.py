@@ -1147,3 +1147,551 @@ class GreenfieldService:
         )
 
         return analysis_id
+
+    async def run_deep_analysis(
+        self,
+        session_id: UUID,
+        analysis_run_id: UUID,
+        domain_id: UUID,
+        domain: str,
+        final_competitors: List[Dict[str, Any]],
+        greenfield_context: Dict[str, Any],
+        market: str = "United States",
+    ) -> Dict[str, Any]:
+        """
+        Run deep analysis (G2-G5) after competitor curation.
+
+        This is the critical step that mines keywords, analyzes SERPs,
+        calculates market opportunity, and selects beachhead keywords.
+
+        Args:
+            session_id: Competitor intelligence session ID
+            analysis_run_id: Analysis run ID
+            domain_id: Domain ID
+            domain: Domain name
+            final_competitors: Finalized competitor list from curation
+            greenfield_context: User-provided business context
+            market: Target market (full name, e.g. "United States")
+
+        Returns:
+            Dict with success status, keyword counts, and market opportunity
+        """
+        from src.scoring.greenfield import (
+            DomainMaturity,
+            Industry,
+            calculate_market_opportunity,
+            project_traffic_scenarios,
+            select_beachhead_keywords,
+            get_industry_from_string,
+        )
+        from src.database.models import DataQualityLevel
+
+        errors = []
+        warnings = []
+
+        logger.info(
+            f"Starting deep analysis for session {session_id}: "
+            f"{len(final_competitors)} competitors, domain={domain}"
+        )
+
+        # Extract competitor domains
+        competitor_domains = [c.get("domain", "") for c in final_competitors if c.get("domain")]
+
+        if not competitor_domains:
+            return {
+                "success": False,
+                "error": "No valid competitor domains found",
+                "errors": ["No competitor domains to analyze"],
+            }
+
+        industry = get_industry_from_string(greenfield_context.get("industry_vertical", "saas"))
+
+        # Get target domain DR for winnability calculations
+        target_dr = 10  # Default for greenfield
+        if self.client:
+            try:
+                backlink_summary = await self.client.get_backlink_summary(domain=domain)
+                target_dr = backlink_summary.get("domain_rank", 10) if backlink_summary else 10
+            except Exception as e:
+                logger.warning(f"Failed to get target DR: {e}")
+
+        # =========================================================================
+        # G2: Keyword Universe Construction
+        # =========================================================================
+        logger.info("G2: Building keyword universe from competitors...")
+        repository.update_run_status(
+            analysis_run_id,
+            AnalysisStatus.IN_PROGRESS,
+            phase="keyword_mining",
+            progress=20,
+        )
+
+        keyword_universe = []
+        seed_keywords = greenfield_context.get("seed_keywords", [])
+
+        try:
+            if self.client:
+                # Mine keywords from each competitor
+                for comp_domain in competitor_domains[:10]:  # Limit to top 10
+                    try:
+                        # Get competitor's ranked keywords
+                        comp_keywords = await self.client.get_ranked_keywords(
+                            domain=comp_domain,
+                            location_name=market,
+                            limit=500,
+                        )
+
+                        for kw in comp_keywords:
+                            keyword_universe.append({
+                                "keyword": kw.get("keyword", ""),
+                                "search_volume": kw.get("search_volume", 0),
+                                "keyword_difficulty": kw.get("keyword_difficulty", 0),
+                                "cpc": kw.get("cpc", 0),
+                                "source_competitor": comp_domain,
+                                "competitor_position": kw.get("position", 0),
+                                "search_intent": kw.get("intent", "informational"),
+                                "business_relevance": 0.7,
+                            })
+
+                        logger.info(f"Mined {len(comp_keywords)} keywords from {comp_domain}")
+
+                    except Exception as e:
+                        logger.warning(f"Failed to mine keywords from {comp_domain}: {e}")
+                        warnings.append(f"Keyword mining failed for {comp_domain}")
+
+                # Also expand from seed keywords
+                for seed in seed_keywords[:5]:
+                    try:
+                        related = await self.client.get_related_keywords(
+                            keyword=seed,
+                            location_name=market,
+                            limit=100,
+                        )
+                        for kw in related:
+                            keyword_universe.append({
+                                "keyword": kw.get("keyword", ""),
+                                "search_volume": kw.get("search_volume", 0),
+                                "keyword_difficulty": kw.get("keyword_difficulty", 0),
+                                "cpc": kw.get("cpc", 0),
+                                "source_competitor": f"seed:{seed}",
+                                "search_intent": kw.get("intent", "informational"),
+                                "business_relevance": 0.8,
+                            })
+                    except Exception as e:
+                        logger.warning(f"Failed to expand seed keyword {seed}: {e}")
+
+            # Deduplicate keywords
+            seen_keywords = set()
+            unique_keywords = []
+            for kw in keyword_universe:
+                kw_text = kw.get("keyword", "").lower().strip()
+                if kw_text and kw_text not in seen_keywords:
+                    seen_keywords.add(kw_text)
+                    unique_keywords.append(kw)
+
+            keyword_universe = unique_keywords
+            logger.info(f"G2 complete: {len(keyword_universe)} unique keywords")
+
+        except Exception as e:
+            logger.error(f"G2 failed: {e}")
+            errors.append(f"Keyword universe construction failed: {str(e)}")
+
+        # =========================================================================
+        # G3: SERP Analysis & Winnability Scoring
+        # =========================================================================
+        logger.info("G3: Analyzing SERPs and calculating winnability...")
+        repository.update_run_status(
+            analysis_run_id,
+            AnalysisStatus.IN_PROGRESS,
+            phase="serp_analysis",
+            progress=40,
+        )
+
+        winnability_analyses = {}
+
+        try:
+            if self.client:
+                # Analyze top keywords by volume
+                keywords_to_analyze = sorted(
+                    keyword_universe,
+                    key=lambda k: k.get("search_volume", 0),
+                    reverse=True
+                )[:200]
+
+                for kw in keywords_to_analyze:
+                    keyword_text = kw.get("keyword", "")
+                    try:
+                        # Get SERP for this keyword
+                        serp = await self.client.get_serp_results(
+                            keyword=keyword_text,
+                            location_name=market,
+                            limit=10,
+                        )
+
+                        if serp:
+                            # Calculate SERP metrics
+                            serp_drs = [r.get("domain_rank", 0) for r in serp if r.get("domain_rank")]
+                            avg_dr = sum(serp_drs) / len(serp_drs) if serp_drs else 50
+                            min_dr = min(serp_drs) if serp_drs else 0
+
+                            # Calculate winnability
+                            kd = kw.get("keyword_difficulty", 50)
+                            dr_advantage = max(0, target_dr - min_dr) / 10
+                            weak_content_count = sum(1 for r in serp if r.get("content_score", 50) < 40)
+
+                            winnability = 100 - kd + (dr_advantage * 5) + (weak_content_count * 3)
+                            winnability = max(0, min(100, winnability))
+
+                            personalized_difficulty = kd - (dr_advantage * 5)
+                            personalized_difficulty = max(0, min(100, personalized_difficulty))
+
+                            winnability_analyses[keyword_text] = {
+                                "winnability_score": winnability,
+                                "personalized_difficulty": personalized_difficulty,
+                                "avg_serp_dr": avg_dr,
+                                "min_serp_dr": min_dr,
+                                "weak_content_signals": weak_content_count,
+                            }
+
+                            # Update keyword with winnability
+                            kw["winnability_score"] = winnability
+                            kw["personalized_difficulty"] = personalized_difficulty
+                            kw["serp_analyzed"] = True
+                            kw["avg_serp_dr"] = avg_dr
+
+                    except Exception as e:
+                        logger.debug(f"SERP analysis failed for '{keyword_text}': {e}")
+
+                logger.info(f"G3 complete: Analyzed {len(winnability_analyses)} SERPs")
+
+        except Exception as e:
+            logger.error(f"G3 failed: {e}")
+            errors.append(f"SERP analysis failed: {str(e)}")
+
+        # =========================================================================
+        # G4: Market Sizing
+        # =========================================================================
+        logger.info("G4: Calculating market opportunity...")
+        repository.update_run_status(
+            analysis_run_id,
+            AnalysisStatus.IN_PROGRESS,
+            phase="market_sizing",
+            progress=60,
+        )
+
+        market_opportunity = None
+
+        try:
+            competitors_for_scoring = [
+                {
+                    "domain": c.get("domain", ""),
+                    "organic_traffic": c.get("organic_traffic", 0),
+                    "organic_keywords": c.get("organic_keywords", 0),
+                }
+                for c in final_competitors
+            ]
+
+            market_opportunity = calculate_market_opportunity(
+                keywords=keyword_universe,
+                winnability_analyses=winnability_analyses,
+                competitors=competitors_for_scoring,
+            )
+
+            logger.info(
+                f"G4 complete: TAM={market_opportunity.tam_volume:,}, "
+                f"SAM={market_opportunity.sam_volume:,}, "
+                f"SOM={market_opportunity.som_volume:,}"
+            )
+
+        except Exception as e:
+            logger.error(f"G4 failed: {e}")
+            errors.append(f"Market sizing failed: {str(e)}")
+
+        # =========================================================================
+        # G5: Beachhead Selection & Roadmap
+        # =========================================================================
+        logger.info("G5: Selecting beachhead keywords...")
+        repository.update_run_status(
+            analysis_run_id,
+            AnalysisStatus.IN_PROGRESS,
+            phase="beachhead_selection",
+            progress=80,
+        )
+
+        beachhead_keywords = []
+        traffic_projections = None
+        growth_roadmap = []
+
+        try:
+            # Select beachhead keywords
+            keywords_for_beachhead = [
+                kw for kw in keyword_universe
+                if kw.get("serp_analyzed", False)
+            ]
+
+            beachhead_keywords = select_beachhead_keywords(
+                keywords=keywords_for_beachhead,
+                winnability_analyses=winnability_analyses,
+                target_count=20,
+                max_kd=35,
+                min_volume=50,
+                min_winnability=55.0,
+            )
+
+            logger.info(f"Selected {len(beachhead_keywords)} beachhead keywords")
+
+            # Generate traffic projections
+            growth_keywords = [
+                kw for kw in keywords_for_beachhead
+                if kw.get("keyword") not in [bh.keyword for bh in beachhead_keywords]
+            ][:50]
+
+            traffic_projections = project_traffic_scenarios(
+                beachhead_keywords=beachhead_keywords,
+                growth_keywords=growth_keywords,
+                winnability_analyses=winnability_analyses,
+                domain_maturity=DomainMaturity.GREENFIELD,
+            )
+
+            # Build growth roadmap
+            growth_roadmap = self._build_growth_roadmap(
+                beachhead_keywords=beachhead_keywords,
+                keyword_universe=keyword_universe,
+            )
+
+        except Exception as e:
+            logger.error(f"G5 failed: {e}")
+            errors.append(f"Beachhead selection failed: {str(e)}")
+
+        # =========================================================================
+        # Save Results
+        # =========================================================================
+        logger.info("Saving analysis results...")
+        repository.update_run_status(
+            analysis_run_id,
+            AnalysisStatus.IN_PROGRESS,
+            phase="saving_results",
+            progress=90,
+        )
+
+        try:
+            # Save keywords to database
+            keywords_for_db = [
+                {
+                    "keyword": kw.get("keyword", ""),
+                    "search_volume": kw.get("search_volume", 0),
+                    "keyword_difficulty": kw.get("keyword_difficulty", 0),
+                    "cpc": kw.get("cpc", 0),
+                    "intent": kw.get("search_intent", "informational"),
+                    "opportunity_score": kw.get("winnability_score", 0),
+                }
+                for kw in keyword_universe
+            ]
+
+            keywords_count = repository.store_keywords(
+                run_id=analysis_run_id,
+                domain_id=domain_id,
+                keywords=keywords_for_db,
+                source="greenfield_competitor_mining",
+            )
+
+            logger.info(f"Stored {keywords_count} keywords")
+
+            # Save beachhead keywords
+            beachhead_dicts = [
+                {
+                    "keyword": bh.keyword,
+                    "search_volume": bh.search_volume,
+                    "winnability_score": bh.winnability_score,
+                    "personalized_difficulty": bh.personalized_difficulty,
+                    "keyword_difficulty": bh.keyword_difficulty,
+                    "beachhead_priority": bh.beachhead_priority,
+                    "beachhead_score": bh.beachhead_score,
+                    "avg_serp_dr": bh.avg_serp_dr,
+                    "has_ai_overview": bh.has_ai_overview,
+                    "growth_phase": 1,  # Default to phase 1
+                }
+                for bh in beachhead_keywords
+            ]
+
+            beachhead_count = repository.save_beachhead_keywords(
+                analysis_run_id=analysis_run_id,
+                beachhead_keywords=beachhead_dicts,
+            )
+
+            logger.info(f"Marked {beachhead_count} beachhead keywords")
+
+            # Prepare market opportunity dict
+            market_opp_dict = {}
+            if market_opportunity:
+                market_opp_dict = {
+                    "tam_volume": market_opportunity.tam_volume,
+                    "sam_volume": market_opportunity.sam_volume,
+                    "som_volume": market_opportunity.som_volume,
+                    "tam_keywords": market_opportunity.tam_keywords,
+                    "sam_keywords": market_opportunity.sam_keywords,
+                    "som_keywords": market_opportunity.som_keywords,
+                    "opportunity_score": market_opportunity.opportunity_score,
+                    "competition_intensity": market_opportunity.competition_intensity,
+                }
+
+            # Prepare projections dict
+            projections_dict = {}
+            if traffic_projections:
+                projections_dict = {
+                    "conservative": {
+                        "month_3": traffic_projections.conservative.month_3,
+                        "month_6": traffic_projections.conservative.month_6,
+                        "month_12": traffic_projections.conservative.month_12,
+                        "month_18": traffic_projections.conservative.month_18,
+                        "month_24": traffic_projections.conservative.month_24,
+                    },
+                    "expected": {
+                        "month_3": traffic_projections.expected.month_3,
+                        "month_6": traffic_projections.expected.month_6,
+                        "month_12": traffic_projections.expected.month_12,
+                        "month_18": traffic_projections.expected.month_18,
+                        "month_24": traffic_projections.expected.month_24,
+                    },
+                    "aggressive": {
+                        "month_3": traffic_projections.aggressive.month_3,
+                        "month_6": traffic_projections.aggressive.month_6,
+                        "month_12": traffic_projections.aggressive.month_12,
+                        "month_18": traffic_projections.aggressive.month_18,
+                        "month_24": traffic_projections.aggressive.month_24,
+                    },
+                }
+
+            # Prepare beachhead summary
+            beachhead_summary = {
+                "count": len(beachhead_keywords),
+                "total_volume": sum(bh.search_volume for bh in beachhead_keywords),
+                "avg_winnability": (
+                    sum(bh.winnability_score for bh in beachhead_keywords) / len(beachhead_keywords)
+                    if beachhead_keywords else 0
+                ),
+                "keywords": beachhead_dicts[:20],
+            }
+
+            # Save greenfield analysis
+            analysis_id = repository.save_greenfield_analysis(
+                analysis_run_id=analysis_run_id,
+                domain_id=domain_id,
+                market_opportunity=market_opp_dict,
+                beachhead_summary=beachhead_summary,
+                projections=projections_dict,
+                growth_roadmap=growth_roadmap,
+            )
+
+            # Mark analysis as complete
+            quality_score = 80.0 if len(keyword_universe) > 100 else 60.0
+            if errors:
+                quality_score -= len(errors) * 10
+
+            repository.complete_run(
+                run_id=analysis_run_id,
+                quality_level=DataQualityLevel.GOOD if quality_score >= 70 else DataQualityLevel.FAIR,
+                quality_score=max(0, quality_score),
+                quality_issues=[{"error": e} for e in errors],
+            )
+
+            # Update domain metrics
+            self._update_domain_metrics(domain_id, analysis_run_id)
+
+            logger.info(
+                f"Deep analysis complete: {keywords_count} keywords, "
+                f"{len(beachhead_keywords)} beachheads"
+            )
+
+            return {
+                "success": True,
+                "keywords_count": keywords_count,
+                "beachheads_count": len(beachhead_keywords),
+                "market_opportunity": market_opp_dict,
+                "errors": errors,
+                "warnings": warnings,
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to save results: {e}")
+            errors.append(f"Failed to save results: {str(e)}")
+            repository.fail_run(analysis_run_id, str(e))
+            return {
+                "success": False,
+                "error": str(e),
+                "errors": errors,
+            }
+
+    def _build_growth_roadmap(
+        self,
+        beachhead_keywords: List[Any],
+        keyword_universe: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Build growth roadmap from beachhead keywords."""
+        # Phase 1: Foundation (months 1-3) - easiest beachheads
+        # Phase 2: Traction (months 4-6) - medium difficulty
+        # Phase 3: Authority (months 7-12) - harder keywords
+
+        roadmap = []
+
+        # Sort beachheads by winnability
+        sorted_beachheads = sorted(
+            beachhead_keywords,
+            key=lambda bh: bh.winnability_score,
+            reverse=True,
+        )
+
+        # Phase 1: Top easiest
+        phase1_kws = sorted_beachheads[:7]
+        roadmap.append({
+            "phase": "Foundation",
+            "phase_number": 1,
+            "months": "1-3",
+            "focus": "Quick wins and establishing presence",
+            "strategy": "Target high-winnability keywords with low competition",
+            "keyword_count": len(phase1_kws),
+            "total_volume": sum(bh.search_volume for bh in phase1_kws),
+            "expected_traffic": sum(bh.search_volume for bh in phase1_kws) // 10,
+        })
+
+        # Phase 2: Medium difficulty
+        phase2_kws = sorted_beachheads[7:14]
+        roadmap.append({
+            "phase": "Traction",
+            "phase_number": 2,
+            "months": "4-6",
+            "focus": "Building authority and expanding reach",
+            "strategy": "Target medium-difficulty keywords as domain strengthens",
+            "keyword_count": len(phase2_kws),
+            "total_volume": sum(bh.search_volume for bh in phase2_kws),
+            "expected_traffic": sum(bh.search_volume for bh in phase2_kws) // 8,
+        })
+
+        # Phase 3: Harder keywords
+        phase3_kws = sorted_beachheads[14:]
+        roadmap.append({
+            "phase": "Authority",
+            "phase_number": 3,
+            "months": "7-12",
+            "focus": "Competing for higher-value keywords",
+            "strategy": "Leverage established authority for competitive terms",
+            "keyword_count": len(phase3_kws),
+            "total_volume": sum(bh.search_volume for bh in phase3_kws),
+            "expected_traffic": sum(bh.search_volume for bh in phase3_kws) // 6,
+        })
+
+        return roadmap
+
+    def _update_domain_metrics(self, domain_id: UUID, analysis_run_id: UUID):
+        """Update domain metrics after analysis completion."""
+        try:
+            with get_db_context() as db:
+                domain = db.query(Domain).get(domain_id)
+                if domain:
+                    domain.last_analyzed_at = datetime.utcnow()
+                    domain.analysis_count = (domain.analysis_count or 0) + 1
+                    if not domain.first_analyzed_at:
+                        domain.first_analyzed_at = datetime.utcnow()
+                    logger.info(f"Updated domain metrics for {domain.domain}")
+        except Exception as e:
+            logger.warning(f"Failed to update domain metrics: {e}")
