@@ -1870,6 +1870,12 @@ def submit_curation(
         session.finalized_at = datetime.utcnow()
         session.status = "curated"
 
+        # Delete any existing GreenfieldCompetitor records for this session
+        # (handles re-curation after partial failure or user re-submitting)
+        db.query(GreenfieldCompetitor).filter(
+            GreenfieldCompetitor.session_id == session.id
+        ).delete()
+
         # Create GreenfieldCompetitor records
         for comp in final_competitors:
             purpose_str = comp.get("purpose", "keyword_source")
