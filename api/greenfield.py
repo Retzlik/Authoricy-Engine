@@ -12,13 +12,14 @@ These endpoints implement the flows described in:
 - LOVABLE_BUILD_SPEC.md (Sections 3 and 5)
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 
 from src.database.models import (
@@ -209,6 +210,131 @@ def check_session_access(session: CompetitorIntelligenceSession, user: User, db)
 
 # Service instance (will be initialized with client in production)
 greenfield_service = GreenfieldService()
+
+
+# =============================================================================
+# BACKGROUND TASK FOR DEEP ANALYSIS
+# =============================================================================
+
+async def run_deep_analysis_background(
+    session_id: UUID,
+    analysis_run_id: UUID,
+    domain_id: UUID,
+    domain: str,
+    final_competitors: List[Dict],
+    greenfield_context: Dict,
+    market: str,
+):
+    """
+    Run deep analysis (G2-G5) as a background task.
+
+    This is triggered after curation is saved and runs independently
+    of the HTTP request, so the frontend doesn't timeout.
+    """
+    from src.database.session import get_db_context
+    from src.database import repository
+    from src.database.models import AnalysisStatus
+
+    logger.info(f"[BACKGROUND] Starting deep analysis for session {session_id}")
+
+    # Get DataForSEO credentials
+    dataforseo_login = os.environ.get("DATAFORSEO_LOGIN")
+    dataforseo_password = os.environ.get("DATAFORSEO_PASSWORD")
+
+    if not dataforseo_login or not dataforseo_password:
+        logger.error(f"[BACKGROUND] DataForSEO credentials not configured for session {session_id}")
+        with get_db_context() as db:
+            session = db.query(CompetitorIntelligenceSession).filter(
+                CompetitorIntelligenceSession.id == session_id
+            ).first()
+            if session:
+                session.status = "failed"
+                db.commit()
+        return
+
+    try:
+        # Update status to ANALYZING
+        repository.update_run_status(
+            analysis_run_id,
+            AnalysisStatus.ANALYZING,
+            phase="deep_analysis",
+            progress=10,
+        )
+
+        # Run deep analysis
+        async with DataForSEOClient(
+            login=dataforseo_login,
+            password=dataforseo_password
+        ) as dataforseo_client:
+            service_with_client = GreenfieldService(
+                dataforseo_client=dataforseo_client,
+            )
+
+            result = await service_with_client.run_deep_analysis(
+                session_id=session_id,
+                analysis_run_id=analysis_run_id,
+                domain_id=domain_id,
+                domain=domain,
+                final_competitors=final_competitors,
+                greenfield_context=greenfield_context,
+                market=market,
+            )
+
+        # Update session status based on result
+        with get_db_context() as db:
+            session = db.query(CompetitorIntelligenceSession).filter(
+                CompetitorIntelligenceSession.id == session_id
+            ).first()
+            if session:
+                if result.get("success"):
+                    session.status = "completed"
+                    logger.info(f"[BACKGROUND] Deep analysis completed for session {session_id}")
+                else:
+                    session.status = "failed"
+                    logger.error(f"[BACKGROUND] Deep analysis failed for session {session_id}: {result.get('error')}")
+                db.commit()
+
+    except Exception as e:
+        logger.error(f"[BACKGROUND] Deep analysis error for session {session_id}: {e}")
+        # Mark as failed
+        try:
+            repository.fail_run(analysis_run_id, error_message=str(e))
+            with get_db_context() as db:
+                session = db.query(CompetitorIntelligenceSession).filter(
+                    CompetitorIntelligenceSession.id == session_id
+                ).first()
+                if session:
+                    session.status = "failed"
+                    db.commit()
+        except Exception as inner_e:
+            logger.error(f"[BACKGROUND] Failed to update failure status: {inner_e}")
+
+
+def start_background_analysis(
+    session_id: UUID,
+    analysis_run_id: UUID,
+    domain_id: UUID,
+    domain: str,
+    final_competitors: List[Dict],
+    greenfield_context: Dict,
+    market: str,
+):
+    """
+    Start the background analysis task.
+
+    Uses asyncio.create_task to run the analysis independently of the request.
+    """
+    asyncio.create_task(
+        run_deep_analysis_background(
+            session_id=session_id,
+            analysis_run_id=analysis_run_id,
+            domain_id=domain_id,
+            domain=domain,
+            final_competitors=final_competitors,
+            greenfield_context=greenfield_context,
+            market=market,
+        )
+    )
 
 
 # =============================================================================
@@ -520,20 +646,22 @@ async def submit_curation(
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
-    Submit user's curation decisions and automatically trigger deep analysis.
+    Submit user's curation decisions and trigger deep analysis asynchronously.
 
     This endpoint:
     1. Validates and saves the curation decisions
-    2. Automatically triggers deep analysis (G2-G5)
-    3. Returns when analysis is complete
+    2. Starts deep analysis (G2-G5) as a BACKGROUND task
+    3. Returns IMMEDIATELY with status "analyzing"
+
+    The frontend should poll GET /sessions/{session_id} to check when
+    status changes from "analyzing" to "completed" or "failed".
 
     Validates that:
     - Final count is within limits (3-15 competitors)
     - Purpose overrides are valid
 
-    Returns the finalized competitor set and analysis status.
+    Returns immediately with status "analyzing" so the browser doesn't timeout.
     """
-    # DEBUG: Log entry to trace if requests are reaching this endpoint
     logger.info(
         f"[CURATE] *** REQUEST REACHED HANDLER *** session={session_id} "
         f"user={current_user.email if current_user else 'unknown'}"
@@ -567,7 +695,7 @@ async def submit_curation(
         domain = domain_obj.domain if domain_obj else None
         greenfield_context = run.greenfield_context or {}
 
-    # Step 1: Submit curation
+    # Step 1: Submit curation (fast - just database write)
     try:
         curation_result = greenfield_service.submit_curation(
             session_id=session_id,
@@ -591,74 +719,48 @@ async def submit_curation(
             detail="No finalized competitors. Curation may have failed."
         )
 
-    # Step 3: Automatically trigger deep analysis
+    # Step 3: Check credentials
     dataforseo_login = os.environ.get("DATAFORSEO_LOGIN")
     dataforseo_password = os.environ.get("DATAFORSEO_PASSWORD")
 
     if not dataforseo_login or not dataforseo_password:
-        # Return curation result but note analysis cannot proceed
         return {
             **curation_result,
-            "analysis_status": "pending",
-            "analysis_message": "Curation complete. Deep analysis requires DataForSEO credentials.",
-        }
-
-    try:
-        # Update status to ANALYZING
-        repository.update_run_status(
-            analysis_run_id,
-            AnalysisStatus.ANALYZING,
-            phase="deep_analysis",
-            progress=10,
-        )
-
-        # Run deep analysis
-        async with DataForSEOClient(
-            login=dataforseo_login,
-            password=dataforseo_password
-        ) as dataforseo_client:
-            service_with_client = GreenfieldService(
-                dataforseo_client=dataforseo_client,
-            )
-
-            analysis_result = await service_with_client.run_deep_analysis(
-                session_id=session_id,
-                analysis_run_id=analysis_run_id,
-                domain_id=domain_id,
-                domain=domain,
-                final_competitors=final_competitors,
-                greenfield_context=greenfield_context,
-                market=greenfield_context.get("target_market", "United States"),
-            )
-
-        # Return combined result
-        if analysis_result.get("success"):
-            return {
-                **curation_result,
-                "analysis_status": "completed",
-                "analysis_message": "Deep analysis completed. Dashboard is ready.",
-                "keywords_count": analysis_result.get("keywords_count", 0),
-                "beachheads_count": analysis_result.get("beachheads_count", 0),
-                "market_opportunity": analysis_result.get("market_opportunity", {}),
-                "next_step": f"/api/greenfield/dashboard/{analysis_run_id}",
-            }
-        else:
-            return {
-                **curation_result,
-                "analysis_status": "failed",
-                "analysis_message": analysis_result.get("error", "Deep analysis failed"),
-                "analysis_errors": analysis_result.get("errors", []),
-            }
-
-    except Exception as e:
-        logger.error(f"Deep analysis failed after curation for session {session_id}: {e}")
-        repository.fail_run(analysis_run_id, error_message=str(e))
-        # Return curation success but analysis failure
-        return {
-            **curation_result,
+            "status": "failed",
             "analysis_status": "failed",
-            "analysis_message": f"Curation succeeded but deep analysis failed: {str(e)}",
+            "analysis_message": "DataForSEO credentials not configured.",
         }
+
+    # Step 4: Update session status to "analyzing" and start background task
+    with get_db_context() as db:
+        session = db.query(CompetitorIntelligenceSession).filter(
+            CompetitorIntelligenceSession.id == session_id
+        ).first()
+        if session:
+            session.status = "analyzing"
+            db.commit()
+
+    # Step 5: Start background analysis task (non-blocking)
+    logger.info(f"[CURATE] Starting background analysis for session {session_id}")
+    start_background_analysis(
+        session_id=session_id,
+        analysis_run_id=analysis_run_id,
+        domain_id=domain_id,
+        domain=domain,
+        final_competitors=final_competitors,
+        greenfield_context=greenfield_context,
+        market=greenfield_context.get("target_market", "United States"),
+    )
+
+    # Step 6: Return immediately with "analyzing" status
+    return {
+        **curation_result,
+        "status": "analyzing",
+        "analysis_status": "analyzing",
+        "analysis_message": "Deep analysis started. Poll GET /sessions/{session_id} for status updates.",
+        "poll_endpoint": f"/api/greenfield/sessions/{session_id}",
+        "expected_duration_seconds": 300,  # ~5 minutes typical
+    }
 
 
 @router.patch("/sessions/{session_id}/competitors")
