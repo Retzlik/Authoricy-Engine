@@ -28,7 +28,16 @@ curl https://authoricy-engine-production.up.railway.app/api/greenfield/debug/ses
 
 # Expected: {"status":"ok","message":"Session found",...} or {"status":"not_found",...}
 
-# 3. Test authenticated /curate with your token
+# 3. TEST THE EXACT PATH PATTERN (most important!) - no auth, same pattern as /curate
+curl -X POST https://authoricy-engine-production.up.railway.app/api/greenfield/sessions/686de79a-cfcf-4094-9e1c-232cd804d6f3/curate-test \
+  -H "Content-Type: application/json" \
+  -d '{"removals":[],"additions":[],"purpose_overrides":[]}'
+
+# Expected: {"status":"ok","message":"curate-test pattern reached successfully",...}
+# If this works but /curate fails → problem is with auth
+# If this also fails → problem is with path routing
+
+# 4. Test authenticated /curate with your token
 # Get your Supabase access token from browser DevTools > Application > Local Storage
 curl -X POST https://authoricy-engine-production.up.railway.app/api/greenfield/sessions/686de79a-cfcf-4094-9e1c-232cd804d6f3/curate \
   -H "Content-Type: application/json" \
