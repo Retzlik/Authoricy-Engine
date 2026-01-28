@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 
 from src.database.models import (
@@ -94,6 +94,38 @@ async def debug_curate_route(session_id: str):
         "message": "POST route pattern is working",
         "session_id_received": session_id,
         "route_pattern": "/sessions/{session_id}/test-curate",
+    }
+
+
+@public_router.post("/sessions/{session_id}/curate-test")
+async def debug_curate_exact_pattern(session_id: str, request: Request):
+    """
+    Debug endpoint with EXACT same path pattern as real /curate (but different suffix).
+    No auth required. Tests if the sessions/{id}/curate-xxx pattern works.
+
+    Also logs all request details to help debug.
+    """
+    headers = dict(request.headers)
+    logger.info(f"[DEBUG-CURATE-TEST] session_id={session_id}")
+    logger.info(f"[DEBUG-CURATE-TEST] method={request.method}")
+    logger.info(f"[DEBUG-CURATE-TEST] headers={headers}")
+
+    body = None
+    try:
+        body = await request.json()
+    except:
+        body = "Could not parse JSON body"
+
+    logger.info(f"[DEBUG-CURATE-TEST] body={body}")
+
+    return {
+        "status": "ok",
+        "message": "curate-test pattern reached successfully",
+        "session_id": session_id,
+        "method": request.method,
+        "content_type": headers.get("content-type"),
+        "origin": headers.get("origin"),
+        "body_received": body is not None and body != "Could not parse JSON body",
     }
 
 
