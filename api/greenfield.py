@@ -173,6 +173,52 @@ async def debug_session_check(session_id: str):
             }
 
 
+@public_router.get("/debug/domain/{domain_name}")
+async def debug_domain_check(domain_name: str):
+    """
+    Debug endpoint to check domain ownership and analysis data.
+    No auth required. Helps diagnose why domains don't appear in selector.
+    """
+    from src.database.session import get_db_context
+
+    logger.info(f"[DEBUG] Domain check called for domain={domain_name}")
+
+    with get_db_context() as db:
+        domain_obj = db.query(Domain).filter(Domain.domain == domain_name).first()
+
+        if not domain_obj:
+            return {
+                "status": "not_found",
+                "message": f"Domain {domain_name} does not exist in database",
+            }
+
+        # Get analysis runs for this domain
+        runs = db.query(AnalysisRun).filter(
+            AnalysisRun.domain_id == domain_obj.id
+        ).order_by(AnalysisRun.created_at.desc()).limit(5).all()
+
+        return {
+            "status": "found",
+            "domain": {
+                "id": str(domain_obj.id),
+                "domain": domain_obj.domain,
+                "user_id": str(domain_obj.user_id) if domain_obj.user_id else None,
+                "is_active": domain_obj.is_active,
+                "analysis_count": domain_obj.analysis_count,
+                "created_at": domain_obj.created_at.isoformat() if domain_obj.created_at else None,
+            },
+            "recent_analysis_runs": [
+                {
+                    "id": str(run.id),
+                    "status": str(run.status.value) if run.status else None,
+                    "analysis_mode": str(run.analysis_mode.value) if run.analysis_mode else None,
+                    "created_at": run.created_at.isoformat() if run.created_at else None,
+                }
+                for run in runs
+            ],
+        }
+
+
 # =============================================================================
 # AUTH HELPERS
 # =============================================================================
