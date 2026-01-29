@@ -36,7 +36,8 @@ from src.database.models import (
     Domain, AnalysisRun, Keyword, Competitor, Backlink, Page,
     RankingHistory, DomainMetricsHistory, ContentCluster, KeywordGap,
     AgentOutput, SERPFeature, AIVisibility, TechnicalMetrics,
-    AnalysisStatus, SearchIntent, CompetitorType
+    AnalysisStatus, SearchIntent, CompetitorType,
+    GreenfieldAnalysis, CompetitorIntelligenceSession, GreenfieldCompetitor, AnalysisMode
 )
 from src.cache.postgres_cache import PostgresCache, get_postgres_cache
 from src.auth.dependencies import get_current_user, get_current_user_optional
@@ -1642,3 +1643,213 @@ async def get_ranked_opportunities(
         total_traffic_potential=total_potential,
         quick_wins_count=quick_win_count
     )
+
+
+# =============================================================================
+# GREENFIELD BUNDLE ENDPOINT
+# =============================================================================
+
+@router.get("/{domain_id}/greenfield/bundle")
+async def get_greenfield_bundle(
+    domain_id: UUID,
+    request: Request,
+    response: Response,
+    include: str = Query(
+        "overview,market_opportunity,beachheads,competitors,roadmap",
+        description="Comma-separated list of components to include"
+    ),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get greenfield dashboard data in a single bundled request.
+
+    This endpoint provides greenfield-specific analytics for new/emerging domains:
+    - Market opportunity (TAM/SAM/SOM)
+    - Beachhead keywords (high-winnability targets)
+    - Curated competitors with purposes
+    - Growth roadmap phases
+
+    Looks up the latest greenfield analysis for the domain and returns
+    bundled data for the frontend dashboard.
+
+    Requires authentication. Users can only access their own domains.
+    """
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
+
+    # Find the latest greenfield analysis run for this domain
+    analysis = db.query(AnalysisRun).filter(
+        AnalysisRun.domain_id == domain_id,
+        AnalysisRun.analysis_mode == AnalysisMode.GREENFIELD,
+        AnalysisRun.status == AnalysisStatus.COMPLETED
+    ).order_by(desc(AnalysisRun.completed_at)).first()
+
+    if not analysis:
+        raise HTTPException(
+            status_code=404,
+            detail="No completed greenfield analysis found for this domain"
+        )
+
+    analysis_id = str(analysis.id)
+    requested = set(c.strip() for c in include.split(","))
+
+    bundle = {
+        "domain": domain.domain,
+        "analysis_id": analysis_id,
+        "analysis_run_id": analysis_id,
+        "maturity": analysis.domain_maturity_at_analysis or "greenfield",
+    }
+
+    # Get greenfield analysis data
+    gf_analysis = db.query(GreenfieldAnalysis).filter(
+        GreenfieldAnalysis.analysis_run_id == analysis.id
+    ).first()
+
+    # Get competitor session
+    ci_session = db.query(CompetitorIntelligenceSession).filter(
+        CompetitorIntelligenceSession.analysis_run_id == analysis.id
+    ).first()
+
+    # Overview component
+    if "overview" in requested:
+        bundle["overview"] = {
+            "domain": domain.domain,
+            "maturity": analysis.domain_maturity_at_analysis or "greenfield",
+            "analysis_completed_at": analysis.completed_at.isoformat() if analysis.completed_at else None,
+            "status": str(analysis.status.value) if analysis.status else None,
+        }
+
+    # Market opportunity component
+    if "market_opportunity" in requested and gf_analysis:
+        bundle["market_opportunity"] = {
+            "total_addressable_market": gf_analysis.tam_volume or 0,
+            "serviceable_addressable_market": gf_analysis.sam_volume or 0,
+            "serviceable_obtainable_market": gf_analysis.som_volume or 0,
+            "tam_keyword_count": gf_analysis.tam_keyword_count or 0,
+            "sam_keyword_count": gf_analysis.sam_keyword_count or 0,
+            "som_keyword_count": gf_analysis.som_keyword_count or 0,
+            "market_opportunity_score": gf_analysis.market_opportunity_score or 0,
+            "competition_intensity": gf_analysis.competition_intensity or 0,
+        }
+
+    # Beachheads component
+    if "beachheads" in requested:
+        beachhead_keywords = db.query(Keyword).filter(
+            Keyword.analysis_run_id == analysis.id,
+            Keyword.is_beachhead == True
+        ).order_by(Keyword.beachhead_priority.asc()).limit(50).all()
+
+        bundle["beachheads"] = [
+            {
+                "keyword": kw.keyword,
+                "search_volume": kw.search_volume or 0,
+                "winnability_score": kw.winnability_score or 0,
+                "personalized_difficulty": kw.personalized_difficulty or 0,
+                "keyword_difficulty": kw.keyword_difficulty or 0,
+                "beachhead_priority": kw.beachhead_priority or 0,
+                "growth_phase": kw.growth_phase or 1,
+                "has_ai_overview": kw.has_ai_overview or False,
+                "estimated_traffic": kw.estimated_traffic or 0,
+            }
+            for kw in beachhead_keywords
+        ]
+        bundle["beachhead_count"] = len(beachhead_keywords)
+        bundle["total_beachhead_volume"] = sum(kw.search_volume or 0 for kw in beachhead_keywords)
+        bundle["avg_winnability"] = (
+            sum(kw.winnability_score or 0 for kw in beachhead_keywords) / len(beachhead_keywords)
+            if beachhead_keywords else 0
+        )
+
+    # Competitors component
+    if "competitors" in requested and ci_session:
+        greenfield_comps = db.query(GreenfieldCompetitor).filter(
+            GreenfieldCompetitor.session_id == ci_session.id
+        ).order_by(GreenfieldCompetitor.priority.asc()).all()
+
+        bundle["competitors"] = [
+            {
+                "domain": comp.domain,
+                "display_name": comp.display_name,
+                "purpose": comp.purpose.value if comp.purpose else "keyword_source",
+                "priority": comp.priority or 0,
+                "domain_rating": comp.domain_rating or 0,
+                "organic_traffic": comp.organic_traffic or 0,
+                "organic_keywords": comp.organic_keywords or 0,
+                "is_user_provided": comp.is_user_provided or False,
+            }
+            for comp in greenfield_comps
+        ]
+        bundle["competitor_count"] = len(greenfield_comps)
+
+    # Roadmap component (growth phases)
+    if "roadmap" in requested:
+        # Get keywords grouped by growth phase
+        phase_data = db.query(
+            Keyword.growth_phase,
+            func.count(Keyword.id).label("keyword_count"),
+            func.sum(Keyword.search_volume).label("total_volume"),
+            func.sum(Keyword.estimated_traffic).label("expected_traffic")
+        ).filter(
+            Keyword.analysis_run_id == analysis.id,
+            Keyword.is_beachhead == True,
+            Keyword.growth_phase != None
+        ).group_by(Keyword.growth_phase).all()
+
+        roadmap = []
+        phase_info = {
+            1: {"name": "Foundation", "months": "1-3", "focus": "Quick wins", "strategy": "Target low-difficulty, high-relevance keywords"},
+            2: {"name": "Traction", "months": "4-6", "focus": "Expansion", "strategy": "Build on phase 1 wins, target medium-difficulty keywords"},
+            3: {"name": "Authority", "months": "7-12", "focus": "Competition", "strategy": "Target competitive keywords, establish topical authority"},
+        }
+
+        for phase in phase_data:
+            phase_num = phase.growth_phase or 1
+            info = phase_info.get(phase_num, phase_info[1])
+            roadmap.append({
+                "phase": info["name"],
+                "phase_number": phase_num,
+                "months": info["months"],
+                "focus": info["focus"],
+                "strategy": info["strategy"],
+                "keyword_count": phase.keyword_count or 0,
+                "total_volume": phase.total_volume or 0,
+                "expected_traffic": phase.expected_traffic or 0,
+            })
+
+        # Sort by phase number
+        roadmap.sort(key=lambda x: x["phase_number"])
+        bundle["roadmap"] = roadmap
+
+    # Share of Voice component (for greenfield, this is competitor comparison)
+    if "sov" in requested and ci_session:
+        greenfield_comps = db.query(GreenfieldCompetitor).filter(
+            GreenfieldCompetitor.session_id == ci_session.id
+        ).order_by(GreenfieldCompetitor.organic_traffic.desc()).limit(10).all()
+
+        total_traffic = sum(comp.organic_traffic or 0 for comp in greenfield_comps)
+        bundle["sov"] = {
+            "competitors": [
+                {
+                    "domain": comp.domain,
+                    "traffic": comp.organic_traffic or 0,
+                    "share": ((comp.organic_traffic or 0) / total_traffic * 100) if total_traffic > 0 else 0,
+                }
+                for comp in greenfield_comps
+            ],
+            "total_market_traffic": total_traffic,
+        }
+
+    # Add metadata
+    bundle["created_at"] = analysis.created_at.isoformat() if analysis.created_at else None
+    bundle["last_updated"] = analysis.completed_at.isoformat() if analysis.completed_at else None
+
+    # Add cache headers
+    add_cache_headers(
+        response,
+        max_age=300,
+        public=True,
+        surrogate_keys=[f"domain:{domain_id}", f"analysis:{analysis_id}", "greenfield-bundle"],
+    )
+
+    return bundle
