@@ -1902,6 +1902,7 @@ def submit_curation(
 
         return {
             "session_id": str(session.id),
+            "analysis_run_id": str(session.analysis_run_id),  # Frontend needs this for navigation
             "status": session.status,
             "final_competitors": final_competitors,
             "competitor_count": len(final_competitors),
