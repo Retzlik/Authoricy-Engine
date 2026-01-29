@@ -1853,3 +1853,239 @@ async def get_greenfield_bundle(
     )
 
     return bundle
+
+
+def get_latest_greenfield_analysis(domain_id: UUID, db: Session) -> Optional[AnalysisRun]:
+    """Get the latest completed greenfield analysis for a domain."""
+    return db.query(AnalysisRun).filter(
+        AnalysisRun.domain_id == domain_id,
+        AnalysisRun.analysis_mode == AnalysisMode.GREENFIELD,
+        AnalysisRun.status == AnalysisStatus.COMPLETED
+    ).order_by(desc(AnalysisRun.completed_at)).first()
+
+
+@router.get("/{domain_id}/greenfield/beachheads")
+async def get_greenfield_beachheads_by_domain(
+    domain_id: UUID,
+    response: Response,
+    phase: Optional[int] = None,
+    min_winnability: Optional[float] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get beachhead keywords for the latest greenfield analysis of a domain.
+
+    This endpoint looks up the latest completed greenfield analysis for the domain
+    and returns beachhead keywords. Use this when you have a domain_id but not
+    the specific analysis_run_id.
+
+    Optionally filter by:
+    - Growth phase (1=Foundation, 2=Traction, 3=Authority)
+    - Minimum winnability score
+
+    Requires authentication. Users can only access their own domains.
+    """
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
+
+    # Find the latest greenfield analysis
+    analysis = get_latest_greenfield_analysis(domain_id, db)
+    if not analysis:
+        raise HTTPException(
+            status_code=404,
+            detail="No completed greenfield analysis found for this domain"
+        )
+
+    # Query beachhead keywords
+    query = db.query(Keyword).filter(
+        Keyword.analysis_run_id == analysis.id,
+        Keyword.is_beachhead == True
+    )
+
+    if phase is not None:
+        query = query.filter(Keyword.growth_phase == phase)
+
+    if min_winnability is not None:
+        query = query.filter(Keyword.winnability_score >= min_winnability)
+
+    beachheads = query.order_by(Keyword.beachhead_priority.asc()).limit(100).all()
+
+    result = [
+        {
+            "keyword": kw.keyword,
+            "search_volume": kw.search_volume or 0,
+            "winnability_score": kw.winnability_score or 0,
+            "personalized_difficulty": kw.personalized_difficulty or 0,
+            "keyword_difficulty": kw.keyword_difficulty or 0,
+            "beachhead_priority": kw.beachhead_priority or 0,
+            "growth_phase": kw.growth_phase or 1,
+            "has_ai_overview": kw.has_ai_overview or False,
+            "estimated_traffic": kw.estimated_traffic or 0,
+            "recommended_content_type": kw.recommended_content_type or "",
+        }
+        for kw in beachheads
+    ]
+
+    # Add cache headers
+    add_cache_headers(
+        response,
+        max_age=300,
+        public=True,
+        surrogate_keys=[f"domain:{domain_id}", f"analysis:{analysis.id}", "greenfield-beachheads"],
+    )
+
+    return result
+
+
+@router.get("/{domain_id}/greenfield/market-map")
+async def get_greenfield_market_map_by_domain(
+    domain_id: UUID,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get market map data for the latest greenfield analysis of a domain.
+
+    Returns competitor positioning data for market visualization.
+
+    Requires authentication. Users can only access their own domains.
+    """
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
+
+    # Find the latest greenfield analysis
+    analysis = get_latest_greenfield_analysis(domain_id, db)
+    if not analysis:
+        raise HTTPException(
+            status_code=404,
+            detail="No completed greenfield analysis found for this domain"
+        )
+
+    # Get greenfield analysis data
+    gf_analysis = db.query(GreenfieldAnalysis).filter(
+        GreenfieldAnalysis.analysis_run_id == analysis.id
+    ).first()
+
+    # Get competitor session
+    ci_session = db.query(CompetitorIntelligenceSession).filter(
+        CompetitorIntelligenceSession.analysis_run_id == analysis.id
+    ).first()
+
+    competitors = []
+    if ci_session:
+        greenfield_comps = db.query(GreenfieldCompetitor).filter(
+            GreenfieldCompetitor.session_id == ci_session.id
+        ).order_by(GreenfieldCompetitor.priority.asc()).all()
+
+        competitors = [
+            {
+                "domain": comp.domain,
+                "domain_rating": comp.domain_rating or 0,
+                "organic_traffic": comp.organic_traffic or 0,
+                "purpose": comp.purpose.value if comp.purpose else "keyword_source",
+                "priority": comp.priority or 0,
+            }
+            for comp in greenfield_comps
+        ]
+
+    market_opportunity = None
+    if gf_analysis:
+        market_opportunity = {
+            "total_addressable_market": gf_analysis.tam_volume or 0,
+            "serviceable_addressable_market": gf_analysis.sam_volume or 0,
+            "serviceable_obtainable_market": gf_analysis.som_volume or 0,
+            "market_opportunity_score": gf_analysis.market_opportunity_score or 0,
+            "competition_intensity": gf_analysis.competition_intensity or 0,
+        }
+
+    # Add cache headers
+    add_cache_headers(
+        response,
+        max_age=300,
+        public=True,
+        surrogate_keys=[f"domain:{domain_id}", f"analysis:{analysis.id}", "greenfield-market-map"],
+    )
+
+    return {
+        "analysis_run_id": str(analysis.id),
+        "domain": domain.domain,
+        "competitors": competitors,
+        "market_opportunity": market_opportunity,
+    }
+
+
+@router.get("/{domain_id}/greenfield/roadmap")
+async def get_greenfield_roadmap_by_domain(
+    domain_id: UUID,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get growth roadmap for the latest greenfield analysis of a domain.
+
+    Returns phased keyword targeting strategy:
+    - Phase 1: Foundation (months 1-3)
+    - Phase 2: Traction (months 4-6)
+    - Phase 3: Authority (months 7-12)
+
+    Requires authentication. Users can only access their own domains.
+    """
+    # Get domain with access check
+    domain = get_domain_with_access(domain_id, current_user, db)
+
+    # Find the latest greenfield analysis
+    analysis = get_latest_greenfield_analysis(domain_id, db)
+    if not analysis:
+        raise HTTPException(
+            status_code=404,
+            detail="No completed greenfield analysis found for this domain"
+        )
+
+    # Get keywords grouped by growth phase
+    phase_data = db.query(
+        Keyword.growth_phase,
+        func.count(Keyword.id).label("keyword_count"),
+        func.sum(Keyword.search_volume).label("total_volume"),
+        func.sum(Keyword.estimated_traffic).label("expected_traffic")
+    ).filter(
+        Keyword.analysis_run_id == analysis.id,
+        Keyword.is_beachhead == True,
+        Keyword.growth_phase != None
+    ).group_by(Keyword.growth_phase).all()
+
+    roadmap = []
+    phase_info = {
+        1: {"name": "Foundation", "months": "1-3", "focus": "Quick wins", "strategy": "Target low-difficulty, high-relevance keywords"},
+        2: {"name": "Traction", "months": "4-6", "focus": "Expansion", "strategy": "Build on phase 1 wins, target medium-difficulty keywords"},
+        3: {"name": "Authority", "months": "7-12", "focus": "Competition", "strategy": "Target competitive keywords, establish topical authority"},
+    }
+
+    for phase in phase_data:
+        phase_num = phase.growth_phase or 1
+        info = phase_info.get(phase_num, phase_info[1])
+        roadmap.append({
+            "phase": info["name"],
+            "phase_number": phase_num,
+            "months": info["months"],
+            "focus": info["focus"],
+            "strategy": info["strategy"],
+            "keyword_count": phase.keyword_count or 0,
+            "total_volume": phase.total_volume or 0,
+            "expected_traffic": phase.expected_traffic or 0,
+        })
+
+    # Sort by phase number
+    roadmap.sort(key=lambda x: x["phase_number"])
+
+    # Add cache headers
+    add_cache_headers(
+        response,
+        max_age=300,
+        public=True,
+        surrogate_keys=[f"domain:{domain_id}", f"analysis:{analysis.id}", "greenfield-roadmap"],
+    )
+
+    return roadmap
