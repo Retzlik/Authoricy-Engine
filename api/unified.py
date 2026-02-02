@@ -1341,7 +1341,7 @@ async def run_hybrid_analysis_background(
 
     HYBRID combines:
     1. Domain's existing (limited) data from DataForSEO
-    2. Competitor discovery from SERP overlap
+    2. CURATED competitors from user curation step
     3. Gap analysis within existing topic clusters (consolidation)
     4. Gap analysis for adjacent clusters (expansion)
     5. Beachhead selection for quick wins
@@ -1355,17 +1355,26 @@ async def run_hybrid_analysis_background(
     logger.info(f"[HYBRID] Starting hybrid analysis for {analysis_id}")
 
     try:
-        # Phase 1: Initialize
+        # Phase 1: Initialize and get CURATED competitors
         with get_db_context() as db:
             run = db.query(AnalysisRun).get(analysis_id)
             domain = db.query(Domain).get(run.domain_id)
             domain_name = domain.domain
+
+            # Get the curated competitors from the session
+            session = db.query(CompetitorIntelligenceSession).filter(
+                CompetitorIntelligenceSession.analysis_run_id == analysis_id
+            ).first()
+
+            # Use curated competitors (final_competitors) NOT re-discovered ones
+            curated_competitors = session.final_competitors if session else []
+
             run.status = AnalysisStatus.ANALYZING
             run.current_phase = "collecting"
             run.progress_percent = 10
             db.commit()
 
-        logger.info(f"[HYBRID] Phase 1: Collecting existing data for {domain_name}")
+        logger.info(f"[HYBRID] Phase 1: Using {len(curated_competitors)} curated competitors for {domain_name}")
 
         # Get DataForSEO credentials
         dataforseo_login = os.environ.get("DATAFORSEO_LOGIN")
@@ -1417,19 +1426,14 @@ async def run_hybrid_analysis_background(
 
             logger.info(f"[HYBRID] Stored {len(ranked_keywords or [])} existing keywords")
 
-            # Phase 3: Discover competitors from SERP overlap
-            logger.info(f"[HYBRID] Phase 3: Discovering competitors for {domain_name}")
+            # Phase 3: Use CURATED competitors (not re-discovered)
+            logger.info(f"[HYBRID] Phase 3: Using {len(curated_competitors)} curated competitors for {domain_name}")
 
-            competitors_data = await client.get_domain_competitors(
-                domain=domain_name,
-                limit=10,
-            )
-
-            # Store competitors
+            # Store curated competitors
             with get_db_context() as db:
                 from src.database.models import Competitor, CompetitorType
 
-                for comp_data in (competitors_data or []):
+                for comp_data in curated_competitors:
                     competitor = Competitor(
                         analysis_run_id=analysis_id,
                         competitor_domain=comp_data.get("domain", ""),
@@ -1447,14 +1451,14 @@ async def run_hybrid_analysis_background(
                 run.progress_percent = 50
                 db.commit()
 
-            logger.info(f"[HYBRID] Found {len(competitors_data or [])} competitors")
+            logger.info(f"[HYBRID] Stored {len(curated_competitors)} curated competitors")
 
             # Phase 4: Analyze gaps (keywords competitors rank for, we don't)
             logger.info(f"[HYBRID] Phase 4: Analyzing keyword gaps")
 
-            # Get gaps from top competitors
+            # Get gaps from CURATED competitors (not re-discovered ones)
             all_gaps = []
-            for comp_data in (competitors_data or [])[:5]:  # Top 5 competitors
+            for comp_data in curated_competitors[:5]:  # Top 5 curated competitors
                 comp_domain = comp_data.get("domain", "")
                 if comp_domain:
                     gaps = await client.get_keyword_gaps(
@@ -1961,33 +1965,211 @@ async def run_standard_analysis_background(
     """
     Run standard (established domain) analysis in background.
 
-    This calls the existing standard analysis pipeline.
+    STANDARD mode for established domains:
+    1. Get curated competitors from curation step
+    2. Collect domain's existing ranked keywords
+    3. Perform competitor keyword gap analysis
+    4. Find quick wins (striking distance keywords)
+    5. Store results
     """
-    # TODO: Integrate with existing /api/analyze logic
-    # For now, this is a placeholder
+    import os
+    from src.collector.client import DataForSEOClient
+    from src.database.models import KeywordGap, Competitor, CompetitorType
 
     logger.info(f"[STANDARD] Starting standard analysis for {analysis_id}")
 
     try:
+        # Phase 1: Initialize and get curated competitors
         with get_db_context() as db:
             run = db.query(AnalysisRun).get(analysis_id)
+            domain = db.query(Domain).get(run.domain_id)
+            domain_name = domain.domain
+
+            # Get the curated competitors from the session
+            session = db.query(CompetitorIntelligenceSession).filter(
+                CompetitorIntelligenceSession.analysis_run_id == analysis_id
+            ).first()
+
+            curated_competitors = session.final_competitors if session else []
+
             run.status = AnalysisStatus.ANALYZING
             run.current_phase = "collecting"
+            run.progress_percent = 10
             db.commit()
 
-        # TODO: Call existing standard analysis pipeline
-        logger.warning(f"[STANDARD] Standard mode needs integration with existing pipeline for {analysis_id}")
+        logger.info(f"[STANDARD] Phase 1: Using {len(curated_competitors)} curated competitors for {domain_name}")
 
-        # Mark as completed for now
+        # Get DataForSEO credentials
+        dataforseo_login = os.environ.get("DATAFORSEO_LOGIN")
+        dataforseo_password = os.environ.get("DATAFORSEO_PASSWORD")
+
+        if not dataforseo_login or not dataforseo_password:
+            raise ValueError("DataForSEO credentials not configured")
+
+        async with DataForSEOClient(
+            login=dataforseo_login,
+            password=dataforseo_password
+        ) as client:
+            # Phase 2: Collect domain's existing ranked keywords
+            with get_db_context() as db:
+                run = db.query(AnalysisRun).get(analysis_id)
+                run.current_phase = "collecting_keywords"
+                run.progress_percent = 20
+                db.commit()
+
+            logger.info(f"[STANDARD] Phase 2: Getting ranked keywords for {domain_name}")
+
+            ranked_keywords = await client.get_domain_ranked_keywords(
+                domain=domain_name,
+                limit=2000,  # More for established domains
+            )
+
+            # Store keywords
+            with get_db_context() as db:
+                domain_obj = db.query(Domain).filter(Domain.domain == domain_name).first()
+
+                for kw_data in (ranked_keywords or []):
+                    keyword = Keyword(
+                        domain_id=domain_obj.id,
+                        analysis_run_id=analysis_id,
+                        keyword=kw_data.get("keyword", ""),
+                        keyword_normalized=kw_data.get("keyword", "").lower().strip(),
+                        search_volume=kw_data.get("search_volume", 0),
+                        keyword_difficulty=kw_data.get("keyword_difficulty", 0),
+                        current_position=kw_data.get("position", None),
+                        estimated_traffic=kw_data.get("etv", 0),
+                    )
+                    db.add(keyword)
+
+                run = db.query(AnalysisRun).get(analysis_id)
+                run.current_phase = "storing_competitors"
+                run.progress_percent = 40
+                db.commit()
+
+            logger.info(f"[STANDARD] Stored {len(ranked_keywords or [])} existing keywords")
+
+            # Phase 3: Store curated competitors
+            logger.info(f"[STANDARD] Phase 3: Storing {len(curated_competitors)} curated competitors")
+
+            with get_db_context() as db:
+                for comp_data in curated_competitors:
+                    competitor = Competitor(
+                        analysis_run_id=analysis_id,
+                        competitor_domain=comp_data.get("domain", ""),
+                        competitor_type=CompetitorType.TRUE_COMPETITOR,
+                        organic_traffic=comp_data.get("organic_traffic", 0),
+                        organic_keywords=comp_data.get("organic_keywords", 0),
+                        keyword_overlap_count=comp_data.get("keyword_overlap_count", 0) or comp_data.get("common_keywords", 0),
+                        domain_rating=comp_data.get("domain_rating", 0),
+                        is_active=True,
+                    )
+                    db.add(competitor)
+
+                run = db.query(AnalysisRun).get(analysis_id)
+                run.current_phase = "analyzing_gaps"
+                run.progress_percent = 50
+                db.commit()
+
+            # Phase 4: Analyze keyword gaps from curated competitors
+            logger.info(f"[STANDARD] Phase 4: Analyzing keyword gaps")
+
+            all_gaps = []
+            for comp_data in curated_competitors[:5]:  # Top 5 curated competitors
+                comp_domain = comp_data.get("domain", "")
+                if comp_domain:
+                    gaps = await client.get_keyword_gaps(
+                        target_domain=domain_name,
+                        competitor_domains=[comp_domain],
+                        limit=200,
+                    )
+                    for gap in (gaps or []):
+                        gap["best_competitor"] = comp_domain
+                    all_gaps.extend(gaps or [])
+
+            # Deduplicate and store gaps
+            seen_keywords = set()
+            with get_db_context() as db:
+                for gap_data in all_gaps:
+                    kw = gap_data.get("keyword", "").lower().strip()
+                    if kw and kw not in seen_keywords:
+                        seen_keywords.add(kw)
+
+                        keyword_gap = KeywordGap(
+                            analysis_run_id=analysis_id,
+                            keyword=gap_data.get("keyword", ""),
+                            search_volume=gap_data.get("search_volume", 0),
+                            keyword_difficulty=gap_data.get("keyword_difficulty", 0),
+                            best_competitor=gap_data.get("best_competitor", ""),
+                            best_competitor_position=gap_data.get("competitor_position", 0),
+                            target_position=None,
+                            opportunity_score=_calculate_gap_opportunity_score(gap_data),
+                        )
+                        db.add(keyword_gap)
+
+                run = db.query(AnalysisRun).get(analysis_id)
+                run.current_phase = "finding_quick_wins"
+                run.progress_percent = 70
+                db.commit()
+
+            logger.info(f"[STANDARD] Stored {len(seen_keywords)} unique keyword gaps")
+
+            # Phase 5: Find quick wins (striking distance keywords)
+            logger.info(f"[STANDARD] Phase 5: Finding quick wins")
+
+            with get_db_context() as db:
+                # Mark keywords in striking distance as quick wins
+                striking_distance = db.query(Keyword).filter(
+                    Keyword.analysis_run_id == analysis_id,
+                    Keyword.current_position != None,
+                    Keyword.current_position.between(11, 30),  # Page 2-3
+                ).order_by(Keyword.estimated_traffic.desc()).limit(50).all()
+
+                for i, kw in enumerate(striking_distance):
+                    kw.opportunity_score = _calculate_quick_win_score(kw)
+
+                run = db.query(AnalysisRun).get(analysis_id)
+                run.current_phase = "finalizing"
+                run.progress_percent = 90
+                db.commit()
+
+            logger.info(f"[STANDARD] Found {len(striking_distance)} quick win opportunities")
+
+        # Phase 6: Complete
         with get_db_context() as db:
             run = db.query(AnalysisRun).get(analysis_id)
             run.status = AnalysisStatus.COMPLETED
+            run.current_phase = "completed"
+            run.progress_percent = 100
             run.completed_at = datetime.utcnow()
             db.commit()
 
+        logger.info(f"[STANDARD] Analysis completed for {analysis_id}")
+
     except Exception as e:
         logger.error(f"[STANDARD] Analysis failed for {analysis_id}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
         with get_db_context() as db:
             run = db.query(AnalysisRun).get(analysis_id)
             run.status = AnalysisStatus.FAILED
+            run.error_message = str(e)
             db.commit()
+
+
+def _calculate_quick_win_score(keyword: Keyword) -> float:
+    """Calculate opportunity score for a quick win keyword."""
+    position = keyword.current_position or 100
+    difficulty = keyword.keyword_difficulty or 50
+    traffic = keyword.estimated_traffic or 0
+
+    # Position score: closer to page 1 = better
+    position_score = 100 if position <= 15 else (75 if position <= 20 else 50)
+
+    # Difficulty score: lower = better
+    difficulty_score = max(0, 100 - difficulty)
+
+    # Traffic score: more traffic potential = better
+    traffic_score = min(100, (traffic / 100) * 50) if traffic else 25
+
+    return (position_score * 0.4 + difficulty_score * 0.3 + traffic_score * 0.3)
