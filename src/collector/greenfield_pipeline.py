@@ -838,12 +838,77 @@ async def _analyze_single_serp(
 ) -> Optional[WinnabilityAnalysis]:
     """Analyze a single SERP and calculate winnability."""
     try:
-        serp_data = await client.get_serp_results(
+        raw_serp_data = await client.get_serp_results(
             keyword=keyword.keyword,
             location=market,
             language=language,
             depth=10,
         )
+
+        if not raw_serp_data:
+            logger.debug(f"No SERP data returned for '{keyword.keyword}'")
+            return None
+
+        # Transform DataForSEO raw response to expected format
+        # DataForSEO returns 'items' array, we need 'results' with proper fields
+        items = raw_serp_data.get("items", [])
+        if not items:
+            logger.debug(f"No SERP items for '{keyword.keyword}'")
+            return None
+
+        # Extract organic results
+        organic_results = [
+            item for item in items
+            if item.get("type") == "organic"
+        ]
+
+        # Build properly formatted SERP data for winnability calculation
+        serp_data = {
+            "results": [
+                {
+                    "domain": r.get("domain", ""),
+                    # Domain rating comes from rank_info.main_domain_rank
+                    "domain_rating": (
+                        r.get("rank_info", {}).get("main_domain_rank", 50)
+                        if r.get("rank_info") else 50
+                    ),
+                    "position": r.get("rank_absolute", i + 1),
+                    "url": r.get("url", ""),
+                    "title": r.get("title", ""),
+                    # Estimate word count from description (will be ~10x actual)
+                    "word_count": (
+                        len(r.get("description", "").split()) * 10
+                        if r.get("description") else 0
+                    ),
+                    # Content quality signals
+                    "is_forum": any(
+                        f in r.get("domain", "").lower()
+                        for f in ["reddit", "quora", "forum", "community"]
+                    ),
+                    "is_ugc": any(
+                        u in r.get("domain", "").lower()
+                        for u in ["medium.com", "substack", "wordpress.com"]
+                    ),
+                }
+                for i, r in enumerate(organic_results[:10])
+            ],
+            # SERP features for winnability analysis
+            "ai_overview": next(
+                (item for item in items if item.get("type") == "ai_overview"),
+                None
+            ),
+            "featured_snippet": next(
+                (item for item in items if item.get("type") == "featured_snippet"),
+                None
+            ),
+            "people_also_ask": [
+                item for item in items if item.get("type") == "people_also_ask"
+            ],
+            "video_carousel": next(
+                (item for item in items if item.get("type") == "video"),
+                None
+            ),
+        }
 
         keyword_dict = {
             "keyword": keyword.keyword,

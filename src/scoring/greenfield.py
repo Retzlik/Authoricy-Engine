@@ -375,7 +375,10 @@ def calculate_winnability(
         score += geo_bonus
         components["geo_bonus"] = geo_bonus
 
-    return max(0, min(100, score)), components
+    # Cap at 85% - perfect winnability is unrealistic
+    # Even "easy" keywords have competition and uncertainty
+    # Typical realistic ranges: 30-85% for winnable keywords
+    return max(0, min(85, score)), components
 
 
 def calculate_winnability_full(

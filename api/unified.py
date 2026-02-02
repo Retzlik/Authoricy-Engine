@@ -1591,31 +1591,96 @@ def _calculate_gap_opportunity_score(gap_data: dict) -> float:
 
 
 def _calculate_winnability_existing(keyword: Keyword) -> float:
-    """Calculate winnability for an existing ranked keyword."""
+    """
+    Calculate winnability for an existing ranked keyword.
+
+    Produces realistic scores in the 30-85% range based on:
+    - Current position (closer to page 1 = higher winnability)
+    - Keyword difficulty (lower = higher winnability)
+    - Conservative assumptions about competition
+
+    Returns a float between 30-85 (never 100, as perfect winnability is unrealistic).
+    """
     position = keyword.current_position or 100
     difficulty = keyword.keyword_difficulty or 50
 
-    # Already on page 2-3 = high winnability
-    position_score = 100 if position <= 15 else (75 if position <= 20 else 50)
+    # Position-based score (max 80, as even good positions have competition)
+    if position <= 12:
+        position_score = 80  # Near page 1, good opportunity
+    elif position <= 20:
+        position_score = 65  # Page 2, moderate opportunity
+    elif position <= 30:
+        position_score = 50  # Page 3, requires more effort
+    else:
+        position_score = 35  # Further out, uncertain
 
-    # Lower difficulty = higher winnability
-    difficulty_score = max(0, 100 - difficulty)
+    # Difficulty-based score (max 80, as even "easy" keywords have competition)
+    # KD 0-20: high winnability (70-80)
+    # KD 20-40: moderate (50-70)
+    # KD 40-60: challenging (35-50)
+    # KD 60+: difficult (20-35)
+    if difficulty <= 20:
+        difficulty_score = 80 - (difficulty * 0.5)  # 70-80
+    elif difficulty <= 40:
+        difficulty_score = 70 - ((difficulty - 20) * 1.0)  # 50-70
+    elif difficulty <= 60:
+        difficulty_score = 50 - ((difficulty - 40) * 0.75)  # 35-50
+    else:
+        difficulty_score = max(20, 35 - ((difficulty - 60) * 0.375))  # 20-35
 
-    return (position_score * 0.6 + difficulty_score * 0.4)
+    # Combine scores (weighted toward position since we already rank)
+    base_score = (position_score * 0.6 + difficulty_score * 0.4)
+
+    # Cap at 85% - perfect winnability is unrealistic
+    return min(85.0, max(30.0, base_score))
 
 
 def _calculate_winnability_gap(gap) -> float:
-    """Calculate winnability for a keyword gap."""
+    """
+    Calculate winnability for a keyword gap (competitor ranks, we don't).
+
+    Produces realistic scores in the 30-75% range based on:
+    - Keyword difficulty (lower = higher winnability)
+    - Search volume (higher volume = more competition, slightly lower winnability)
+    - The fact that we DON'T currently rank (more uncertain than existing rankings)
+
+    Returns a float between 30-75 (capped lower than existing keywords
+    since we have no ranking history).
+    """
     difficulty = gap.keyword_difficulty or 50
     volume = gap.search_volume or 0
 
-    # Low difficulty = high winnability
-    difficulty_score = max(0, 100 - difficulty)
+    # Difficulty-based score (max 70 for gaps since we don't rank yet)
+    # KD 0-20: good opportunity (60-70)
+    # KD 20-40: moderate (45-60)
+    # KD 40-60: challenging (30-45)
+    # KD 60+: difficult (20-30)
+    if difficulty <= 20:
+        difficulty_score = 70 - (difficulty * 0.5)  # 60-70
+    elif difficulty <= 40:
+        difficulty_score = 60 - ((difficulty - 20) * 0.75)  # 45-60
+    elif difficulty <= 60:
+        difficulty_score = 45 - ((difficulty - 40) * 0.75)  # 30-45
+    else:
+        difficulty_score = max(20, 30 - ((difficulty - 60) * 0.25))  # 20-30
 
-    # Minimum volume threshold met = viable
-    volume_score = 50 if volume >= 100 else 25
+    # Volume-based adjustment (higher volume = more competition)
+    # Low volume (<100): baseline
+    # Medium volume (100-1000): slight reduction
+    # High volume (1000+): more reduction (more competitive)
+    if volume < 100:
+        volume_adjustment = 0
+    elif volume < 1000:
+        volume_adjustment = -5  # Slightly more competitive
+    elif volume < 5000:
+        volume_adjustment = -10  # More competitive
+    else:
+        volume_adjustment = -15  # Highly competitive
 
-    return (difficulty_score * 0.7 + volume_score * 0.3)
+    base_score = difficulty_score + volume_adjustment
+
+    # Cap at 75% for gaps - we don't have ranking history, so less certainty
+    return min(75.0, max(30.0, base_score))
 
 
 # =============================================================================
