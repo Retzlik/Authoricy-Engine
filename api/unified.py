@@ -1591,31 +1591,107 @@ def _calculate_gap_opportunity_score(gap_data: dict) -> float:
 
 
 def _calculate_winnability_existing(keyword: Keyword) -> float:
-    """Calculate winnability for an existing ranked keyword."""
+    """
+    Calculate winnability for an existing ranked keyword.
+
+    This is a simplified calculation for HYBRID mode when full SERP data
+    isn't available. It produces realistic scores (typically 40-80%) by
+    considering position, difficulty, and applying conservative adjustments.
+
+    The formula accounts for:
+    - Position momentum (closer to page 1 = easier to push up)
+    - Keyword difficulty (harder keywords = lower winnability)
+    - Unknown SERP factors (conservative penalty since we lack SERP data)
+    """
     position = keyword.current_position or 100
-    difficulty = keyword.keyword_difficulty or 50
+    # Floor difficulty at 15 - even "easy" keywords have some competition
+    difficulty = max(15, keyword.keyword_difficulty or 50)
 
-    # Already on page 2-3 = high winnability
-    position_score = 100 if position <= 15 else (75 if position <= 20 else 50)
+    # Position score: page 2 is promising but not guaranteed
+    # Lower scores than before to be realistic about ranking difficulty
+    if position <= 15:
+        position_score = 70  # Page 2 top half - good but still competitive
+    elif position <= 20:
+        position_score = 55  # Page 2 bottom - harder to break into page 1
+    elif position <= 30:
+        position_score = 40  # Page 3 - significant work needed
+    else:
+        position_score = 25  # Beyond page 3 - very difficult
 
-    # Lower difficulty = higher winnability
-    difficulty_score = max(0, 100 - difficulty)
+    # Difficulty score: 0-100 based on KD
+    # Apply diminishing returns - low KD doesn't mean easy win
+    if difficulty <= 20:
+        difficulty_score = 70  # Low difficulty but still requires effort
+    elif difficulty <= 35:
+        difficulty_score = 55
+    elif difficulty <= 50:
+        difficulty_score = 40
+    elif difficulty <= 70:
+        difficulty_score = 25
+    else:
+        difficulty_score = 10  # Very hard keywords
 
-    return (position_score * 0.6 + difficulty_score * 0.4)
+    # Base winnability from position and difficulty
+    base_winnability = (position_score * 0.5 + difficulty_score * 0.5)
+
+    # Apply SERP uncertainty penalty (we don't have actual SERP data)
+    # This accounts for unknown competitor strengths, SERP features, etc.
+    serp_uncertainty_penalty = 10
+
+    # Final winnability capped at 80% without SERP analysis
+    # (proper SERP analysis could adjust this up or down)
+    return min(80, max(20, base_winnability - serp_uncertainty_penalty))
 
 
 def _calculate_winnability_gap(gap) -> float:
-    """Calculate winnability for a keyword gap."""
-    difficulty = gap.keyword_difficulty or 50
+    """
+    Calculate winnability for a keyword gap (keyword we don't rank for).
+
+    Gaps are inherently harder to win than existing rankings, so scores
+    are more conservative. We're starting from scratch, competing against
+    established players.
+
+    The formula considers:
+    - Keyword difficulty (primary factor)
+    - Search volume (viability indicator)
+    - The fact that we have NO current ranking (harder than improving existing)
+    """
+    # Floor difficulty at 20 - gaps are inherently harder since we don't rank
+    difficulty = max(20, gap.keyword_difficulty or 50)
     volume = gap.search_volume or 0
 
-    # Low difficulty = high winnability
-    difficulty_score = max(0, 100 - difficulty)
+    # Difficulty score: more conservative for gaps
+    # Starting from zero is harder than improving existing position
+    if difficulty <= 25:
+        difficulty_score = 60  # Low difficulty gap - achievable
+    elif difficulty <= 40:
+        difficulty_score = 45  # Medium difficulty - requires solid content
+    elif difficulty <= 55:
+        difficulty_score = 30  # Harder - needs authority building
+    elif difficulty <= 70:
+        difficulty_score = 20  # Difficult - long-term play
+    else:
+        difficulty_score = 10  # Very hard - aspirational
 
-    # Minimum volume threshold met = viable
-    volume_score = 50 if volume >= 100 else 25
+    # Volume score: higher volume often means more competition
+    if volume >= 1000:
+        volume_score = 25  # High volume = more competition
+    elif volume >= 500:
+        volume_score = 35
+    elif volume >= 100:
+        volume_score = 40  # Sweet spot - viable volume, less competition
+    else:
+        volume_score = 30  # Low volume - less competition but less reward
 
-    return (difficulty_score * 0.7 + volume_score * 0.3)
+    # Gaps get a "starting from scratch" penalty
+    # We have no existing authority/ranking for this keyword
+    starting_from_scratch_penalty = 15
+
+    # Base winnability
+    base_winnability = (difficulty_score * 0.6 + volume_score * 0.4)
+
+    # Cap at 65% for gaps - they're inherently harder than existing rankings
+    return min(65, max(15, base_winnability - starting_from_scratch_penalty))
 
 
 # =============================================================================
