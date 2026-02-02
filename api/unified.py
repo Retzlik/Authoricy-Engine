@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 from src.database.models import (
     AnalysisRun,
@@ -131,8 +131,19 @@ class NextAction(BaseModel):
 
 
 class UnifiedAnalysisRequest(BaseModel):
-    """The only request needed to start analysis - just the domain."""
-    domain: str = Field(..., description="Domain to analyze (e.g., example.com)")
+    """Request to start analysis - accepts domain name or domain ID."""
+    # Either domain name OR domainId is required
+    domain: Optional[str] = Field(None, description="Domain to analyze (e.g., example.com)")
+    domainId: Optional[UUID] = Field(None, description="Existing domain ID to re-analyze")
+
+    # Optional config for backward compatibility with frontend
+    config: Optional[Dict[str, Any]] = Field(None, description="Optional analysis config")
+
+    @model_validator(mode='after')
+    def validate_domain_or_id(self) -> 'UnifiedAnalysisRequest':
+        if not self.domain and not self.domainId:
+            raise ValueError("Either 'domain' or 'domainId' must be provided")
+        return self
 
 
 class UnifiedAnalysisResponse(BaseModel):
@@ -456,6 +467,10 @@ async def start_unified_analysis(
     The system auto-detects domain maturity and tells the frontend
     exactly what to do next.
 
+    Accepts either:
+    - domain: A domain name string (e.g., "example.com")
+    - domainId: A UUID of an existing domain in the system
+
     Flow:
     1. Detects domain maturity (greenfield/hybrid/established)
     2. Creates analysis run in PENDING state
@@ -464,7 +479,17 @@ async def start_unified_analysis(
     For GREENFIELD/HYBRID: next_action = "provide_context"
     For ESTABLISHED: next_action = "poll_status" (analysis starts immediately)
     """
-    domain = request.domain.lower().strip()
+    # Handle both domain name and domainId
+    if request.domainId:
+        # Look up domain name from database
+        with get_db_context() as db:
+            domain_obj = db.query(Domain).filter(Domain.id == request.domainId).first()
+            if not domain_obj:
+                raise HTTPException(status_code=404, detail=f"Domain with ID {request.domainId} not found")
+            domain = domain_obj.domain
+            logger.info(f"[UNIFIED] Resolved domainId {request.domainId} to domain: {domain}")
+    else:
+        domain = request.domain.lower().strip()
 
     # Remove protocol if present
     if domain.startswith("http://"):
