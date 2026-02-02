@@ -200,6 +200,10 @@ app.include_router(cache_public_router)  # Public endpoints (health, stats)
 from api.domains import router as domains_router
 app.include_router(domains_router)
 
+# Include Unified Analysis v2 router (new single entry point)
+from api.unified import router as unified_router
+app.include_router(unified_router)
+
 
 # ============================================================================
 # STARTUP - Initialize Database
