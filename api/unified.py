@@ -139,6 +139,13 @@ class UnifiedAnalysisRequest(BaseModel):
     # Optional config for backward compatibility with frontend
     config: Optional[Dict[str, Any]] = Field(None, description="Optional analysis config")
 
+    # Optional business context for one-step flow
+    # If provided, skips the "provide_context" step
+    business_context: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Business context for greenfield/hybrid analysis. If provided, analysis starts immediately."
+    )
+
     @model_validator(mode='after')
     def validate_domain_or_id(self) -> 'UnifiedAnalysisRequest':
         if not self.domain and not self.domainId:
@@ -504,6 +511,27 @@ async def start_unified_analysis(
 
     logger.info(f"[UNIFIED] Starting analysis for domain: {domain}, user: {current_user.email}")
 
+    # Check for existing context (from previous analysis or request)
+    existing_context = None
+
+    # 1. Check if business_context provided in request
+    if request.business_context:
+        existing_context = request.business_context
+        logger.info(f"[UNIFIED] Using business_context from request")
+
+    # 2. Check for context in previous analysis runs for this domain
+    if not existing_context and request.domainId:
+        with get_db_context() as db:
+            # Find most recent completed analysis with context
+            prev_run = db.query(AnalysisRun).filter(
+                AnalysisRun.domain_id == request.domainId,
+                AnalysisRun.greenfield_context.isnot(None),
+            ).order_by(AnalysisRun.created_at.desc()).first()
+
+            if prev_run and prev_run.greenfield_context:
+                existing_context = prev_run.greenfield_context
+                logger.info(f"[UNIFIED] Found existing context from previous analysis {prev_run.id}")
+
     # Step 1: Detect maturity
     maturity, metrics = await detect_domain_maturity(domain)
 
@@ -527,7 +555,54 @@ async def start_unified_analysis(
         metrics=metrics,
     )
 
-    # Step 3: Build response based on mode
+    # Step 3: If we have existing context, store it and proceed directly
+    if existing_context and maturity in (DomainMaturity.GREENFIELD, DomainMaturity.EMERGING):
+        logger.info(f"[UNIFIED] Context available, proceeding directly to competitor discovery")
+
+        # Store context in the new analysis run
+        with get_db_context() as db:
+            run = db.query(AnalysisRun).get(analysis_id)
+            if run:
+                run.greenfield_context = existing_context
+                db.commit()
+
+        # Trigger competitor discovery
+        try:
+            competitors_result = await start_competitor_discovery(
+                analysis_id=analysis_id,
+                domain=domain,
+                business_context=existing_context,
+            )
+
+            maturity_response = MaturityMetrics(
+                domain_rating=metrics.domain_rating,
+                organic_keywords=metrics.organic_keywords,
+                organic_traffic=metrics.organic_traffic,
+                classification=maturity_str,
+                explanation=get_maturity_explanation(maturity, metrics),
+            )
+
+            return UnifiedAnalysisResponse(
+                analysis_id=analysis_id,
+                domain=domain,
+                detected_mode=maturity_str,
+                maturity=maturity_response,
+                status="awaiting_curation",
+                message="Competitors discovered. Please review and curate the competitor list.",
+                next_action=NextAction(
+                    action="curate_competitors",
+                    competitor_candidates=competitors_result.get("candidates", []),
+                ),
+                context_endpoint=f"/api/v2/analyze/{analysis_id}/context",
+                curate_endpoint=f"/api/v2/analyze/{analysis_id}/curate",
+                status_endpoint=f"/api/v2/analyze/{analysis_id}/status",
+                dashboard_endpoint=f"/api/v2/dashboard/{analysis_id}",
+            )
+        except Exception as e:
+            logger.error(f"[UNIFIED] Competitor discovery failed: {e}")
+            # Fall through to normal flow if discovery fails
+
+    # Step 4: Build response based on mode (no context available)
     maturity_response = MaturityMetrics(
         domain_rating=metrics.domain_rating,
         organic_keywords=metrics.organic_keywords,

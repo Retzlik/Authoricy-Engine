@@ -138,9 +138,51 @@ async def cors_http_exception_handler(request: Request, exc: HTTPException):
     """Add CORS headers to HTTP exception responses (401, 403, 404, etc.)."""
     origin = request.headers.get("origin", "")
     headers = get_cors_headers(origin) if is_allowed_origin(origin) else {}
+
+    # Ensure detail is always a string for frontend display
+    detail = exc.detail
+    if isinstance(detail, list):
+        # Pydantic validation errors come as list of dicts
+        detail = "; ".join(
+            f"{err.get('loc', ['unknown'])[-1]}: {err.get('msg', 'invalid')}"
+            if isinstance(err, dict) else str(err)
+            for err in detail
+        )
+    elif not isinstance(detail, str):
+        detail = str(detail)
+
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail},
+        content={"detail": detail},
+        headers=headers,
+    )
+
+
+# Handle Pydantic/FastAPI validation errors (422)
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Format validation errors as human-readable strings."""
+    origin = request.headers.get("origin", "")
+    headers = get_cors_headers(origin) if is_allowed_origin(origin) else {}
+
+    # Format errors as readable string
+    errors = exc.errors()
+    error_messages = []
+    for err in errors:
+        loc = err.get("loc", [])
+        field = loc[-1] if loc else "unknown"
+        msg = err.get("msg", "invalid value")
+        error_messages.append(f"{field}: {msg}")
+
+    detail = "; ".join(error_messages) if error_messages else "Validation error"
+
+    logger.warning(f"Validation error on {request.url.path}: {detail}")
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": detail},
         headers=headers,
     )
 
@@ -634,72 +676,153 @@ async def run_migration():
         }
 
 
-@app.post("/api/analyze", response_model=AnalysisResponse)
+@app.post("/api/analyze")
 async def trigger_analysis(
-    request: AnalysisRequest,
+    request: Request,
     background_tasks: BackgroundTasks
 ):
     """
     Trigger an SEO analysis.
-    
-    This endpoint:
-    1. Validates the request
-    2. Creates a job
-    3. Starts background processing
-    4. Returns immediately with job ID
+
+    This endpoint supports TWO formats:
+
+    1. NEW FORMAT (Unified v2): {"domainId": "uuid", "config": {...}}
+       - Delegates to unified analysis flow
+       - Returns: UnifiedAnalysisResponse
+
+    2. LEGACY FORMAT: {"domain": "example.com", "email": "...", ...}
+       - Uses legacy job-based flow
+       - Returns: AnalysisResponse
+
+    The endpoint auto-detects the format based on request body fields.
     """
-    
-    # Normalize domain
-    domain = request.domain.lower().strip()
-    domain = domain.replace("https://", "").replace("http://", "")
-    domain = domain.replace("www.", "").rstrip("/")
+    from api.unified import start_unified_analysis, UnifiedAnalysisRequest
+    from src.auth.dependencies import get_current_user_optional
 
-    # Resolve market (handles legacy field mapping)
-    resolved_market = request.get_resolved_market()
+    # Parse raw JSON body
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
 
-    # Generate job ID
-    job_id = str(uuid.uuid4())[:8]
+    # Detect format: new format has 'domainId', legacy has 'domain' + 'email'
+    has_domain_id = "domainId" in body or "domain_id" in body
+    has_legacy_fields = "domain" in body and "email" in body
 
-    # Create job status
-    jobs[job_id] = JobStatus(
-        job_id=job_id,
-        domain=domain,
-        status="pending",
-    )
+    if has_domain_id or (not has_legacy_fields and "domain" in body):
+        # NEW FORMAT - delegate to unified v2 endpoint
+        logger.info(f"[ANALYZE] Detected unified v2 format, delegating to unified endpoint")
 
-    logger.info(
-        f"Analysis requested: {domain} -> {request.email} (job: {job_id}), "
-        f"goal={request.primary_goal}, market={resolved_market}, depth={request.collection_depth}"
-    )
+        # Get current user from request headers
+        from src.auth.dependencies import verify_supabase_token, sync_user_from_supabase, get_auth_config
+        from src.database.session import get_db_context
 
-    # Add background task
-    background_tasks.add_task(
-        run_analysis,
-        job_id=job_id,
-        domain=domain,
-        email=request.email,
-        company_name=request.company_name or domain.split(".")[0],
-        primary_market=resolved_market,
-        primary_goal=request.primary_goal,
-        primary_language=request.primary_language,
-        secondary_markets=request.secondary_markets,
-        known_competitors=request.known_competitors,
-        skip_ai_analysis=request.skip_ai_analysis,
-        skip_context_intelligence=request.skip_context_intelligence,
-        collection_depth=request.collection_depth,
-        max_seed_keywords_override=request.max_seed_keywords,
-        # Legacy support (for language only now)
-        market=None,  # Already resolved above
-        language=request.language,
-    )
-    
-    return AnalysisResponse(
-        job_id=job_id,
-        domain=domain,
-        email=request.email,
-        status="pending",
-        message=f"Analysis started. You'll receive results at {request.email}",
-    )
+        current_user = None
+        auth_header = request.headers.get("Authorization", "")
+
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            try:
+                config = get_auth_config()
+                if not config.auth_enabled:
+                    # Dev mode - use dev user
+                    from src.auth.dependencies import _get_dev_user
+                    with get_db_context() as db:
+                        current_user = _get_dev_user(db)
+                else:
+                    # Production - verify token
+                    payload = verify_supabase_token(token)
+                    with get_db_context() as db:
+                        current_user = sync_user_from_supabase(db, payload)
+            except Exception as e:
+                logger.warning(f"[ANALYZE] Auth token verification failed: {e}")
+
+        if not current_user:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required for this analysis mode. Please log in."
+            )
+
+        # Normalize domainId field name
+        if "domain_id" in body and "domainId" not in body:
+            body["domainId"] = body.pop("domain_id")
+
+        # Create unified request
+        try:
+            unified_request = UnifiedAnalysisRequest(**body)
+        except Exception as e:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid request format: {str(e)}"
+            )
+
+        # Call unified endpoint
+        return await start_unified_analysis(unified_request, current_user)
+
+    else:
+        # LEGACY FORMAT - use original flow
+        logger.info(f"[ANALYZE] Detected legacy format, using job-based flow")
+
+        # Validate with legacy model
+        try:
+            legacy_request = AnalysisRequest(**body)
+        except Exception as e:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid request: {str(e)}. Required fields: domain, email"
+            )
+
+        # Normalize domain
+        domain = legacy_request.domain.lower().strip()
+        domain = domain.replace("https://", "").replace("http://", "")
+        domain = domain.replace("www.", "").rstrip("/")
+
+        # Resolve market (handles legacy field mapping)
+        resolved_market = legacy_request.get_resolved_market()
+
+        # Generate job ID
+        job_id = str(uuid.uuid4())[:8]
+
+        # Create job status
+        jobs[job_id] = JobStatus(
+            job_id=job_id,
+            domain=domain,
+            status="pending",
+        )
+
+        logger.info(
+            f"Analysis requested: {domain} -> {legacy_request.email} (job: {job_id}), "
+            f"goal={legacy_request.primary_goal}, market={resolved_market}, depth={legacy_request.collection_depth}"
+        )
+
+        # Add background task
+        background_tasks.add_task(
+            run_analysis,
+            job_id=job_id,
+            domain=domain,
+            email=legacy_request.email,
+            company_name=legacy_request.company_name or domain.split(".")[0],
+            primary_market=resolved_market,
+            primary_goal=legacy_request.primary_goal,
+            primary_language=legacy_request.primary_language,
+            secondary_markets=legacy_request.secondary_markets,
+            known_competitors=legacy_request.known_competitors,
+            skip_ai_analysis=legacy_request.skip_ai_analysis,
+            skip_context_intelligence=legacy_request.skip_context_intelligence,
+            collection_depth=legacy_request.collection_depth,
+            max_seed_keywords_override=legacy_request.max_seed_keywords,
+            # Legacy support (for language only now)
+            market=None,  # Already resolved above
+            language=legacy_request.language,
+        )
+
+        return AnalysisResponse(
+            job_id=job_id,
+            domain=domain,
+            email=legacy_request.email,
+            status="pending",
+            message=f"Analysis started. You'll receive results at {legacy_request.email}",
+        )
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobStatus)
