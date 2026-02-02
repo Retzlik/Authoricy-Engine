@@ -192,6 +192,18 @@ class AnalysisRun(Base):
     }
     """
 
+    # Curation metrics (instrumentation for tracking user curation behavior)
+    curation_metrics = Column(JSONB, nullable=True)
+    """
+    {
+        "removals_count": 3,
+        "additions_count": 1,
+        "purpose_overrides_count": 2,
+        "curated_at": "2024-01-15T10:30:00Z",
+        "mode": "greenfield"
+    }
+    """
+
     # Quality assessment
     data_quality = Column(Enum(DataQualityLevel))
     data_quality_score = Column(Float)  # 0-100

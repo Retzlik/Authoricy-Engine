@@ -646,54 +646,48 @@ async def submit_context(
         )
 
     elif mode == AnalysisMode.HYBRID:
-        # Start hybrid analysis (includes some discovery)
-        background_tasks.add_task(
-            run_hybrid_analysis_background,
+        # Discover competitors from SERP overlap (for curation)
+        await start_hybrid_competitor_discovery(
             analysis_id=analysis_id,
+            domain=domain_name,
             context=submission.business_context,
         )
 
+        # Get discovered competitors for curation
+        competitors = await get_competitor_candidates(analysis_id)
+
         return UnifiedAnalysisResponse(
             **base_response,
-            status="analyzing",
-            message="Starting hybrid analysis. We'll analyze your existing data and find growth opportunities.",
+            status="awaiting_curation",
+            message=f"Found {len(competitors)} competitors based on your SERP overlap. Review and curate the list.",
             next_action=NextAction(
-                action="poll_status",
-                poll_interval_seconds=5,
-                progress=AnalysisProgress(
-                    phase="Initializing",
-                    phase_number=1,
-                    total_phases=6,
-                    progress_percent=5,
-                    message="Starting analysis...",
-                    started_at=datetime.utcnow(),
-                ),
+                action="curate_competitors",
+                competitors=competitors,
+                min_competitors=3,
+                max_competitors=10,
             ),
         )
 
     else:  # ESTABLISHED
-        # Start full analysis
-        background_tasks.add_task(
-            run_standard_analysis_background,
+        # Discover competitors from SERP overlap (for curation)
+        await start_standard_competitor_discovery(
             analysis_id=analysis_id,
+            domain=domain_name,
             context=submission.business_context,
         )
 
+        # Get discovered competitors for curation
+        competitors = await get_competitor_candidates(analysis_id)
+
         return UnifiedAnalysisResponse(
             **base_response,
-            status="analyzing",
-            message="Starting comprehensive analysis. This typically takes 2-4 hours.",
+            status="awaiting_curation",
+            message=f"Found {len(competitors)} competitors. Review and curate - focus only on truly relevant competitors.",
             next_action=NextAction(
-                action="poll_status",
-                poll_interval_seconds=30,
-                progress=AnalysisProgress(
-                    phase="Collecting Data",
-                    phase_number=1,
-                    total_phases=5,
-                    progress_percent=5,
-                    message="Starting data collection...",
-                    started_at=datetime.utcnow(),
-                ),
+                action="curate_competitors",
+                competitors=competitors,
+                min_competitors=3,
+                max_competitors=8,  # Standard needs fewer, more focused competitors
             ),
         )
 
@@ -709,6 +703,12 @@ async def submit_curation(
     Submit competitor curation decisions and start deep analysis.
 
     This is called after the user reviews competitor candidates.
+    Handles ALL modes: greenfield, hybrid, and standard.
+
+    The curation impact varies by mode:
+    - GREENFIELD: Competitors are the primary source for keyword mining
+    - HYBRID: Competitors help identify expansion opportunities
+    - STANDARD: Competitors used for gap analysis, but less weight
     """
     with get_db_context() as db:
         run = db.query(AnalysisRun).get(analysis_id)
@@ -721,9 +721,20 @@ async def submit_curation(
             raise HTTPException(status_code=403, detail="Access denied")
 
         domain_name = domain.domain
-        greenfield_context = run.greenfield_context or {}
+        mode = run.analysis_mode
+        maturity_str = run.domain_maturity_at_analysis or "greenfield"
 
-    logger.info(f"[UNIFIED] Curation submitted for {analysis_id}")
+        # Store curation metrics for instrumentation
+        run.curation_metrics = {
+            "removals_count": len(submission.removals),
+            "additions_count": len(submission.additions),
+            "purpose_overrides_count": len(submission.purpose_overrides),
+            "curated_at": datetime.utcnow().isoformat(),
+            "mode": mode.value if mode else "greenfield",
+        }
+        db.commit()
+
+    logger.info(f"[UNIFIED] Curation submitted for {analysis_id}, mode: {mode}")
 
     # Apply curation to competitor session
     await apply_curation(
@@ -733,42 +744,95 @@ async def submit_curation(
         purpose_overrides=submission.purpose_overrides,
     )
 
-    # Start deep analysis in background
-    background_tasks.add_task(
-        run_greenfield_deep_analysis_background,
-        analysis_id=analysis_id,
-    )
-
-    return UnifiedAnalysisResponse(
-        analysis_id=analysis_id,
-        domain=domain_name,
-        detected_mode="greenfield",
-        maturity=MaturityMetrics(
-            domain_rating=0,
-            organic_keywords=0,
-            organic_traffic=0,
-            classification="greenfield",
+    # Build base response
+    base_response = {
+        "analysis_id": analysis_id,
+        "domain": domain_name,
+        "detected_mode": maturity_str,
+        "maturity": MaturityMetrics(
+            domain_rating=run.domain_rating_at_analysis or 0,
+            organic_keywords=run.organic_keywords_at_analysis or 0,
+            organic_traffic=run.organic_traffic_at_analysis or 0,
+            classification=maturity_str,
             explanation="",
         ),
-        status="analyzing",
-        message="Starting deep analysis. Mining keywords, analyzing SERPs, and building your roadmap.",
-        next_action=NextAction(
-            action="poll_status",
-            poll_interval_seconds=5,
-            progress=AnalysisProgress(
-                phase="Mining Keywords",
-                phase_number=1,
-                total_phases=5,
-                progress_percent=10,
-                message="Mining keywords from competitors...",
-                started_at=datetime.utcnow(),
+        "context_endpoint": f"/api/v2/analyze/{analysis_id}/context",
+        "curate_endpoint": f"/api/v2/analyze/{analysis_id}/curate",
+        "status_endpoint": f"/api/v2/analyze/{analysis_id}/status",
+        "dashboard_endpoint": f"/api/v2/dashboard/{analysis_id}",
+    }
+
+    # Start appropriate analysis based on mode
+    if mode == AnalysisMode.GREENFIELD:
+        background_tasks.add_task(
+            run_greenfield_deep_analysis_background,
+            analysis_id=analysis_id,
+        )
+        return UnifiedAnalysisResponse(
+            **base_response,
+            status="analyzing",
+            message="Starting deep analysis. Mining keywords, analyzing SERPs, and building your roadmap.",
+            next_action=NextAction(
+                action="poll_status",
+                poll_interval_seconds=5,
+                progress=AnalysisProgress(
+                    phase="Mining Keywords",
+                    phase_number=1,
+                    total_phases=5,
+                    progress_percent=10,
+                    message="Mining keywords from curated competitors...",
+                    started_at=datetime.utcnow(),
+                ),
             ),
-        ),
-        context_endpoint=f"/api/v2/analyze/{analysis_id}/context",
-        curate_endpoint=f"/api/v2/analyze/{analysis_id}/curate",
-        status_endpoint=f"/api/v2/analyze/{analysis_id}/status",
-        dashboard_endpoint=f"/api/v2/dashboard/{analysis_id}",
-    )
+        )
+
+    elif mode == AnalysisMode.HYBRID:
+        background_tasks.add_task(
+            run_hybrid_analysis_background,
+            analysis_id=analysis_id,
+            context=BusinessContext(**run.greenfield_context) if run.greenfield_context else None,
+        )
+        return UnifiedAnalysisResponse(
+            **base_response,
+            status="analyzing",
+            message="Starting hybrid analysis. Analyzing your existing rankings and finding growth opportunities.",
+            next_action=NextAction(
+                action="poll_status",
+                poll_interval_seconds=5,
+                progress=AnalysisProgress(
+                    phase="Collecting Existing Data",
+                    phase_number=1,
+                    total_phases=6,
+                    progress_percent=10,
+                    message="Collecting your existing keyword rankings...",
+                    started_at=datetime.utcnow(),
+                ),
+            ),
+        )
+
+    else:  # STANDARD
+        background_tasks.add_task(
+            run_standard_analysis_background,
+            analysis_id=analysis_id,
+            context=BusinessContext(**run.greenfield_context) if run.greenfield_context else None,
+        )
+        return UnifiedAnalysisResponse(
+            **base_response,
+            status="analyzing",
+            message="Starting comprehensive analysis. Full SEO audit with competitor benchmarking.",
+            next_action=NextAction(
+                action="poll_status",
+                poll_interval_seconds=30,
+                progress=AnalysisProgress(
+                    phase="Collecting Data",
+                    phase_number=1,
+                    total_phases=5,
+                    progress_percent=5,
+                    message="Starting comprehensive data collection...",
+                    started_at=datetime.utcnow(),
+                ),
+            ),
+        )
 
 
 @router.get("/analyze/{analysis_id}/status")
@@ -794,7 +858,7 @@ async def get_analysis_status(
         domain_name = domain.domain
         status = run.status
         mode = run.analysis_mode
-        progress = run.progress or 0
+        progress = run.progress_percent or 0
         phase = run.current_phase or "Processing"
 
     base_response = {
@@ -936,6 +1000,286 @@ async def get_competitor_candidates(analysis_id: UUID) -> List[CompetitorCandida
         ]
 
 
+async def start_hybrid_competitor_discovery(
+    analysis_id: UUID,
+    domain: str,
+    context: BusinessContext,
+) -> None:
+    """
+    Discover competitors for HYBRID mode analysis using SERP overlap.
+
+    For emerging domains, we find competitors by:
+    1. Getting domains that rank for similar keywords (SERP overlap)
+    2. Adding any user-provided competitors
+    3. Filtering out false competitors (aggregators, directories, etc.)
+    """
+    import os
+    from src.collector.client import DataForSEOClient
+
+    logger.info(f"[HYBRID] Starting competitor discovery for {domain}")
+
+    dataforseo_login = os.environ.get("DATAFORSEO_LOGIN")
+    dataforseo_password = os.environ.get("DATAFORSEO_PASSWORD")
+
+    with get_db_context() as db:
+        run = db.query(AnalysisRun).get(analysis_id)
+
+        # Create competitor intelligence session
+        session = CompetitorIntelligenceSession(
+            analysis_run_id=analysis_id,
+            domain_id=run.domain_id,
+            status="discovering",
+            user_provided_competitors=context.known_competitors if context else [],
+        )
+        db.add(session)
+        db.commit()
+        session_id = session.id
+
+    candidates = []
+
+    try:
+        if dataforseo_login and dataforseo_password:
+            async with DataForSEOClient(
+                login=dataforseo_login,
+                password=dataforseo_password
+            ) as client:
+                # Get competitors from SERP overlap
+                serp_competitors = await client.get_domain_competitors(
+                    domain=domain,
+                    limit=15,
+                )
+
+                for comp in (serp_competitors or []):
+                    comp_domain = comp.get("domain", "")
+                    if comp_domain and not _is_false_competitor(comp_domain):
+                        candidates.append({
+                            "domain": comp_domain,
+                            "domain_rating": comp.get("domain_rating", 0),
+                            "organic_traffic": comp.get("organic_traffic", 0),
+                            "organic_keywords": comp.get("organic_keywords", 0),
+                            "discovery_source": "serp_overlap",
+                            "relevance_score": comp.get("common_keywords", 0) / 100,
+                            "suggested_purpose": "gap_analysis",
+                            "discovery_reason": f"Ranks for {comp.get('common_keywords', 0)} keywords you're targeting",
+                        })
+
+        # Add user-provided competitors
+        if context and context.known_competitors:
+            for user_comp in context.known_competitors:
+                if user_comp and not any(c["domain"] == user_comp for c in candidates):
+                    candidates.append({
+                        "domain": user_comp,
+                        "domain_rating": 0,
+                        "organic_traffic": 0,
+                        "organic_keywords": 0,
+                        "discovery_source": "user_provided",
+                        "relevance_score": 1.0,
+                        "suggested_purpose": "benchmark",
+                        "discovery_reason": "You identified this as a competitor",
+                    })
+
+        # Sort by relevance
+        candidates.sort(key=lambda x: x["relevance_score"], reverse=True)
+
+        # Update session with candidates
+        with get_db_context() as db:
+            session = db.query(CompetitorIntelligenceSession).get(session_id)
+            session.candidate_competitors = candidates[:15]
+            session.status = "awaiting_curation"
+            db.commit()
+
+        logger.info(f"[HYBRID] Found {len(candidates)} competitors for curation")
+
+    except Exception as e:
+        logger.error(f"[HYBRID] Competitor discovery failed: {e}")
+        # Still allow curation with user-provided competitors
+        if context and context.known_competitors:
+            with get_db_context() as db:
+                session = db.query(CompetitorIntelligenceSession).get(session_id)
+                session.candidate_competitors = [
+                    {
+                        "domain": c,
+                        "domain_rating": 0,
+                        "organic_traffic": 0,
+                        "organic_keywords": 0,
+                        "discovery_source": "user_provided",
+                        "relevance_score": 1.0,
+                        "suggested_purpose": "benchmark",
+                        "discovery_reason": "You identified this as a competitor",
+                    }
+                    for c in context.known_competitors
+                ]
+                session.status = "awaiting_curation"
+                db.commit()
+
+
+async def start_standard_competitor_discovery(
+    analysis_id: UUID,
+    domain: str,
+    context: BusinessContext,
+) -> None:
+    """
+    Discover competitors for STANDARD mode analysis.
+
+    For established domains, we find competitors by:
+    1. Traffic share analysis (who competes for our traffic)
+    2. SERP overlap analysis (who ranks for our keywords)
+    3. Filtering for true competitors (similar DR, not aggregators)
+    """
+    import os
+    from src.collector.client import DataForSEOClient
+
+    logger.info(f"[STANDARD] Starting competitor discovery for {domain}")
+
+    dataforseo_login = os.environ.get("DATAFORSEO_LOGIN")
+    dataforseo_password = os.environ.get("DATAFORSEO_PASSWORD")
+
+    with get_db_context() as db:
+        run = db.query(AnalysisRun).get(analysis_id)
+        our_dr = run.domain_rating_at_analysis or 0
+
+        # Create competitor intelligence session
+        session = CompetitorIntelligenceSession(
+            analysis_run_id=analysis_id,
+            domain_id=run.domain_id,
+            status="discovering",
+            user_provided_competitors=context.known_competitors if context else [],
+        )
+        db.add(session)
+        db.commit()
+        session_id = session.id
+
+    candidates = []
+
+    try:
+        if dataforseo_login and dataforseo_password:
+            async with DataForSEOClient(
+                login=dataforseo_login,
+                password=dataforseo_password
+            ) as client:
+                # Get competitors from SERP overlap
+                serp_competitors = await client.get_domain_competitors(
+                    domain=domain,
+                    limit=20,
+                )
+
+                for comp in (serp_competitors or []):
+                    comp_domain = comp.get("domain", "")
+                    comp_dr = comp.get("domain_rating", 0)
+
+                    if not comp_domain or _is_false_competitor(comp_domain):
+                        continue
+
+                    # For standard mode, prefer competitors within 20 DR points
+                    dr_diff = abs(comp_dr - our_dr)
+                    is_tier_match = dr_diff <= 20
+
+                    candidates.append({
+                        "domain": comp_domain,
+                        "domain_rating": comp_dr,
+                        "organic_traffic": comp.get("organic_traffic", 0),
+                        "organic_keywords": comp.get("organic_keywords", 0),
+                        "discovery_source": "serp_overlap",
+                        "relevance_score": 1.0 if is_tier_match else 0.5,
+                        "suggested_purpose": "true_competitor" if is_tier_match else "aspiration",
+                        "discovery_reason": (
+                            f"Similar authority (DR {comp_dr}) with {comp.get('common_keywords', 0)} keyword overlap"
+                            if is_tier_match
+                            else f"Higher authority target (DR {comp_dr})"
+                        ),
+                    })
+
+        # Add user-provided competitors
+        if context and context.known_competitors:
+            for user_comp in context.known_competitors:
+                if user_comp and not any(c["domain"] == user_comp for c in candidates):
+                    candidates.append({
+                        "domain": user_comp,
+                        "domain_rating": 0,
+                        "organic_traffic": 0,
+                        "organic_keywords": 0,
+                        "discovery_source": "user_provided",
+                        "relevance_score": 1.0,
+                        "suggested_purpose": "business_competitor",
+                        "discovery_reason": "You identified this as a competitor",
+                    })
+
+        # Sort by relevance, then by overlap
+        candidates.sort(key=lambda x: (x["relevance_score"], x.get("organic_keywords", 0)), reverse=True)
+
+        # Update session with candidates
+        with get_db_context() as db:
+            session = db.query(CompetitorIntelligenceSession).get(session_id)
+            session.candidate_competitors = candidates[:12]  # Fewer for standard
+            session.status = "awaiting_curation"
+            db.commit()
+
+        logger.info(f"[STANDARD] Found {len(candidates)} competitors for curation")
+
+    except Exception as e:
+        logger.error(f"[STANDARD] Competitor discovery failed: {e}")
+        if context and context.known_competitors:
+            with get_db_context() as db:
+                session = db.query(CompetitorIntelligenceSession).get(session_id)
+                session.candidate_competitors = [
+                    {
+                        "domain": c,
+                        "domain_rating": 0,
+                        "organic_traffic": 0,
+                        "organic_keywords": 0,
+                        "discovery_source": "user_provided",
+                        "relevance_score": 1.0,
+                        "suggested_purpose": "business_competitor",
+                        "discovery_reason": "You identified this as a competitor",
+                    }
+                    for c in context.known_competitors
+                ]
+                session.status = "awaiting_curation"
+                db.commit()
+
+
+def _is_false_competitor(domain: str) -> bool:
+    """
+    Check if a domain is a false competitor (aggregator, directory, etc.).
+
+    This is a simple exclusion list - can be expanded based on instrumentation data.
+    """
+    # Common false competitor patterns
+    false_competitor_domains = {
+        # Review/aggregator sites
+        "g2.com", "capterra.com", "trustradius.com", "getapp.com",
+        "softwareadvice.com", "trustpilot.com", "yelp.com",
+        # Directories
+        "linkedin.com", "crunchbase.com", "glassdoor.com", "indeed.com",
+        "yellowpages.com", "bbb.org",
+        # News/media
+        "forbes.com", "techcrunch.com", "bloomberg.com", "reuters.com",
+        "wsj.com", "nytimes.com", "cnn.com",
+        # Social/platforms
+        "facebook.com", "twitter.com", "instagram.com", "youtube.com",
+        "reddit.com", "quora.com", "medium.com",
+        # Generic resources
+        "wikipedia.org", "wikihow.com", "investopedia.com",
+        # E-commerce giants
+        "amazon.com", "ebay.com", "walmart.com", "target.com",
+        # Government/edu
+        "gov", ".edu",
+    }
+
+    domain_lower = domain.lower()
+
+    # Check exact matches
+    if domain_lower in false_competitor_domains:
+        return True
+
+    # Check if domain ends with any pattern
+    for pattern in false_competitor_domains:
+        if pattern.startswith(".") and domain_lower.endswith(pattern):
+            return True
+
+    return False
+
+
 async def apply_curation(
     analysis_id: UUID,
     removals: List[str],
@@ -1018,7 +1362,7 @@ async def run_hybrid_analysis_background(
             domain_name = domain.domain
             run.status = AnalysisStatus.ANALYZING
             run.current_phase = "collecting"
-            run.progress = 10
+            run.progress_percent = 10
             db.commit()
 
         logger.info(f"[HYBRID] Phase 1: Collecting existing data for {domain_name}")
@@ -1038,7 +1382,7 @@ async def run_hybrid_analysis_background(
             with get_db_context() as db:
                 run = db.query(AnalysisRun).get(analysis_id)
                 run.current_phase = "collecting_keywords"
-                run.progress = 20
+                run.progress_percent = 20
                 db.commit()
 
             logger.info(f"[HYBRID] Phase 2: Getting ranked keywords for {domain_name}")
@@ -1068,7 +1412,7 @@ async def run_hybrid_analysis_background(
 
                 run = db.query(AnalysisRun).get(analysis_id)
                 run.current_phase = "discovering_competitors"
-                run.progress = 35
+                run.progress_percent = 35
                 db.commit()
 
             logger.info(f"[HYBRID] Stored {len(ranked_keywords or [])} existing keywords")
@@ -1100,7 +1444,7 @@ async def run_hybrid_analysis_background(
 
                 run = db.query(AnalysisRun).get(analysis_id)
                 run.current_phase = "analyzing_gaps"
-                run.progress = 50
+                run.progress_percent = 50
                 db.commit()
 
             logger.info(f"[HYBRID] Found {len(competitors_data or [])} competitors")
@@ -1144,7 +1488,7 @@ async def run_hybrid_analysis_background(
 
                 run = db.query(AnalysisRun).get(analysis_id)
                 run.current_phase = "selecting_beachheads"
-                run.progress = 70
+                run.progress_percent = 70
                 db.commit()
 
             logger.info(f"[HYBRID] Stored {len(seen_keywords)} unique keyword gaps")
@@ -1200,7 +1544,7 @@ async def run_hybrid_analysis_background(
 
                 run = db.query(AnalysisRun).get(analysis_id)
                 run.current_phase = "finalizing"
-                run.progress = 90
+                run.progress_percent = 90
                 db.commit()
 
             logger.info(f"[HYBRID] Selected {len(striking_distance)} consolidation and {len(expansion_beachheads)} expansion beachheads")
@@ -1210,7 +1554,7 @@ async def run_hybrid_analysis_background(
             run = db.query(AnalysisRun).get(analysis_id)
             run.status = AnalysisStatus.COMPLETED
             run.current_phase = "completed"
-            run.progress = 100
+            run.progress_percent = 100
             run.completed_at = datetime.utcnow()
             db.commit()
 
