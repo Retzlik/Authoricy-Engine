@@ -1436,7 +1436,7 @@ async def run_hybrid_analysis_background(
                         competitor_type=CompetitorType.SEO_COMPETITOR,
                         organic_traffic=comp_data.get("organic_traffic", 0),
                         organic_keywords=comp_data.get("organic_keywords", 0),
-                        overlap_keywords=comp_data.get("common_keywords", 0),
+                        keyword_overlap_count=comp_data.get("keyword_overlap_count", 0) or comp_data.get("common_keywords", 0),
                         domain_rating=comp_data.get("domain_rating", 0),
                         is_active=True,
                     )
@@ -1930,7 +1930,7 @@ async def _get_standard_dashboard_data(db, run: AnalysisRun, domain: Domain) -> 
             {
                 "domain": c.competitor_domain,
                 "organic_traffic": c.organic_traffic or 0,
-                "overlap_keywords": c.overlap_keywords or 0,
+                "keyword_overlap_count": c.keyword_overlap_count or 0,
             }
             for c in competitors
         ],

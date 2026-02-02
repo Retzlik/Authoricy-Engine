@@ -22,8 +22,11 @@ from src.database.models import Domain, AnalysisRun, AnalysisStatus
 from src.scoring.greenfield import (
     DomainMaturity,
     DomainMetrics,
+    WinnabilityAnalysis,
     classify_domain_maturity,
     calculate_market_opportunity,
+    calculate_winnability_full,
+    calculate_personalized_difficulty_greenfield,
     select_beachhead_keywords,
     project_traffic_scenarios,
 )
@@ -1375,61 +1378,60 @@ class GreenfieldService:
                         serp_result = task_result.get("items") or [] if task_result else []
 
                         if serp_result:
-                            # Extract organic results
+                            # Extract organic results with their metrics
                             organic_results = [
                                 item for item in serp_result
                                 if item.get("type") == "organic"
                             ]
 
-                            # Check for AI overview / featured snippets
-                            has_ai_overview = any(
-                                item.get("type") in ["ai_overview", "featured_snippet", "knowledge_graph"]
-                                for item in serp_result
+                            # Build SERP data structure for proper winnability calculation
+                            serp_data = {
+                                "results": [
+                                    {
+                                        "domain": r.get("domain", ""),
+                                        "domain_rating": r.get("rank_info", {}).get("main_domain_rank", 50) if r.get("rank_info") else 50,
+                                        "position": r.get("rank_absolute", i + 1),
+                                        "url": r.get("url", ""),
+                                        "title": r.get("title", ""),
+                                        # Content signals
+                                        "word_count": r.get("description", "").split().__len__() * 10 if r.get("description") else 0,
+                                        "is_forum": any(f in r.get("domain", "").lower() for f in ["reddit", "quora", "forum", "community"]),
+                                        "is_ugc": any(u in r.get("domain", "").lower() for u in ["medium.com", "substack", "wordpress.com"]),
+                                    }
+                                    for i, r in enumerate(organic_results[:10])
+                                ],
+                                # Check for SERP features
+                                "ai_overview": next((item for item in serp_result if item.get("type") == "ai_overview"), None),
+                                "featured_snippet": next((item for item in serp_result if item.get("type") == "featured_snippet"), None),
+                                "people_also_ask": [item for item in serp_result if item.get("type") == "people_also_ask"],
+                                "video_carousel": next((item for item in serp_result if item.get("type") == "video"), None),
+                            }
+
+                            # Use the CORRECT winnability calculation function
+                            # This uses real SERP DR analysis, industry coefficients, etc.
+                            industry = greenfield_context.get("industry_vertical", "saas")
+
+                            analysis = calculate_winnability_full(
+                                keyword=kw,
+                                target_dr=target_dr,
+                                serp_data=serp_data,
+                                industry=industry,
                             )
 
-                            # Estimate SERP competitiveness from organic result count and presence
-                            # Without direct DR data, estimate based on KD and SERP features
-                            kd = kw.get("keyword_difficulty", 50)
-                            organic_count = len(organic_results)
+                            # Store the complete analysis
+                            winnability_analyses[keyword_text] = analysis
 
-                            # Calculate winnability based on KD primarily
-                            # Lower KD = more winnable
-                            kd_penalty = kd * 0.6
-                            ai_penalty = 15 if has_ai_overview else 0
-                            dr_estimate = max(30, kd * 1.2)  # Estimate avg DR from KD
-
-                            winnability = 100 - kd_penalty - ai_penalty
-                            winnability = max(0, min(100, winnability))
-
-                            # Personalized difficulty considers target DR
-                            dr_gap = max(0, dr_estimate - target_dr)
-                            personalized_difficulty = kd + (dr_gap * 0.2)
-                            personalized_difficulty = max(0, min(100, personalized_difficulty))
-
-                            # Create proper WinnabilityAnalysis object
-                            winnability_analyses[keyword_text] = WinnabilityAnalysis(
-                                keyword=keyword_text,
-                                winnability_score=winnability,
-                                personalized_difficulty=personalized_difficulty,
-                                avg_serp_dr=dr_estimate,  # Estimated from KD
-                                min_serp_dr=max(10, dr_estimate - 15),  # Estimated
-                                has_low_dr_rankings=kd < 30,  # Approximate
-                                low_dr_positions=[],
-                                weak_content_signals=[],
-                                has_ai_overview=has_ai_overview,
-                                dr_gap_penalty=dr_gap * 0.5,
-                                low_dr_bonus=5 if kd < 25 else 0,
-                                kd_penalty=kd_penalty,
-                                ai_penalty=ai_penalty,
-                                is_beachhead_candidate=winnability >= 55 and kd <= 35,
-                            )
-
-                            # Update keyword with winnability
-                            kw["winnability_score"] = winnability
-                            kw["personalized_difficulty"] = personalized_difficulty
+                            # Update keyword with REAL winnability data
+                            kw["winnability_score"] = analysis.winnability_score
+                            kw["personalized_difficulty"] = analysis.personalized_difficulty
                             kw["serp_analyzed"] = True
-                            kw["avg_serp_dr"] = dr_estimate
-                            kw["has_ai_overview"] = has_ai_overview
+                            kw["avg_serp_dr"] = analysis.avg_serp_dr
+                            kw["min_serp_dr"] = analysis.min_serp_dr
+                            kw["has_ai_overview"] = analysis.has_ai_overview
+                            kw["has_low_dr_rankings"] = analysis.has_low_dr_rankings
+                            kw["weak_content_signals"] = analysis.weak_content_signals
+                            kw["is_beachhead_candidate"] = analysis.is_beachhead_candidate
+                            kw["estimated_time_to_rank_weeks"] = analysis.estimated_time_to_rank_weeks
 
                     except Exception as e:
                         logger.debug(f"SERP analysis failed for '{keyword_text}': {e}")

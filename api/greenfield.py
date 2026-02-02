@@ -366,7 +366,7 @@ async def run_deep_analysis_background(
                 market=market,
             )
 
-        # Update session status based on result
+        # Update session and run status based on result
         with get_db_context() as db:
             session = db.query(CompetitorIntelligenceSession).filter(
                 CompetitorIntelligenceSession.id == session_id
@@ -374,9 +374,20 @@ async def run_deep_analysis_background(
             if session:
                 if result.get("success"):
                     session.status = "completed"
+                    # Final progress update to ensure 100% completion
+                    repository.update_run_status(
+                        analysis_run_id,
+                        AnalysisStatus.COMPLETED,
+                        phase="completed",
+                        progress=100,
+                    )
                     logger.info(f"[BACKGROUND] Deep analysis completed for session {session_id}")
                 else:
                     session.status = "failed"
+                    repository.fail_run(
+                        analysis_run_id,
+                        error_message=result.get("error", "Unknown error"),
+                    )
                     logger.error(f"[BACKGROUND] Deep analysis failed for session {session_id}: {result.get('error')}")
                 db.commit()
 

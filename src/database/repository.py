@@ -130,7 +130,7 @@ def update_run_status(
     progress: Optional[int] = None,
     error_message: Optional[str] = None,
 ):
-    """Update analysis run status"""
+    """Update analysis run status with explicit commit for immediate visibility."""
     with get_db_context() as db:
         run = db.query(AnalysisRun).get(run_id)
         if run:
@@ -145,6 +145,9 @@ def update_run_status(
                 run.completed_at = datetime.utcnow()
                 if run.started_at:
                     run.duration_seconds = int((run.completed_at - run.started_at).total_seconds())
+            # Explicit commit for immediate visibility in polling endpoints
+            db.commit()
+            logger.debug(f"Run {run_id} status updated: {status.value}, phase={phase}, progress={progress}%")
 
 
 def complete_run(
@@ -174,6 +177,9 @@ def complete_run(
             run.quality_issues = quality_issues or []
             if run.started_at:
                 run.duration_seconds = int((run.completed_at - run.started_at).total_seconds())
+
+            # Explicit commit before cache operations
+            db.commit()
             logger.info(f"Run {run_id} completed: {quality_level.value} ({quality_score:.1f}%)")
 
             # Trigger cache operations in background (non-blocking)
@@ -182,7 +188,7 @@ def complete_run(
 
 
 def fail_run(run_id: UUID, error_message: str, errors: List[Dict] = None):
-    """Mark analysis run as failed"""
+    """Mark analysis run as failed with explicit commit."""
     with get_db_context() as db:
         run = db.query(AnalysisRun).get(run_id)
         if run:
@@ -190,6 +196,8 @@ def fail_run(run_id: UUID, error_message: str, errors: List[Dict] = None):
             run.completed_at = datetime.utcnow()
             run.error_message = error_message
             run.errors = errors or []
+            # Explicit commit for immediate visibility
+            db.commit()
             logger.error(f"Run {run_id} failed: {error_message}")
 
 
