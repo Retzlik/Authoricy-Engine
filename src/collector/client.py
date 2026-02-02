@@ -552,8 +552,11 @@ class DataForSEOClient:
                             "domain": item.get("domain", ""),
                             "organic_traffic": item.get("metrics", {}).get("organic", {}).get("etv", 0),
                             "organic_keywords": item.get("metrics", {}).get("organic", {}).get("count", 0),
+                            "domain_rating": item.get("full_domain_metrics", {}).get("organic", {}).get("pos_1", 0),  # Approximate DR from rankings
                             "domain_rank": item.get("avg_position", 0),
-                            "intersection_count": item.get("full_domain_metrics", {}).get("organic", {}).get("intersections", 0),
+                            # Standardized field name for keyword overlap
+                            "keyword_overlap_count": item.get("full_domain_metrics", {}).get("organic", {}).get("intersections", 0),
+                            "common_keywords": item.get("full_domain_metrics", {}).get("organic", {}).get("intersections", 0),  # Alias for compatibility
                         }
                         for item in items
                     ]

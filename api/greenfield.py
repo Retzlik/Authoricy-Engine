@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from src.database.models import (
     AnalysisRun,
     AnalysisMode,
+    AnalysisStatus,
     CompetitorPurpose,
     CompetitorIntelligenceSession,
     GreenfieldAnalysis,
@@ -254,6 +255,45 @@ def check_session_access(session: CompetitorIntelligenceSession, user: User, db)
     if analysis:
         check_analysis_access(analysis, user, db)
 
+
+def resolve_greenfield_analysis(id_param: UUID, user: User, db) -> AnalysisRun:
+    """
+    Resolve an ID to a greenfield analysis run.
+
+    The ID can be either:
+    - An analysis_run_id (direct lookup)
+    - A domain_id (finds the latest completed greenfield analysis for that domain)
+
+    This allows frontend to use either ID type and get the expected result.
+
+    Returns the AnalysisRun or raises HTTPException(404) if not found.
+    """
+    # First, try as analysis_run_id
+    run = db.query(AnalysisRun).get(id_param)
+    if run:
+        check_analysis_access(run, user, db)
+        return run
+
+    # If not found, try as domain_id - find latest greenfield analysis
+    domain = db.query(Domain).get(id_param)
+    if domain:
+        check_domain_access_greenfield(domain, user)
+        run = db.query(AnalysisRun).filter(
+            AnalysisRun.domain_id == id_param,
+            AnalysisRun.analysis_mode == AnalysisMode.GREENFIELD,
+            AnalysisRun.status == AnalysisStatus.COMPLETED
+        ).order_by(AnalysisRun.completed_at.desc()).first()
+
+        if run:
+            return run
+
+    # Neither worked - not found
+    raise HTTPException(
+        status_code=404,
+        detail="Analysis not found. The ID must be a valid analysis_run_id or domain_id with a completed greenfield analysis."
+    )
+
+
 # Service instance (will be initialized with client in production)
 greenfield_service = GreenfieldService()
 
@@ -326,7 +366,7 @@ async def run_deep_analysis_background(
                 market=market,
             )
 
-        # Update session status based on result
+        # Update session and run status based on result
         with get_db_context() as db:
             session = db.query(CompetitorIntelligenceSession).filter(
                 CompetitorIntelligenceSession.id == session_id
@@ -334,9 +374,20 @@ async def run_deep_analysis_background(
             if session:
                 if result.get("success"):
                     session.status = "completed"
+                    # Final progress update to ensure 100% completion
+                    repository.update_run_status(
+                        analysis_run_id,
+                        AnalysisStatus.COMPLETED,
+                        phase="completed",
+                        progress=100,
+                    )
                     logger.info(f"[BACKGROUND] Deep analysis completed for session {session_id}")
                 else:
                     session.status = "failed"
+                    repository.fail_run(
+                        analysis_run_id,
+                        error_message=result.get("error", "Unknown error"),
+                    )
                     logger.error(f"[BACKGROUND] Deep analysis failed for session {session_id}: {result.get('error')}")
                 db.commit()
 
@@ -1005,6 +1056,10 @@ async def get_greenfield_dashboard(
     """
     Get complete greenfield dashboard data.
 
+    The analysis_run_id parameter can be either:
+    - An actual analysis_run_id
+    - A domain_id (will find the latest completed greenfield analysis)
+
     Returns:
     - Curated competitors with purposes
     - Market opportunity (TAM/SAM/SOM)
@@ -1014,14 +1069,12 @@ async def get_greenfield_dashboard(
     """
     from src.database.session import get_db_context
 
-    # Check access
+    # Resolve the ID (could be analysis_run_id or domain_id)
     with get_db_context() as db:
-        run = db.query(AnalysisRun).get(analysis_run_id)
-        if not run:
-            raise HTTPException(status_code=404, detail="Analysis not found")
-        check_analysis_access(run, current_user, db)
+        run = resolve_greenfield_analysis(analysis_run_id, current_user, db)
+        actual_analysis_id = run.id
 
-    result = greenfield_service.get_dashboard(analysis_run_id)
+    result = greenfield_service.get_dashboard(actual_analysis_id)
     if not result:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
@@ -1038,21 +1091,23 @@ async def get_beachhead_keywords(
     """
     Get beachhead keywords for greenfield analysis.
 
+    The analysis_run_id parameter can be either:
+    - An actual analysis_run_id
+    - A domain_id (will find the latest completed greenfield analysis)
+
     Optionally filter by:
     - Growth phase (1=Foundation, 2=Traction, 3=Authority)
     - Minimum winnability score
     """
     from src.database.session import get_db_context
 
-    # Check access
+    # Resolve the ID (could be analysis_run_id or domain_id)
     with get_db_context() as db:
-        run = db.query(AnalysisRun).get(analysis_run_id)
-        if not run:
-            raise HTTPException(status_code=404, detail="Analysis not found")
-        check_analysis_access(run, current_user, db)
+        run = resolve_greenfield_analysis(analysis_run_id, current_user, db)
+        actual_analysis_id = run.id
 
     keywords = greenfield_service.get_beachheads(
-        analysis_run_id=analysis_run_id,
+        analysis_run_id=actual_analysis_id,
         phase=phase,
         min_winnability=min_winnability,
     )
@@ -1067,18 +1122,20 @@ async def get_market_map(
     """
     Get market map data for visualization.
 
+    The analysis_run_id parameter can be either:
+    - An actual analysis_run_id
+    - A domain_id (will find the latest completed greenfield analysis)
+
     Returns competitor positioning data for the market map component.
     """
     from src.database.session import get_db_context
 
-    # Check access
+    # Resolve the ID (could be analysis_run_id or domain_id)
     with get_db_context() as db:
-        run = db.query(AnalysisRun).get(analysis_run_id)
-        if not run:
-            raise HTTPException(status_code=404, detail="Analysis not found")
-        check_analysis_access(run, current_user, db)
+        run = resolve_greenfield_analysis(analysis_run_id, current_user, db)
+        actual_analysis_id = run.id
 
-    dashboard = greenfield_service.get_dashboard(analysis_run_id)
+    dashboard = greenfield_service.get_dashboard(actual_analysis_id)
     if not dashboard:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
@@ -1086,7 +1143,7 @@ async def get_market_map(
     competitors = dashboard.get("competitors", [])
 
     return {
-        "analysis_run_id": str(analysis_run_id),
+        "analysis_run_id": str(actual_analysis_id),
         "competitors": [
             {
                 "domain": c.get("domain", ""),
@@ -1109,18 +1166,20 @@ async def get_traffic_projections(
     """
     Get traffic projections for greenfield domain.
 
+    The analysis_run_id parameter can be either:
+    - An actual analysis_run_id
+    - A domain_id (will find the latest completed greenfield analysis)
+
     Returns three scenarios: conservative, expected, aggressive
     """
     from src.database.session import get_db_context
 
-    # Check access
+    # Resolve the ID (could be analysis_run_id or domain_id)
     with get_db_context() as db:
-        run = db.query(AnalysisRun).get(analysis_run_id)
-        if not run:
-            raise HTTPException(status_code=404, detail="Analysis not found")
-        check_analysis_access(run, current_user, db)
+        run = resolve_greenfield_analysis(analysis_run_id, current_user, db)
+        actual_analysis_id = run.id
 
-    dashboard = greenfield_service.get_dashboard(analysis_run_id)
+    dashboard = greenfield_service.get_dashboard(actual_analysis_id)
     if not dashboard:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
@@ -1136,6 +1195,10 @@ async def get_growth_roadmap(
     """
     Get growth roadmap for greenfield domain.
 
+    The analysis_run_id parameter can be either:
+    - An actual analysis_run_id
+    - A domain_id (will find the latest completed greenfield analysis)
+
     Returns phased keyword targeting strategy:
     - Phase 1: Foundation (months 1-3)
     - Phase 2: Traction (months 4-6)
@@ -1143,14 +1206,12 @@ async def get_growth_roadmap(
     """
     from src.database.session import get_db_context
 
-    # Check access
+    # Resolve the ID (could be analysis_run_id or domain_id)
     with get_db_context() as db:
-        run = db.query(AnalysisRun).get(analysis_run_id)
-        if not run:
-            raise HTTPException(status_code=404, detail="Analysis not found")
-        check_analysis_access(run, current_user, db)
+        run = resolve_greenfield_analysis(analysis_run_id, current_user, db)
+        actual_analysis_id = run.id
 
-    dashboard = greenfield_service.get_dashboard(analysis_run_id)
+    dashboard = greenfield_service.get_dashboard(actual_analysis_id)
     if not dashboard:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
