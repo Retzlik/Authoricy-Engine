@@ -303,7 +303,11 @@ def calculate_winnability(
     Calculate winnability score (0-100) for a keyword.
 
     Winnability represents the likelihood of ranking based on SERP composition,
-    not just keyword difficulty.
+    not just keyword difficulty. Scores are calibrated to be realistic:
+    - 70-85%: High winnability - strong opportunity
+    - 50-70%: Medium winnability - achievable with effort
+    - 30-50%: Low winnability - challenging but possible
+    - <30%: Very low - requires significant authority building
 
     Args:
         target_dr: Target domain's Domain Rating
@@ -320,10 +324,12 @@ def calculate_winnability(
         Tuple of (winnability_score, component_breakdown)
     """
     coef = INDUSTRY_COEFFICIENTS.get(industry, INDUSTRY_COEFFICIENTS["saas"])
-    score = 100.0
+    # Start at 80 instead of 100 - even ideal conditions aren't a guaranteed win
+    # This prevents inflated scores and keeps winnability realistic
+    score = 80.0
     components = {}
 
-    # Factor 1: DR Gap (-40 points max)
+    # Factor 1: DR Gap (-40 points max, +5 bonus max)
     dr_gap = avg_serp_dr - target_dr
     if dr_gap > 0:
         # Penalize keywords where SERP DR is much higher
@@ -331,25 +337,27 @@ def calculate_winnability(
         score -= penalty
         components["dr_gap_penalty"] = -penalty
     else:
-        # Bonus if our DR exceeds SERP average
-        bonus = min(10, abs(dr_gap) * 0.5)
+        # Small bonus if our DR exceeds SERP average (capped at 5)
+        bonus = min(5, abs(dr_gap) * 0.3)
         score += bonus
         components["dr_gap_penalty"] = bonus
 
-    # Factor 2: Low-DR Presence (industry-weighted bonus)
+    # Factor 2: Low-DR Presence (industry-weighted bonus, reduced)
     if has_low_dr_rankings:
-        low_dr_bonus = coef["low_dr_bonus"]
+        # Reduce bonus impact - low DR rankings help but don't guarantee success
+        low_dr_bonus = min(10, coef["low_dr_bonus"] * 0.7)
         score += low_dr_bonus
-        # Extra bonus if low-DR site is in top positions
+        # Small extra bonus if low-DR site is in top positions
         if min_serp_dr < target_dr:
-            score += 5
-            low_dr_bonus += 5
+            score += 3
+            low_dr_bonus += 3
         components["low_dr_bonus"] = low_dr_bonus
     else:
         components["low_dr_bonus"] = 0
 
-    # Factor 3: Weak Content Signals (industry-weighted max)
-    content_bonus = min(coef["content_bonus_max"], len(weak_content_signals) * 5)
+    # Factor 3: Weak Content Signals (reduced max bonus)
+    # Cap at 8 points - weak competitors help but content quality alone isn't enough
+    content_bonus = min(8, len(weak_content_signals) * 3)
     score += content_bonus
     components["content_bonus"] = content_bonus
 
@@ -362,20 +370,24 @@ def calculate_winnability(
         components["ai_penalty"] = 0
 
     # Factor 5: KD Adjustment (industry-weighted multiplier)
-    if keyword_difficulty > 30:
-        kd_penalty = (keyword_difficulty - 30) * 0.3 * coef["kd_multiplier"]
+    # Apply penalty starting at KD 20 (more aggressive than before)
+    if keyword_difficulty > 20:
+        kd_penalty = (keyword_difficulty - 20) * 0.4 * coef["kd_multiplier"]
         score -= kd_penalty
         components["kd_penalty"] = -kd_penalty
     else:
         components["kd_penalty"] = 0
 
-    # Factor 6: Geo modifier bonus (local services)
+    # Factor 6: Geo modifier bonus (local services, reduced)
     if has_geo_modifier and "geo_modifier_bonus" in coef:
-        geo_bonus = coef["geo_modifier_bonus"]
+        # Cap geo bonus at 10 points
+        geo_bonus = min(10, coef["geo_modifier_bonus"])
         score += geo_bonus
         components["geo_bonus"] = geo_bonus
 
-    return max(0, min(100, score)), components
+    # Final score capped at 85 - no keyword is a guaranteed win
+    # Even perfect conditions have execution risk, competition changes, etc.
+    return max(0, min(85, score)), components
 
 
 def calculate_winnability_full(
